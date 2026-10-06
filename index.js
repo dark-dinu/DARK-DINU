@@ -7,9 +7,22 @@ import { MongoClient } from "mongodb";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import NodeCache from "node-cache";
+import express from "express";
 import { useMongoDBAuthState } from "./auth.js";
 
-// MongoDB Configuration
+// --- Render Health Check Server ---
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("🤖 Dark-Dinu WhatsApp Bot is running smoothly on Render!");
+});
+
+app.listen(PORT, () => {
+  console.log(`Web server listening on port ${PORT}`);
+});
+
+// --- MongoDB Configuration ---
 const CONFIG = {
   MONGODB_URI: "mongodb+srv://Darkdinubot_db_user:uQMkdHvMsFO3Z4xf@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
   DB_NAME: "whatsapp_bot",
@@ -17,7 +30,6 @@ const CONFIG = {
   PREFIX: "."
 };
 
-// Message Retry Cache එකක් මඟින් Decryption Errors වළක්වයි
 const msgRetryCounterCache = new NodeCache();
 
 async function startBot() {
@@ -29,8 +41,6 @@ async function startBot() {
   const authCollection = db.collection(CONFIG.SESSION_NAME);
 
   const { state, saveCreds } = await useMongoDBAuthState(authCollection);
-  
-  // නවතම Baileys Web Version එක ලබා ගැනීම
   const { version, isLatest } = await fetchLatestBaileysVersion();
   console.log(`Baileys Version: v${version.join(".")} (Is Latest: ${isLatest})`);
 
@@ -41,15 +51,14 @@ async function startBot() {
     auth: state,
     msgRetryCounterCache,
     browser: Browsers.macOS("Desktop"),
-    syncFullHistory: false,
-    generateHighQualityLinkPreview: true
+    syncFullHistory: false
   });
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log("\n--- WhatsApp මඟින් පහත QR Code එක Scan කරන්න ---\n");
+      console.log("\n--- QR Code (Render Logs එකෙන් බලන්න) ---\n");
       qrcode.generate(qr, { small: true });
     }
 
@@ -57,11 +66,11 @@ async function startBot() {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-      console.log(`සම්බන්ධතාවය බිඳ වැටුණි (Code: ${statusCode}). Reconnecting: ${shouldReconnect}`);
+      console.log(`Connection closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}`);
       if (shouldReconnect) {
         startBot();
       } else {
-        console.log("⚠️ Logged out වී ඇත. කරුණාකර MongoDB හි Session collection එක clear කර නැවත run කරන්න.");
+        console.log("Logged out from session. Clear MongoDB session collection to reconnect.");
       }
     } else if (connection === "open") {
       console.log("🚀 ✅ WhatsApp Bot සාර්ථකව සම්බන්ධ විය!");
@@ -70,7 +79,6 @@ async function startBot() {
 
   sock.ev.on("creds.update", saveCreds);
 
-  // පණිවිඩ හැසිරවීම (Message Handler)
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const msg = messages[0];
@@ -97,7 +105,7 @@ async function startBot() {
       case "alive": {
         await sock.sendMessage(
           from,
-          { text: "👋 *Dark-Dinu Bot* නවතම Version එකෙන් සාර්ථකව ක්‍රියාත්මක වේ!" },
+          { text: "👋 *Dark-Dinu Bot* Render හරහා සක්‍රියව ධාවනය වේ!" },
           { quoted: msg }
         );
         break;
