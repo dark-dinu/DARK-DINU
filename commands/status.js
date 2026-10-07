@@ -144,7 +144,7 @@ async function deliverStatusMedia(sock, msg, from, targetStatusMsg) {
 
 export default {
   name: "status",
-  aliases: ["setreact", "statussave", "ssave"],
+  aliases: ["stseen", "stract", "setst", "statussave", "ssave"],
   category: "utility",
   description: "Status automation controls and interactive status saver",
 
@@ -157,15 +157,17 @@ export default {
 
     const firstWord = body.trim().slice(prefix.length).split(/ +/)[0].toLowerCase();
 
-    // 1. .setreact <emoji> Handler
-    if (firstWord === "setreact") {
+    // 1. .setst react <emoji> Handler
+    if (firstWord === "setst") {
       if (!isBotOwner(sock, msg, from)) {
         return await sock.sendMessage(from, { text: "⛔ මෙය වෙනස් කළ හැක්කේ Bot Owner හට පමණි." }, { quoted: msg });
       }
 
-      const newEmoji = args[0]?.trim();
+      const subAction = args[0]?.toLowerCase();
+      const newEmoji = (subAction === "react" ? args[1] : args[0])?.trim();
+
       if (!newEmoji) {
-        return await sock.sendMessage(from, { text: `⚠️ කරුණාකර Emoji එකක් ලබාදෙන්න.\n*උදා:* \`${prefix}setreact 🥺\`` }, { quoted: msg });
+        return await sock.sendMessage(from, { text: `⚠️ කරුණාකර Emoji එකක් ලබාදෙන්න.\n*භාවිතය:* \`${prefix}setst react 🥺\`` }, { quoted: msg });
       }
 
       settings.emoji = newEmoji;
@@ -177,39 +179,64 @@ export default {
       }, { quoted: msg });
     }
 
-    // 2. .status seen on/off හෝ .status react on/off Handler
-    const actionType = args[0]?.toLowerCase();
-    const actionState = args[1]?.toLowerCase();
-
-    if (["seen", "react"].includes(actionType) && ["on", "off"].includes(actionState)) {
+    // 2. .stseen on/off Handler
+    if (firstWord === "stseen") {
       if (!isBotOwner(sock, msg, from)) {
         return await sock.sendMessage(from, { text: "⛔ මෙය වෙනස් කළ හැක්කේ Bot Owner හට පමණි." }, { quoted: msg });
       }
 
-      const isTurnOn = actionState === "on";
-      if (actionType === "seen") settings.seen = isTurnOn;
-      if (actionType === "react") settings.react = isTurnOn;
+      const state = args[0]?.toLowerCase();
+      if (state !== "on" && state !== "off") {
+        return await sock.sendMessage(from, { text: `⚠️ *භාවිතය:* \`${prefix}stseen on\` හෝ \`${prefix}stseen off\`` }, { quoted: msg });
+      }
 
+      const isTurnOn = state === "on";
+      settings.seen = isTurnOn;
       global.statusSettings.set(botPhone, settings);
-
-      const label = actionType === "seen" ? "Auto Seen" : "Auto React";
-      const icon = isTurnOn ? "🟢" : "🔴";
 
       return await sock.sendMessage(from, {
         text: `╔══════════════════════╗
    🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
 ╚══════════════════════╝
 
-┌─〔 ⚙️ *STATUS SETTINGS* 〕
+┌─〔 ⚙️ *STATUS SEEN SETTINGS* 〕
 ├─▸ 🤖 *Bot Node* : +${botPhone}
-├─▸ 🎯 *Feature*  : ${label}
-├─▸ ⚡ *Status*   : ${icon} ${actionState.toUpperCase()}
+├─▸ 🎯 *Feature*  : Auto Seen
+├─▸ ⚡ *Status*   : ${isTurnOn ? "🟢 ON" : "🔴 OFF"}
+└───────────────────────`
+      }, { quoted: msg });
+    }
+
+    // 3. .stract on/off Handler
+    if (firstWord === "stract") {
+      if (!isBotOwner(sock, msg, from)) {
+        return await sock.sendMessage(from, { text: "⛔ මෙය වෙනස් කළ හැක්කේ Bot Owner හට පමණි." }, { quoted: msg });
+      }
+
+      const state = args[0]?.toLowerCase();
+      if (state !== "on" && state !== "off") {
+        return await sock.sendMessage(from, { text: `⚠️ *භාවිතය:* \`${prefix}stract on\` හෝ \`${prefix}stract off\`` }, { quoted: msg });
+      }
+
+      const isTurnOn = state === "on";
+      settings.react = isTurnOn;
+      global.statusSettings.set(botPhone, settings);
+
+      return await sock.sendMessage(from, {
+        text: `╔══════════════════════╗
+   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
+╚══════════════════════╝
+
+┌─〔 ⚙️ *STATUS REACT SETTINGS* 〕
+├─▸ 🤖 *Bot Node* : +${botPhone}
+├─▸ 🎯 *Feature*  : Auto React
+├─▸ ⚡ *Status*   : ${isTurnOn ? "🟢 ON" : "🔴 OFF"}
 ├─▸ 🎭 *Emoji*    : ${settings.emoji}
 └───────────────────────`
       }, { quoted: msg });
     }
 
-    // 3. Status එකකට Reply කර .status හෝ .statussave ලෙස ගැසූ විට
+    // 4. Status එකකට Reply කර .status හෝ .statussave ලෙස ගැසූ විට
     const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
     const quotedId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
 
@@ -234,16 +261,16 @@ export default {
 └───────────────────────
 
 📌 *පාලනය කිරීමට:*
-• \`${prefix}status seen on\` / \`off\`
-• \`${prefix}status react on\` / \`off\`
-• \`${prefix}setreact 🥺\`
+• \`${prefix}stseen on\` / \`off\`
+• \`${prefix}stract on\` / \`off\`
+• \`${prefix}setst react 🥺\`
 
 📥 *Status එකක් ලබාගැනීමට:*
 Status එකකට Reply කර *එවන්න*, *send*, *දාපන්*, *oni* ලෙස යවන්න.`
     }, { quoted: msg });
   },
 
-  // 4. Interactive Reply Saver (Index.js වෙනස් නොකර ක්‍රියාත්මක වේ)
+  // 5. Interactive Reply Saver (Index.js වෙනස් නොකර ක්‍රියාත්මක වේ)
   async onReply({ sock, msg, from, body, quotedStanzaId }) {
     const rawWord = body.trim().toLowerCase();
 
