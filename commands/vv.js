@@ -1,13 +1,4 @@
-import { downloadContentFromMessage } from "@whiskeysockets/baileys";
-
-// Stream එක Buffer එකක් කර ගැනීම
-async function streamToBuffer(stream) {
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
+import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
 export default {
   name: "vv",
@@ -22,64 +13,99 @@ export default {
 
   async execute({ sock, msg, from }) {
     try {
-      const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-      if (!quoted) return;
+      const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+      const quoted = contextInfo?.quotedMessage;
 
-      // Unpack View-Once wrappers (V1, V2, Extensions සහ Raw)
-      let targetMsg = quoted;
-      if (targetMsg?.viewOnceMessageV2?.message) {
-        targetMsg = targetMsg.viewOnceMessageV2.message;
-      } else if (targetMsg?.viewOnceMessage?.message) {
-        targetMsg = targetMsg.viewOnceMessage.message;
-      } else if (targetMsg?.viewOnceMessageV2Extension?.message) {
-        targetMsg = targetMsg.viewOnceMessageV2Extension.message;
+      if (!quoted) {
+        return await sock.sendMessage(from, { 
+          text: "⚠️ View-Once Photo, Video හෝ Voice note එකකට reply කර *.vv* ලෙස ලබාදෙන්න." 
+        }, { quoted: msg });
       }
 
-      let mediaObj = null;
+      // 1. Quoted Message එකෙන් View-Once කොටස Extract කිරීම
+      let viewOnce = null;
       let mediaType = null;
 
-      if (targetMsg?.imageMessage) {
-        mediaObj = targetMsg.imageMessage;
-        mediaType = "image";
-      } else if (targetMsg?.videoMessage) {
-        mediaObj = targetMsg.videoMessage;
-        mediaType = "video";
-      } else if (targetMsg?.audioMessage) {
-        mediaObj = targetMsg.audioMessage;
-        mediaType = "audio";
+      if (quoted.viewOnceMessageV2?.message) {
+        viewOnce = quoted.viewOnceMessageV2.message;
+      } else if (quoted.viewOnceMessage?.message) {
+        viewOnce = quoted.viewOnceMessage.message;
+      } else if (quoted.viewOnceMessageV2Extension?.message) {
+        viewOnce = quoted.viewOnceMessageV2Extension.message;
+      } else if (quoted.ephemeralMessage?.message?.viewOnceMessageV2?.message) {
+        viewOnce = quoted.ephemeralMessage.message.viewOnceMessageV2.message;
+      } else if (quoted.imageMessage?.viewOnce || quoted.videoMessage?.viewOnce || quoted.audioMessage?.viewOnce) {
+        viewOnce = quoted;
       }
 
-      if (!mediaObj || !mediaType) return;
+      if (!viewOnce) {
+        return await sock.sendMessage(from, { 
+          text: "⚠️ ඔබ reply කළ පණිවිඩය View-Once එකක් නොවේ හෝ එහි media keys WhatsApp සර්වර් එකෙන් ඉවත් කර ඇත." 
+        }, { quoted: msg });
+      }
+
+      // Media Type හඳුනාගැනීම
+      if (viewOnce.imageMessage) mediaType = "image";
+      else if (viewOnce.videoMessage) mediaType = "video";
+      else if (viewOnce.audioMessage) mediaType = "audio";
+
+      if (!mediaType) {
+        return await sock.sendMessage(from, { text: "⚠️ හඳුනාගත හැකි මාධ්‍යයක් (Media) නොමැත." }, { quoted: msg });
+      }
 
       await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Download Stream via Baileys Direct Method
-      const stream = await downloadContentFromMessage(mediaObj, mediaType);
-      const buffer = await streamToBuffer(stream);
+      // 2. Full Decryption Wrapper සකස් කිරීම
+      const decryptPayload = {
+        key: {
+          remoteJid: from,
+          id: contextInfo.stanzaId,
+          participant: contextInfo.participant || from
+        },
+        message: {
+          ...viewOnce
+        }
+      };
+
+      // 3. Baileys Native Method එකෙන් Buffer එක බාගත කිරීම
+      const buffer = await downloadMediaMessage(
+        decryptPayload,
+        "buffer",
+        {},
+        {
+          logger: undefined,
+          reuploadRequest: sock.updateMediaMessage
+        }
+      );
 
       if (!buffer || buffer.length === 0) {
-        await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(from, { text: "❌ Media එක decrypt කරගත නොහැකි විය." }, { quoted: msg });
+        throw new Error("බාගත කළ Media Buffer එක හිස්ව ඇත (0 Bytes).");
       }
 
       const defaultCaption = "> *🔓 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐀𝐍𝐓𝐈-𝐕𝐈𝐄𝐖𝐎𝐍𝐂𝐄*";
 
+      // 4. Decrypted Media එක Chat එකට යැවීම
       if (mediaType === "image") {
-        const caption = mediaObj.caption ? `${mediaObj.caption}\n\n${defaultCaption}` : defaultCaption;
+        const caption = viewOnce.imageMessage?.caption 
+          ? `${viewOnce.imageMessage.caption}\n\n${defaultCaption}` 
+          : defaultCaption;
+
         await sock.sendMessage(from, {
           image: buffer,
           caption: caption
         }, { quoted: msg });
 
       } else if (mediaType === "video") {
-        const caption = mediaObj.caption ? `${mediaObj.caption}\n\n${defaultCaption}` : defaultCaption;
+        const caption = viewOnce.videoMessage?.caption 
+          ? `${viewOnce.videoMessage.caption}\n\n${defaultCaption}` 
+          : defaultCaption;
+
         await sock.sendMessage(from, {
           video: buffer,
           caption: caption
         }, { quoted: msg });
 
       } else if (mediaType === "audio") {
-        // Voice Note එක සාමාන්‍ය Audio සහ Voice (PTT) දෙකටම support වෙන safe format එකකින් යැවීම
         await sock.sendMessage(from, {
           audio: buffer,
           mimetype: "audio/mp4",
@@ -89,10 +115,12 @@ export default {
 
       await sock.sendMessage(from, { react: { text: "🔓", key: msg.key } }).catch(() => {});
 
-    } catch (e) {
-      console.error("[VV ERROR]:", e);
+    } catch (err) {
+      console.error("[VV MAIN ERROR]:", err);
       await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await sock.sendMessage(from, { text: `❌ Decryption Error: ${e.message}` }, { quoted: msg });
+      await sock.sendMessage(from, { 
+        text: `❌ *View-Once Extract අසාර්ථකයි:*\n\nහේතුව: ${err.message || "Decryption Keys Mismatch"}\n\n_සටහන: View-Once එක ඔබගේ දුරකථනයෙන් හෝ බොට්ගේ දුරකථනයෙන් 'Open' කර අවසන් නම් WhatsApp එකෙන් keys destroy කරන බැවින් මෙය decrypt කළ නොහැක._` 
+      }, { quoted: msg });
     }
   }
 };
