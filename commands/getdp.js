@@ -1,3 +1,5 @@
+import axios from "axios";
+
 export default {
   name: "getdp",
   aliases: ["dp", "pfp", "getpfp"],
@@ -6,20 +8,19 @@ export default {
 
   async execute({ sock, msg, from, args, config }) {
     const prefix = config?.PREFIX || ".";
+    const reply = (text) => sock.sendMessage(from, { text }, { quoted: msg });
 
     try {
-      await sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
+      // Non-blocking Reaction
+      sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
 
       let targetJid = null;
       let targetType = "User";
 
-      // 1. Quoted Message එකක Sender හඳුනාගැනීම
-      const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant;
-      
-      // 2. Mention කර ඇති අය හඳුනාගැනීම
-      const mentionedJid = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0];
-
-      // 3. Command එකෙන් අංකයක් ලබාදී තිබේදැයි බැලීම (උදා: .getdp 947xxxxxxxx)
+      // 1. Quoted Message Sender
+      const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+      const quotedParticipant = contextInfo?.participant;
+      const mentionedJid = contextInfo?.mentionedJid?.[0];
       const inputNumber = args[0]?.replace(/[^0-9]/g, "");
 
       if (quotedParticipant) {
@@ -34,47 +35,39 @@ export default {
         targetJid = `${inputNumber}@s.whatsapp.net`;
         targetType = "User";
       } else if (from.endsWith("@g.us")) {
-        // Group එකක් ඇතුළේ direct .getdp ගැහුවොත් Group Icon එක ලබාගැනීම
         targetJid = from;
         targetType = "Group";
       } else if (from.endsWith("@s.whatsapp.net")) {
-        // Private chat එකක direct .getdp ගැහුවොත් sender ගේ DP එක ලබාගැනීම
         const cleanFrom = from.split("@")[0].split(":")[0];
         targetJid = `${cleanFrom}@s.whatsapp.net`;
         targetType = "User";
       }
 
       if (!targetJid) {
-        return await sock.sendMessage(
-          from,
-          {
-            text: `⚠️ *භාවිතය:* චැට් එකේදී \`${prefix}getdp\` හෝ පණිවිඩයකට reply කර \`${prefix}getdp\` ලෙස යවන්න.`
-          },
-          { quoted: msg }
-        );
+        return await reply(`⚠️ *භාවිතය:* චැට් එකේදී \`${prefix}getdp\` හෝ පණිවිඩයකට reply කර \`${prefix}getdp\` ලෙස යවන්න.`);
       }
 
-      // WhatsApp Server එකෙන් Profile Picture URL එක ලබාගැනීම (HD -> Preview Fallback)
+      // 2. Fast Profile Picture Fetch with Timeout Protection
       let dpUrl = null;
       try {
-        dpUrl = await sock.profilePictureUrl(targetJid, "image");
+        dpUrl = await Promise.race([
+          sock.profilePictureUrl(targetJid, "image"),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 4000))
+        ]);
       } catch (_) {
         try {
-          dpUrl = await sock.profilePictureUrl(targetJid, "preview");
+          dpUrl = await Promise.race([
+            sock.profilePictureUrl(targetJid, "preview"),
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 3000))
+          ]);
         } catch (__) {
           dpUrl = null;
         }
       }
 
       if (!dpUrl) {
-        await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          {
-            text: `❌ මෙම ${targetType === "Group" ? "Group එක සඳහා Icon එකක්" : "User සඳහා Profile Picture එකක්"} නොමැත හෝ එය Privacy Settings මඟින් සඟවා ඇත.`
-          },
-          { quoted: msg }
-        );
+        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+        return await reply(`❌ මෙම ${targetType === "Group" ? "Group එක සඳහා Icon එකක්" : "User සඳහා Profile Picture එකක්"} නොමැත හෝ Privacy Settings මඟින් සඟවා ඇත.`);
       }
 
       const cleanNumber = targetJid.split("@")[0].split(":")[0];
@@ -91,27 +84,35 @@ export default {
 > 👑 *Developer:* DINIDU HESHAN
 > *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐂𝐎𝐑𝐄 🐦‍🔥*`;
 
-      await sock.sendMessage(
-        from,
-        {
-          image: { url: dpUrl },
-          caption: captionText
-        },
-        { quoted: msg }
-      );
+      // 3. Fast Direct Buffer Streaming
+      try {
+        const imgRes = await axios.get(dpUrl, { responseType: "arraybuffer", timeout: 8000 });
+        await sock.sendMessage(
+          from,
+          {
+            image: Buffer.from(imgRes.data),
+            caption: captionText
+          },
+          { quoted: msg }
+        );
+      } catch (_) {
+        // Fallback to URL direct
+        await sock.sendMessage(
+          from,
+          {
+            image: { url: dpUrl },
+            caption: captionText
+          },
+          { quoted: msg }
+        );
+      }
 
-      await sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
 
     } catch (err) {
       console.error("[GETDP ERROR]:", err.message);
-      await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await sock.sendMessage(
-        from,
-        {
-          text: `❌ DP ලබාගැනීම අසාර්ථක විය: ${err.message}`
-        },
-        { quoted: msg }
-      );
+      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      await reply(`❌ DP ලබාගැනීම අසාර්ථක විය: ${err.message}`);
     }
   }
 };
