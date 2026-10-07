@@ -85,7 +85,7 @@ export default {
       await sock.sendMessage(
         from,
         {
-          text: `⚡ *C-REACT ENGINE STARTED*\n\n📢 *Target:* ${channelJid}\n🎯 *Server Post ID:* ${postId}\n🤖 *Active Nodes:* ${botList.length}\n✨ *Emojis:* ${emojis.join(" ")}\n\n_Reactions යැවීම ආරම්භ විය..._`
+          text: `🐦‍🔥 *C-REACT ENGINE STARTED*\n\n📢 *Target:* ${channelJid}\n🎯 *Server Post ID:* ${postId}\n🤖 *Active Nodes:* ${botList.length}\n✨ *Emojis:* ${emojis.join(" ")}\n\n_Reactions යැවීම ආරම්භ විය..._`
         },
         { quoted: msg }
       );
