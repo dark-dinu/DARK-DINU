@@ -192,13 +192,20 @@ async function startBotSocket(sessionId, authCollection) {
     }
   });
 
-  // Universal Message Processor
+  // Universal Message Processor (Owner, Members & Users Supported)
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const msg = messages[0];
-    if (!msg?.message || msg.key.fromMe) return;
+    if (!msg?.message) return;
 
     const from = msg.key.remoteJid;
+    if (from === "status@broadcast") return;
+
+    const isGroup = from.endsWith("@g.us");
+    const sender = isGroup 
+      ? (msg.key.participant || msg.participant || from) 
+      : (msg.key.fromMe ? (sock.user?.id || from) : from);
+
     const body =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
@@ -208,7 +215,7 @@ async function startBotSocket(sessionId, authCollection) {
 
     const quotedStanzaId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
 
-    // Interactive Reply Handlers පරීක්ෂාව (Menu, Song, Video, TT ආදී replies සඳහා)
+    // Interactive Reply Handlers පරීක්ෂාව
     if (quotedStanzaId) {
       for (const [, handler] of replyHandlers) {
         try {
@@ -235,6 +242,7 @@ async function startBotSocket(sessionId, authCollection) {
           from,
           args,
           body,
+          sender,
           config: CONFIG,
           activeBotsCount: activeSockets.size,
           commands
