@@ -34,16 +34,16 @@ function isBotOwner(sock, msg, from) {
   return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
 }
 
-// Background Listener: Messages Upsert Interceptor
+// Background Listener Engine (Ultra-Fast & Non-Blocking)
 function attachAutoReactEngine(sock) {
   if (!sock || global.autoReactHookedSockets.has(sock)) return;
   global.autoReactHookedSockets.add(sock);
 
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+  sock.ev.on("messages.upsert", ({ messages, type }) => {
     if (type !== "notify") return;
 
     for (const m of messages) {
-      if (!m?.message) continue;
+      if (!m?.message || m.key.fromMe) continue; // බොට්ගේම මැසේජ් skip කර speed වැඩි කරයි
 
       const chatJid = m.key.remoteJid;
       if (!chatJid || chatJid === "status@broadcast") continue;
@@ -54,33 +54,33 @@ function attachAutoReactEngine(sock) {
 
       const isGroup = chatJid.endsWith("@g.us");
 
-      // Scope Check: Group / Inbox Targets
+      // Target filter
       if (config.target === "group" && !isGroup) continue;
       if (config.target === "inbox" && isGroup) continue;
 
-      // Random Emoji එකක් තෝරාගෙන React කිරීම
+      // Random Emoji Reaction (Non-blocking background send)
       const randomEmoji = EMOJI_LIST[Math.floor(Math.random() * EMOJI_LIST.length)];
-
-      try {
-        await sock.sendMessage(chatJid, {
-          react: {
-            text: randomEmoji,
-            key: m.key
-          }
-        });
-      } catch (_) {}
+      sock.sendMessage(chatJid, {
+        react: {
+          text: randomEmoji,
+          key: m.key
+        }
+      }).catch(() => {});
     }
   });
 }
 
-// Cluster Auto Hook
-setInterval(() => {
-  if (global.activeSockets) {
-    for (const [, s] of global.activeSockets.entries()) {
-      attachAutoReactEngine(s);
+// Optimized Cluster Watcher (තත්පර 20කට වරක් පමණක් Check වේ)
+if (!global.autoReactIntervalStarted) {
+  global.autoReactIntervalStarted = true;
+  setInterval(() => {
+    if (global.activeSockets) {
+      for (const [, s] of global.activeSockets.entries()) {
+        attachAutoReactEngine(s);
+      }
     }
-  }
-}, 2000);
+  }, 20000);
+}
 
 export default {
   name: "autoreact",
@@ -96,7 +96,7 @@ export default {
     const reactSettings = getReactConfig(botPhone);
 
     if (!isBotOwner(sock, msg, from)) {
-      await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         { text: "⛔ *ACCESS DENIED:* මෙම setting එක වෙනස් කළ හැක්කේ Bot Owner ට පමණි." },
@@ -112,7 +112,6 @@ export default {
       const isEnable = state === "on";
       reactSettings.enabled = isEnable;
 
-      // Scope එකක් ලබා දී ඇත්නම් (උදා: .autoreact on group / .autoreact on inbox)
       if (isEnable && scope) {
         if (["group", "grp"].includes(scope)) reactSettings.target = "group";
         else if (["inbox", "dm", "ib"].includes(scope)) reactSettings.target = "inbox";
@@ -120,8 +119,7 @@ export default {
       }
 
       global.autoReactSettings.set(botPhone, reactSettings);
-
-      await sock.sendMessage(from, { react: { text: isEnable ? "💖" : "🔒", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: isEnable ? "💖" : "🔒", key: msg.key } }).catch(() => {});
 
       return await sock.sendMessage(
         from,
@@ -142,13 +140,13 @@ ${isEnable ? "දැන් ලැබෙන සියලුම පණිවිඩ
       );
     }
 
-    // 2. Direct Scope Handlers (උදා: .autoreact group / .autoreact inbox / .autoreact all)
+    // 2. Direct Scope Handlers
     if (["group", "inbox", "all"].includes(state)) {
       reactSettings.target = state;
       reactSettings.enabled = true;
       global.autoReactSettings.set(botPhone, reactSettings);
 
-      await sock.sendMessage(from, { react: { text: "⚙️", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "⚙️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         {
@@ -158,7 +156,6 @@ ${isEnable ? "දැන් ලැබෙන සියලුම පණිවිඩ
       );
     }
 
-    // Default Helper
     return await sock.sendMessage(
       from,
       {
