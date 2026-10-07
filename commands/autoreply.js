@@ -15,7 +15,6 @@ async function getReplyDB(mongoUri, dbName) {
     mongoDbInstance = client.db(dbName);
     return mongoDbInstance;
   } catch (e) {
-    console.error("[AutoReply DB Error]:", e.message);
     return null;
   }
 }
@@ -36,7 +35,23 @@ function isBotOwner(sock, msg, from) {
   return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
 }
 
-// Database එකෙන් Bot Node එකට අදාළ Replies Load කරගැනීම
+// Background Non-blocking MongoDB Sync
+function syncToDatabase(botPhone, replies, enabled, config) {
+  setImmediate(async () => {
+    try {
+      const db = await getReplyDB(config.MONGODB_URI, config.DB_NAME);
+      const col = db?.collection("custom_autoreplies");
+      const objData = Object.fromEntries(replies);
+      await col?.updateOne(
+        { botPhone },
+        { $set: { botPhone, replies: objData, enabled } },
+        { upsert: true }
+      );
+    } catch (_) {}
+  });
+}
+
+// Memory Sync Engine
 async function loadBotReplies(botPhone, config) {
   if (global.autoReplyCache.has(botPhone)) {
     return global.autoReplyCache.get(botPhone);
@@ -58,9 +73,7 @@ async function loadBotReplies(botPhone, config) {
       global.autoReplyStatus.set(botPhone, record?.enabled ?? true);
       return repliesMap;
     }
-  } catch (err) {
-    console.error("[DB Reply Load Error]:", err.message);
-  }
+  } catch (_) {}
 
   const emptyMap = new Map();
   global.autoReplyCache.set(botPhone, emptyMap);
@@ -101,13 +114,10 @@ function attachAutoReplyEngine(sock, appConfig) {
     const replies = await loadBotReplies(currentPhone, appConfig);
     if (!replies || replies.size === 0) return;
 
-    // Trigger Match පරීක්ෂාව
     let replyToSend = null;
-
     if (replies.has(textBody)) {
       replyToSend = replies.get(textBody);
     } else {
-      // වචනය වාක්‍යය තුළ අඩංගුදැයි බැලීම (Word boundary check)
       for (const [trigger, reply] of replies.entries()) {
         const regex = new RegExp(`(^|\\s)${trigger}(\\s\vert{}$)`, "i");
         if (regex.test(textBody)) {
@@ -140,7 +150,7 @@ export default {
   name: "autoreply",
   aliases: ["addmsg", "delmsg", "allmsg", "replylist"],
   category: "owner",
-  description: "Custom database-backed Auto Reply manager",
+  description: "Ultra-fast custom Auto Reply manager",
 
   async execute({ sock, msg, from, args, body, config }) {
     attachAutoReplyEngine(sock, config);
@@ -149,17 +159,11 @@ export default {
     const botPhone = getBotPhone(sock);
 
     if (!isBotOwner(sock, msg, from)) {
-      await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: "⛔ *ACCESS DENIED:* මෙම සැකසුම් කළ හැක්කේ Bot Owner හට පමණි." },
-        { quoted: msg }
-      );
+      return await sock.sendMessage(from, { text: "⛔ Bot Owner ට පමණි." }, { quoted: msg });
     }
 
     const replies = await loadBotReplies(botPhone, config);
-    const db = await getReplyDB(config.MONGODB_URI, config.DB_NAME);
-    const col = db?.collection("custom_autoreplies");
+    const isEnabled = global.autoReplyStatus.get(botPhone) ?? true;
 
     const fullBody = body.trim().slice(prefix.length).trim();
     const commandTrigger = fullBody.split(/ +/)[0].toLowerCase();
@@ -171,7 +175,7 @@ export default {
 
       if (parts.length < 2) {
         return await sock.sendMessage(from, {
-          text: `⚠️ *භාවිතය:*\n\`${prefix}addmsg trigger,reply\`\n\n*උදාහරණ:*\n• \`${prefix}addmsg hi,*Hey 👋*\`\n• \`${prefix}addmsg gm,Good Morning bro ☕\``
+          text: `⚠️ *භාවිතය:* \`${prefix}addmsg trigger,reply\``
         }, { quoted: msg });
       }
 
@@ -179,31 +183,20 @@ export default {
       const replyMessage = parts.slice(1).join(",").trim();
 
       if (!triggerWord || !replyMessage) {
-        return await sock.sendMessage(from, { text: "❌ Trigger සහ Reply යන දෙකම ඇතුළත් කරන්න." }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ අගයන් ලබාදෙන්න." }, { quoted: msg });
       }
 
+      // 1. Memory එකට Save කිරීම (ක්ෂණිකව ක්‍රියාත්මක වීමට)
       replies.set(triggerWord, replyMessage);
       global.autoReplyCache.set(botPhone, replies);
 
-      // Save to MongoDB
-      const objData = Object.fromEntries(replies);
-      await col?.updateOne(
-        { botPhone },
-        { $set: { botPhone, replies: objData } },
-        { upsert: true }
-      );
+      // 2. MongoDB එකට Background එකේ Save කිරීම
+      syncToDatabase(botPhone, replies, isEnabled, config);
 
+      // Reaction සහ තනි පේළියේ කෙටි පණිවිඩය
       await sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, {
-        text: `╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
-
-┌─〔 💬 *AUTO REPLY ADDED* 〕
-├─▸ 🎯 *Trigger* : \`${triggerWord}\`
-├─▸ 📝 *Reply*   : ${replyMessage}
-├─▸ 💾 *Storage* : MongoDB Saved
-└───────────────────────`
+        text: `✅ Auto Reply Added: \`${triggerWord}\` ➔ ${replyMessage}`
       }, { quoted: msg });
     }
 
@@ -211,54 +204,33 @@ export default {
     if (commandTrigger === "delmsg") {
       const triggerWord = args.join(" ").trim().toLowerCase();
       if (!triggerWord || !replies.has(triggerWord)) {
-        return await sock.sendMessage(from, {
-          text: `⚠️ සොයාගත නොහැකි විය. පවතින triggers බැලීමට \`${prefix}allmsg\` ගසන්න.`
-        }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "⚠️ Reply එකක් හමු නොවුණි." }, { quoted: msg });
       }
 
       replies.delete(triggerWord);
       global.autoReplyCache.set(botPhone, replies);
 
-      const objData = Object.fromEntries(replies);
-      await col?.updateOne(
-        { botPhone },
-        { $set: { replies: objData } }
-      );
+      syncToDatabase(botPhone, replies, isEnabled, config);
 
       await sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, {
-        text: `🗑️ \`${triggerWord}\` Auto Reply එක Database එකෙන් සාර්ථකව Delete කරන ලදී.`
+        text: `🗑️ Deleted: \`${triggerWord}\``
       }, { quoted: msg });
     }
 
-    // 3. .allmsg (View all saved replies)
+    // 3. .allmsg
     if (commandTrigger === "allmsg" || commandTrigger === "replylist") {
       if (replies.size === 0) {
-        return await sock.sendMessage(from, {
-          text: `📭 දැනට Database එකේ Auto Replies කිසිවක් Add කර නැත.\nAdd කිරීමට: \`${prefix}addmsg hi,Hello\``
-        }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "📭 Auto Replies කිසිවක් නැත." }, { quoted: msg });
       }
 
-      let listText = "";
-      let index = 1;
+      let listText = "📑 *Saved Replies:*\n";
+      let i = 1;
       for (const [k, v] of replies.entries()) {
-        listText += `│ ${index++}. *Trigger:* \`${k}\`\n│    ↳ *Reply:* ${v}\n`;
+        listText += `${i++}. \`${k}\` ➔ ${v}\n`;
       }
 
-      const isStatusOn = global.autoReplyStatus.get(botPhone) ?? true;
-      return await sock.sendMessage(from, {
-        text: `╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
-
-┌─〔 📑 *SAVED AUTO REPLIES* 〕
-├─▸ 🤖 *Node*   : +${botPhone}
-├─▸ ⚡ *Status* : ${isStatusOn ? "🟢 ON" : "🔴 OFF"}
-├─▸ 📊 *Total*  : ${replies.size}
-└───────────────────────
-
-${listText}└───────────────────────`
-      }, { quoted: msg });
+      return await sock.sendMessage(from, { text: listText.trim() }, { quoted: msg });
     }
 
     // 4. .autoreply on / off
@@ -267,35 +239,16 @@ ${listText}└──────────────────────
       const isTurnOn = stateArg === "on";
       global.autoReplyStatus.set(botPhone, isTurnOn);
 
-      await col?.updateOne(
-        { botPhone },
-        { $set: { botPhone, enabled: isTurnOn } },
-        { upsert: true }
-      );
+      syncToDatabase(botPhone, replies, isTurnOn, config);
 
       await sock.sendMessage(from, { react: { text: isTurnOn ? "🟢" : "🔴", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, {
-        text: `✅ Auto Reply පද්ධතිය: *${isTurnOn ? "ACTIVATED 🟢" : "DISABLED 🔴"}* (Saved to DB)`
+        text: `Auto Reply: *${isTurnOn ? "ON 🟢" : "OFF 🔴"}*`
       }, { quoted: msg });
     }
 
-    // Default Helper Dashboard
-    const curStatus = global.autoReplyStatus.get(botPhone) ?? true;
     return await sock.sendMessage(from, {
-      text: `╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
-
-┌─〔 🤖 *AUTO REPLY CONTROLLER* 〕
-├─▸ ⚡ *Status*  : ${curStatus ? "🟢 ON" : "🔴 OFF"}
-├─▸ 📊 *Saved*   : ${replies.size} Replies
-└───────────────────────
-
-📌 *පාලනය කිරීමට:*
-• \`${prefix}autoreply on\` / \`off\`
-• \`${prefix}addmsg <trigger>,<reply>\`
-• \`${prefix}delmsg <trigger>\`
-• \`${prefix}allmsg\` (ලැයිස්තුව බැලීමට)`
+      text: `*Auto Reply:*\n• \`${prefix}addmsg trigger,reply\`\n• \`${prefix}delmsg trigger\`\n• \`${prefix}allmsg\`\n• \`${prefix}autoreply on/off\``
     }, { quoted: msg });
   }
 };
