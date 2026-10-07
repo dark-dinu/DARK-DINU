@@ -10,6 +10,7 @@ import NodeCache from "node-cache";
 import express from "express";
 import fs from "fs";
 import path from "path";
+import axios from "axios";
 import { fileURLToPath, pathToFileURL } from "url";
 import { useMongoDBAuthState } from "./auth.js";
 import CONFIG from "./config.js";
@@ -22,7 +23,7 @@ const PORT = Number(CONFIG.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const msgRetryCounterCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+const msgRetryCounterCache = new NodeCache({ stdTTL: 180, checkperiod: 60 });
 
 // Active Bot Sockets Global Store
 global.activeSockets = global.activeSockets || new Map();
@@ -106,7 +107,6 @@ app.get("/", (req, res) => {
       overflow-x: hidden;
       position: relative;
     }
-    /* Grid Mesh Overlay */
     body::before {
       content: "";
       position: absolute;
@@ -255,7 +255,6 @@ app.get("/", (req, res) => {
       cursor: not-allowed;
       transform: none;
     }
-    /* Pairing Display Box */
     .result-container {
       display: none;
       margin-top: 24px;
@@ -306,7 +305,6 @@ app.get("/", (req, res) => {
       background: rgba(255, 255, 255, 0.1);
       color: #fff;
     }
-    /* Stats Bar */
     .metrics-bar {
       margin-top: 28px;
       padding-top: 20px;
@@ -433,7 +431,7 @@ app.get("/", (req, res) => {
 </html>`);
 });
 
-// 3. Central Socket Launcher & Universal Handler
+// 3. Central Socket Launcher & Universal Handler (Zero-Lag Configured)
 async function startBotSocket(sessionId, authCollection) {
   try {
     const { state, saveCreds } = await useMongoDBAuthState(authCollection);
@@ -442,17 +440,18 @@ async function startBotSocket(sessionId, authCollection) {
     const sock = makeWASocket({
       version,
       auth: state,
-      logger: pino({ level: "silent" }),
+      logger: pino({ level: "fatal" }), // Eliminates logging I/O bottleneck
       printQRInTerminal: false,
       msgRetryCounterCache,
       browser: Browsers.ubuntu("Chrome"),
-      connectTimeoutMs: 60000,
+      connectTimeoutMs: 30000,
       defaultQueryTimeoutMs: 0,
-      keepAliveIntervalMs: 10000,
-      emitOwnEvents: true,
-      fireInitQueries: true,
+      keepAliveIntervalMs: 15000,
+      emitOwnEvents: false,
+      fireInitQueries: false,
       generateHighQualityLinkPreview: false,
-      syncFullHistory: false
+      syncFullHistory: false,
+      markOnlineOnConnect: false
     });
 
     sock.ev.on("creds.update", saveCreds);
@@ -466,8 +465,8 @@ async function startBotSocket(sessionId, authCollection) {
         activeSockets.delete(sessionId);
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         if (statusCode !== DisconnectReason.loggedOut) {
-          console.log(`[*] Reconnecting: ${sessionId}`);
-          setTimeout(() => startBotSocket(sessionId, authCollection), 3000);
+          console.log(`[*] Fast reconnecting: ${sessionId}`);
+          setTimeout(() => startBotSocket(sessionId, authCollection), 2000);
         } else {
           console.log(`[-] Logged out: ${sessionId}`);
           await authCollection.drop().catch(() => {});
@@ -499,15 +498,18 @@ async function startBotSocket(sessionId, authCollection) {
         msg.message?.extendedTextMessage?.contextInfo?.stanzaId ||
         msg.message?.imageMessage?.contextInfo?.stanzaId;
 
+      // Non-blocking interactive reply processing
       if (quotedStanzaId) {
-        for (const [, handler] of replyHandlers) {
-          try {
-            const handled = await handler({ sock, msg, from, body, quotedStanzaId, config: CONFIG });
-            if (handled) return;
-          } catch (e) {
-            console.error("[Reply Handler Error]:", e.message);
+        setImmediate(async () => {
+          for (const [, handler] of replyHandlers) {
+            try {
+              const handled = await handler({ sock, msg, from, body, quotedStanzaId, config: CONFIG });
+              if (handled) return;
+            } catch (e) {
+              console.error("[Reply Handler Error]:", e.message);
+            }
           }
-        }
+        });
       }
 
       if (!body.startsWith(CONFIG.PREFIX)) return;
@@ -517,22 +519,25 @@ async function startBotSocket(sessionId, authCollection) {
       const command = commands.get(cmdName);
 
       if (command) {
-        try {
-          await command.execute({
-            sock,
-            msg,
-            from,
-            args,
-            body,
-            sender,
-            config: CONFIG,
-            activeBotsCount: activeSockets.size,
-            commands
-          });
-        } catch (err) {
-          console.error(`[!] Command error [${cmdName}]:`, err.message);
-          await sock.sendMessage(from, { text: "❌ Command execution error!" }, { quoted: msg }).catch(() => {});
-        }
+        // Non-blocking async queue dispatch for instant response
+        setImmediate(async () => {
+          try {
+            await command.execute({
+              sock,
+              msg,
+              from,
+              args,
+              body,
+              sender,
+              config: CONFIG,
+              activeBotsCount: activeSockets.size,
+              commands
+            });
+          } catch (err) {
+            console.error(`[!] Command error [${cmdName}]:`, err.message);
+            await sock.sendMessage(from, { text: "❌ Command execution error!" }, { quoted: msg }).catch(() => {});
+          }
+        });
       }
     });
 
@@ -572,7 +577,7 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", activeBots: activeSockets.size });
 });
 
-// 5. Server Run
+// 5. Server Run (Immediate Port Bind)
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[+] Web server listening on port ${PORT}`);
 
@@ -594,6 +599,14 @@ app.listen(PORT, "0.0.0.0", async () => {
     console.error("[!] Database Startup Error:", err.message);
   }
 });
+
+// 6. Anti-Sleep Keep-Alive Engine (Dyno awake every 12 mins)
+const KEEP_ALIVE_URL = process.env.APP_URL || "https://heshan.devofc.top";
+setInterval(async () => {
+  try {
+    await axios.get(`${KEEP_ALIVE_URL}/health`, { timeout: 10000 });
+  } catch (_) {}
+}, 12 * 60 * 1000);
 
 // Graceful Termination
 process.on("SIGTERM", async () => {
