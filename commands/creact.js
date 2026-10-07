@@ -4,7 +4,7 @@ export default {
   name: "creact",
   aliases: ["cr"],
   category: "owner",
-  description: "Official Protocol Channel Post Reactor for all active bots (Owner/Dev Only)",
+  description: "Official Protocol Channel Post Reactor for all active bots",
 
   async execute({ sock, msg, from, args }) {
     try {
@@ -14,18 +14,15 @@ export default {
         : (msg.key.participant || msg.participant || from || "");
 
       const cleanSender = String(senderJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
-
       const devNumbers = ["94719845166", "15947733680169"];
-      const isDeveloper = devNumbers.some((num) => cleanSender.includes(num)) || senderJid.includes("15947733680169");
+      const isDeveloper = devNumbers.some((num) => cleanSender.includes(num));
       const isOwner = msg.key.fromMe || isDeveloper;
 
       if (!isOwner) {
         await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          {
-            text: "*⛔ ACCESS DENIED ⛔*\n\nමෙම Command එක භාවිතා කළ හැක්කේ Bot Owner හෝ Developer ට පමණි."
-          },
+          { text: "*⛔ ACCESS DENIED ⛔*\n\nමෙම Command එක භාවිතා කළ හැක්කේ Bot Owner හෝ Developer ට පමණි." },
           { quoted: msg }
         );
       }
@@ -36,7 +33,7 @@ export default {
         return await sock.sendMessage(
           from,
           {
-            text: `⚠️ *භාවිතය:*\n.creact <post_link>,<emoji1>,<emoji2>...\n\n*උදාහරණ:*\n.creact https://whatsapp.com/channel/0029VbBTkLI9Gv7bxPWEmg3D/2513,🖤,😚,✨,🥀`
+            text: `⚠️ *භාවිතය:*\n.creact <post_link>,<emoji1>,<emoji2>...\n\n*උදාහරණ:*\n.creact https://whatsapp.com/channel/0029VbBTkLI9Gv7bxPWEmg3D/2513,🖤,😚,✨`
           },
           { quoted: msg }
         );
@@ -47,21 +44,15 @@ export default {
       const emojis = parts.slice(1);
 
       if (emojis.length === 0) {
-        return await sock.sendMessage(
-          from,
-          { text: "❌ කරුණාකර අවම වශයෙන් එක emoji එකක්වත් ඇතුළත් කරන්න." },
-          { quoted: msg }
-        );
+        return await sock.sendMessage(from, { text: "❌ කරුණාකර අවම වශයෙන් එක emoji එකක්වත් ලබා දෙන්න." }, { quoted: msg });
       }
 
-      // Link Regex Parsing
+      // Link Parsing
       const linkMatch = postLink.match(/whatsapp\.com\/channel\/([a-zA-Z0-9]+)(?:\/(\d+))/);
       if (!linkMatch || !linkMatch[1] || !linkMatch[2]) {
         return await sock.sendMessage(
           from,
-          { 
-            text: "❌ වැරදි Channel Link එකක්! Channel post එකේ direct share link එක ලබා දෙන්න (අගට post ID එක සහිතව)." 
-          },
+          { text: "❌ වැරදි Channel Link එකක්! Share Link එකම ලබා දෙන්න (අගට post ID එක සහිතව)." },
           { quoted: msg }
         );
       }
@@ -71,20 +62,19 @@ export default {
 
       await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Fetch Channel Metadata
+      // Channel metadata ලබා ගැනීම (Timeout සහිතව)
       let channelJid = null;
       try {
-        const metadata = await sock.newsletterMetadata("invite", channelCode);
+        const metadata = await Promise.race([
+          sock.newsletterMetadata("invite", channelCode),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("Metadata fetch timeout")), 10000))
+        ]);
         channelJid = metadata.id;
       } catch (e) {
-        return await sock.sendMessage(
-          from,
-          { text: `❌ Channel එක සොයාගත නොහැකි විය: ${e.message}` },
-          { quoted: msg }
-        );
+        return await sock.sendMessage(from, { text: `❌ Channel එක සොයාගත නොහැකි විය: ${e.message}` }, { quoted: msg });
       }
 
-      // Fetch Active Bots
+      // Active bots ලබා ගැනීම
       let botList = [];
       if (global.activeSockets && global.activeSockets.size > 0) {
         botList = Array.from(global.activeSockets.values());
@@ -95,12 +85,12 @@ export default {
       await sock.sendMessage(
         from,
         {
-          text: `⚡ *C-REACT ENGINE STARTED*\n\n📢 *Target:* ${channelJid}\n🎯 *Server Post ID:* ${postId}\n🤖 *Active Nodes:* ${botList.length}\n✨ *Emojis:* ${emojis.join(" ")}\n\n_Newsletter Node Protocol හරහා Reacts යැවීම ආරම්භ විය..._`
+          text: `⚡ *C-REACT ENGINE STARTED*\n\n📢 *Target:* ${channelJid}\n🎯 *Server Post ID:* ${postId}\n🤖 *Active Nodes:* ${botList.length}\n✨ *Emojis:* ${emojis.join(" ")}\n\n_Reactions යැවීම ආරම්භ විය..._`
         },
         { quoted: msg }
       );
 
-      // Safe Background Runner
+      // Background Worker
       (async () => {
         let success = 0;
         let fail = 0;
@@ -110,18 +100,14 @@ export default {
           const selectedEmoji = emojis[i % emojis.length];
 
           try {
-            // Method 1: Baileys Native newsletterReactMessage
-            if (typeof currentBot.newsletterReactMessage === "function") {
-              await currentBot.newsletterReactMessage(channelJid, postId.toString(), selectedEmoji);
-              success++;
-            } else {
-              // Method 2: Raw Binary XML Query Node
-              await currentBot.query({
+            // Channel Reaction binary node query with timeout guard
+            await Promise.race([
+              currentBot.query({
                 tag: "message",
                 attrs: {
                   to: channelJid,
                   type: "reaction",
-                  server_id: postId.toString(),
+                  server_id: String(postId),
                   id: currentBot.generateMessageTag()
                 },
                 content: [
@@ -132,40 +118,26 @@ export default {
                     }
                   }
                 ]
-              });
-              success++;
-            }
+              }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000))
+            ]);
+            success++;
           } catch (err) {
-            console.error(`[C-REACT PROTOCOL ERROR - Node ${i + 1}]:`, err.message);
-
-            // Method 3: Fallback direct key reaction
-            try {
-              await currentBot.sendMessage(channelJid, {
-                react: {
-                  text: selectedEmoji,
-                  key: {
-                    remoteJid: channelJid,
-                    server_id: postId.toString(),
-                    fromMe: false
-                  }
-                }
-              });
-              success++;
-            } catch (_) {
-              fail++;
-            }
+            console.error(`[C-REACT ERR - Node ${i + 1}]:`, err.message);
+            fail++;
           }
 
-          // Anti-ban delay (3.5s - 4.5s)
-          await delay(3500 + Math.floor(Math.random() * 1000));
+          // Anti-ban delay
+          await delay(2500);
         }
 
         await sock.sendMessage(from, {
-          text: `✅ *C-REACT අවසන්!*\n\n🎯 *Post ID:* ${postId}\n🔥 *සාර්ථකයි:* ${success}\n⚠️ *අසාර්ථකයි:* ${fail}\n✨ Reactions Channel Server එක වෙත සම්පූර්ණයෙන් යවන ලදී.`
+          text: `✅ *C-REACT අවසන්!*\n\n🎯 *Post ID:* ${postId}\n🔥 *සාර්ථකයි:* ${success}\n⚠️ *අසාර්ථකයි:* ${fail}`
         }).catch(() => {});
       })();
 
     } catch (err) {
+      console.error("[C-REACT MAIN ERROR]:", err);
       await sock.sendMessage(from, { text: `❌ C-React දෝෂයකි: ${err.message}` }, { quoted: msg });
     }
   }
