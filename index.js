@@ -12,22 +12,15 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { useMongoDBAuthState } from "./auth.js";
+import CONFIG from "./config.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(CONFIG.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-const CONFIG = {
-  MONGODB_URI:
-    process.env.MONGODB_URI ||
-    "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-  DB_NAME: process.env.DB_NAME || "whatsapp_multi_bots",
-  PREFIX: process.env.PREFIX || "."
-};
 
 const msgRetryCounterCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
@@ -75,7 +68,7 @@ app.get("/", (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>DARK-DINU MULTI-BOT CLOUD</title>
+  <title>${CONFIG.BOT_NAME || "DARK-DINU MULTI-BOT"}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
     body { background: radial-gradient(circle at top, #111928, #05070a); color: #f0f6fc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
@@ -288,12 +281,12 @@ app.get("/pair", async (req, res) => {
   }
 });
 
-// Health check endpoint (Heroku monitoring)
+// Health check endpoint
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", activeBots: activeSockets.size });
 });
 
-// 5. Server Run (Immediate Port Bind to satisfy Heroku Boot Cutoff)
+// 5. Server Run (Immediate Port Bind to avoid Heroku R10 Boot Timeout)
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[+] Web server listening on port ${PORT}`);
 
@@ -316,7 +309,7 @@ app.listen(PORT, "0.0.0.0", async () => {
   }
 });
 
-// Graceful Termination Handler
+// Graceful Termination
 process.on("SIGTERM", async () => {
   console.log("[*] SIGTERM received. Closing active sessions...");
   if (mongoClient) await mongoClient.close();
