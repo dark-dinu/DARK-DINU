@@ -7,6 +7,10 @@
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=20.x",
+    "npm": ">=10.x"
+  },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
     "@whiskeysockets/baileys": "latest",
