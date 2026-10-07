@@ -28,9 +28,13 @@ const CONFIG = {
 };
 
 const msgRetryCounterCache = new NodeCache();
-const activeSockets = new Map();
+
+// Active Bot Sockets Global Store (Commands සඳහා Direct Access සහිතව)
+global.activeSockets = global.activeSockets || new Map();
+const activeSockets = global.activeSockets;
+
 const commands = new Map();
-const replyHandlers = new Map(); // Global dynamic reply handlers registry
+const replyHandlers = new Map();
 let db;
 
 // 1. Dynamic Auto Command Loader
@@ -50,7 +54,7 @@ async function loadCommands() {
         commands.set(cmd.name.toLowerCase(), cmd);
         cmd.aliases?.forEach((a) => commands.set(a.toLowerCase(), cmd));
 
-        // Command එකේ reply listener එකක් තිබුණොත් auto bind කිරීම
+        // Command එකේ interactive reply handler එකක් ඇත්නම් register කිරීම
         if (typeof cmd.onReply === "function") {
           replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
         }
@@ -204,12 +208,12 @@ async function startBotSocket(sessionId, authCollection) {
 
     const quotedStanzaId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
 
-    // Interactive Reply Handlers පරීක්ෂාව
+    // Interactive Reply Handlers පරීක්ෂාව (Menu, Song, Video, TT ආදී replies සඳහා)
     if (quotedStanzaId) {
       for (const [, handler] of replyHandlers) {
         try {
           const handled = await handler({ sock, msg, from, body, quotedStanzaId, config: CONFIG });
-          if (handled) return; // reply එක handle වුණා නම් execution එක නවත්වන්න
+          if (handled) return;
         } catch (e) {
           console.error("[Reply Handler Error]:", e);
         }
