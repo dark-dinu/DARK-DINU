@@ -15,14 +15,15 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Special character '#' encoded as '%23' to prevent auth crash
 const CONFIG = {
-  MONGODB_URI: "mongodb+srv://Darkdinubot_db_user:uQMkdHvMsFO3Z4xf@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+  MONGODB_URI: "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
   DB_NAME: "whatsapp_multi_bots",
   PREFIX: "."
 };
 
 const msgRetryCounterCache = new NodeCache();
-const activeSockets = new Map(); // දැනට ධාවනය වන සියලු බොට්ලාගේ list එක
+const activeSockets = new Map();
 let db;
 
 // Pairing Web UI
@@ -57,7 +58,7 @@ app.get("/", async (req, res) => {
       <div class="card">
         <span class="badge">Multi-Bot Engine</span>
         <h2>DARK-DINU PAIRING</h2>
-        <p>ඕනෑම WhatsApp අංකයකට තත්පර 5න් Bot කෙනෙක් සාදාගන්න.</p>
+        <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න.</p>
         
         <div class="input-group">
           <label>WhatsApp Number (Country Code සමඟ, + නැතුව)</label>
@@ -123,7 +124,7 @@ app.get("/", async (req, res) => {
   `);
 });
 
-// Single Bot Instance Launcher
+// Bot Instance Launcher
 async function launchBot(sessionId) {
   if (activeSockets.has(sessionId)) return;
 
@@ -167,7 +168,6 @@ async function launchBot(sessionId) {
     }
   });
 
-  // Message Handler (Ultra lightweight)
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const msg = messages[0];
@@ -201,7 +201,6 @@ app.get("/pair", async (req, res) => {
     const authCollection = db.collection(sessionId);
     const credsCheck = await authCollection.findOne({ _id: "creds" });
 
-    // කලින් session එකක් තිබ්බොත් clear කරලා fresh start එකක් දෙනවා
     if (credsCheck) {
       await authCollection.drop().catch(() => {});
     }
@@ -238,20 +237,23 @@ app.get("/pair", async (req, res) => {
   }
 });
 
-// Auto-boot all registered bots on deployment
+// Server Initialization
 app.listen(PORT, async () => {
   console.log(`Server started on port ${PORT}`);
-  const client = new MongoClient(CONFIG.MONGODB_URI);
-  await client.connect();
-  db = client.db(CONFIG.DB_NAME);
-  console.log("MongoDB Connected! Auto-scanning previous sessions...");
+  try {
+    const client = new MongoClient(CONFIG.MONGODB_URI);
+    await client.connect();
+    db = client.db(CONFIG.DB_NAME);
+    console.log("MongoDB Connected Successfully!");
 
-  // Database එකේ ඇති සියලුම sessions auto-start කිරීම
-  const collections = await db.listCollections().toArray();
-  for (const col of collections) {
-    if (col.name.startsWith("bot_")) {
-      console.log(`Auto-starting: ${col.name}`);
-      launchBot(col.name);
+    const collections = await db.listCollections().toArray();
+    for (const col of collections) {
+      if (col.name.startsWith("bot_")) {
+        console.log(`Auto-starting: ${col.name}`);
+        launchBot(col.name);
+      }
     }
+  } catch (err) {
+    console.error("MongoDB Connection Error:", err);
   }
 });
