@@ -1,6 +1,6 @@
 import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 
-// Media Stream එක Buffer එකක් බවට හැරවීම
+// Stream එක Buffer එකක් කර ගැනීම
 async function streamToBuffer(stream) {
   const chunks = [];
   for await (const chunk of stream) {
@@ -25,7 +25,7 @@ export default {
       const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
       if (!quoted) return;
 
-      // Extract raw target message
+      // Unpack View-Once wrappers (V1, V2, Extensions සහ Raw)
       let targetMsg = quoted;
       if (targetMsg?.viewOnceMessageV2?.message) {
         targetMsg = targetMsg.viewOnceMessageV2.message;
@@ -35,7 +35,6 @@ export default {
         targetMsg = targetMsg.viewOnceMessageV2Extension.message;
       }
 
-      // Media Type & Media Object හඳුනාගැනීම
       let mediaObj = null;
       let mediaType = null;
 
@@ -54,7 +53,7 @@ export default {
 
       await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Baileys Native Direct Stream Downloader (Zero Key Mismatch)
+      // Download Stream via Baileys Direct Method
       const stream = await downloadContentFromMessage(mediaObj, mediaType);
       const buffer = await streamToBuffer(stream);
 
@@ -80,9 +79,10 @@ export default {
         }, { quoted: msg });
 
       } else if (mediaType === "audio") {
+        // Voice Note එක සාමාන්‍ය Audio සහ Voice (PTT) දෙකටම support වෙන safe format එකකින් යැවීම
         await sock.sendMessage(from, {
           audio: buffer,
-          mimetype: mediaObj.mimetype || "audio/ogg; codecs=opus",
+          mimetype: "audio/mp4",
           ptt: true
         }, { quoted: msg });
       }
