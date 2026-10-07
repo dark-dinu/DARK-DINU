@@ -6,7 +6,7 @@ global.songHookedSockets = global.songHookedSockets || new WeakSet();
 
 const API_KEY = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 
-// Fast Media Resolver
+// Info & Valid Authenticated Direct URL Generator
 async function fetchMediaData(videoUrl) {
   try {
     const apiUrl = `https://api.chamindu.site/api/v1/media/ytmp4/info?url=${encodeURIComponent(videoUrl)}&api_key=${API_KEY}`;
@@ -16,18 +16,23 @@ async function fetchMediaData(videoUrl) {
       const data = res.data.data;
       const audios = data.audio_formats || [];
       
-      // ප්‍රමාණය අඩු (1-3MB) M4A stream එකක් තෝරා ගැනීම
       const bestAudio = 
         audios.find(a => a.format === "m4a") ||
         audios[0];
 
-      const streamUrl = bestAudio?.download_link || bestAudio?.direct_url;
+      // API Key එක සහිත නිවැරදි Download Stream URL එක සකස් කිරීම (401 Fix)
+      let finalDownloadUrl = null;
+      if (bestAudio?.api_endpoint) {
+        finalDownloadUrl = `https://api.chamindu.site${bestAudio.api_endpoint}&api_key=${API_KEY}`;
+      } else if (bestAudio?.download_link) {
+        finalDownloadUrl = bestAudio.download_link;
+      }
 
       return {
         title: data.title || "YouTube Audio",
         channel: data.channel || "YouTube Artist",
         thumbnail: data.thumbnail,
-        audioUrl: streamUrl
+        audioUrl: finalDownloadUrl
       };
     }
   } catch (err) {
@@ -59,7 +64,6 @@ function attachSongReplyEngine(sock) {
     const session = global.songSessions.get(quotedId);
     if (session.from !== from) return;
 
-    // Body capture (Plain text හෝ extended text)
     const choice = (
       msgObj.conversation ||
       msgObj.extendedTextMessage?.text ||
@@ -72,12 +76,12 @@ function attachSongReplyEngine(sock) {
 
     try {
       const streamUrl = session.audioUrl;
-      if (!streamUrl) throw new Error("Audio link not found.");
+      if (!streamUrl) throw new Error("Audio URL is empty.");
 
-      // Direct Stream Buffer Download (1-3MB නිසා තත්පර 1-2න් download වේ)
+      // Direct Stream Download with API Key headers
       const audioRes = await axios.get(streamUrl, {
         responseType: "arraybuffer",
-        timeout: 20000,
+        timeout: 25000,
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
         }
@@ -85,21 +89,18 @@ function attachSongReplyEngine(sock) {
       const audioBuffer = Buffer.from(audioRes.data);
 
       if (choice === "1") {
-        // Audio (Playable)
         await sock.sendMessage(from, {
           audio: audioBuffer,
           mimetype: "audio/mp4",
           ptt: false
         }, { quoted: m });
       } else if (choice === "2") {
-        // Document
         await sock.sendMessage(from, {
           document: audioBuffer,
           mimetype: "audio/mp4",
           fileName: `${session.title}.m4a`
         }, { quoted: m });
       } else if (choice === "3") {
-        // Voice Note (PTT)
         await sock.sendMessage(from, {
           audio: audioBuffer,
           mimetype: "audio/mp4",
@@ -117,7 +118,6 @@ function attachSongReplyEngine(sock) {
   });
 }
 
-// Cluster Watcher
 if (!global.songWatcherStarted) {
   global.songWatcherStarted = true;
   setInterval(() => {
