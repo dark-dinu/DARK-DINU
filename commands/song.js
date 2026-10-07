@@ -6,7 +6,7 @@ global.songHookedSockets = global.songHookedSockets || new WeakSet();
 
 const API_KEY = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 
-// Ultra-Fast Info & Direct Audio Resolver
+// Fast Media Resolver
 async function fetchMediaData(videoUrl) {
   try {
     const apiUrl = `https://api.chamindu.site/api/v1/media/ytmp4/info?url=${encodeURIComponent(videoUrl)}&api_key=${API_KEY}`;
@@ -14,20 +14,20 @@ async function fetchMediaData(videoUrl) {
     
     if (res.data?.success && res.data?.data) {
       const data = res.data.data;
-      
-      // WhatsApp වලට වඩාත්ම සුදුසු Medium M4A Audio (Direct Google Stream) එක තෝරා ගැනීම
       const audios = data.audio_formats || [];
+      
+      // ප්‍රමාණය අඩු (1-3MB) M4A stream එකක් තෝරා ගැනීම
       const bestAudio = 
-        audios.find(a => a.quality === "AUDIO_QUALITY_MEDIUM" && a.format === "m4a") ||
         audios.find(a => a.format === "m4a") ||
         audios[0];
+
+      const streamUrl = bestAudio?.download_link || bestAudio?.direct_url;
 
       return {
         title: data.title || "YouTube Audio",
         channel: data.channel || "YouTube Artist",
         thumbnail: data.thumbnail,
-        audioUrl: bestAudio?.download_link || bestAudio?.direct_url || null,
-        duration: data.duration_label || "Audio"
+        audioUrl: streamUrl
       };
     }
   } catch (err) {
@@ -36,7 +36,7 @@ async function fetchMediaData(videoUrl) {
   return null;
 }
 
-// Background Auto-Reply Interceptor (Zero-Lag Delivery)
+// Background Auto-Reply Interceptor
 function attachSongReplyEngine(sock) {
   if (!sock || global.songHookedSockets.has(sock)) return;
   global.songHookedSockets.add(sock);
@@ -47,9 +47,11 @@ function attachSongReplyEngine(sock) {
     if (!m?.message || m.key.fromMe) return;
 
     const from = m.key.remoteJid;
+    const msgObj = m.message;
     const contextInfo = 
-      m.message.extendedTextMessage?.contextInfo ||
-      m.message.imageMessage?.contextInfo;
+      msgObj.extendedTextMessage?.contextInfo ||
+      msgObj.imageMessage?.contextInfo ||
+      msgObj.buttonsResponseMessage?.contextInfo;
 
     const quotedId = contextInfo?.stanzaId;
     if (!quotedId || !global.songSessions.has(quotedId)) return;
@@ -57,37 +59,49 @@ function attachSongReplyEngine(sock) {
     const session = global.songSessions.get(quotedId);
     if (session.from !== from) return;
 
+    // Body capture (Plain text හෝ extended text)
     const choice = (
-      m.message.conversation ||
-      m.message.extendedTextMessage?.text ||
+      msgObj.conversation ||
+      msgObj.extendedTextMessage?.text ||
       ""
     ).trim();
 
     if (!["1", "2", "3"].includes(choice)) return;
 
-    // React Non-blocking
-    sock.sendMessage(from, { react: { text: "⚡", key: m.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
 
     try {
       const streamUrl = session.audioUrl;
-      if (!streamUrl) throw new Error("Audio direct link unavailable.");
+      if (!streamUrl) throw new Error("Audio link not found.");
 
-      // Direct Stream Delivery (No Bot RAM buffer lag)
+      // Direct Stream Buffer Download (1-3MB නිසා තත්පර 1-2න් download වේ)
+      const audioRes = await axios.get(streamUrl, {
+        responseType: "arraybuffer",
+        timeout: 20000,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
+      });
+      const audioBuffer = Buffer.from(audioRes.data);
+
       if (choice === "1") {
+        // Audio (Playable)
         await sock.sendMessage(from, {
-          audio: { url: streamUrl },
+          audio: audioBuffer,
           mimetype: "audio/mp4",
           ptt: false
         }, { quoted: m });
       } else if (choice === "2") {
+        // Document
         await sock.sendMessage(from, {
-          document: { url: streamUrl },
+          document: audioBuffer,
           mimetype: "audio/mp4",
           fileName: `${session.title}.m4a`
         }, { quoted: m });
       } else if (choice === "3") {
+        // Voice Note (PTT)
         await sock.sendMessage(from, {
-          audio: { url: streamUrl },
+          audio: audioBuffer,
           mimetype: "audio/mp4",
           ptt: true
         }, { quoted: m });
@@ -96,8 +110,9 @@ function attachSongReplyEngine(sock) {
       sock.sendMessage(from, { react: { text: "✅", key: m.key } }).catch(() => {});
       global.songSessions.delete(quotedId);
     } catch (err) {
+      console.error("[SONG SEND ERR]:", err.message);
       sock.sendMessage(from, { react: { text: "❌", key: m.key } }).catch(() => {});
-      sock.sendMessage(from, { text: `❌ බාගත කිරීම අසාර්ථක විය: ${err.message}` }, { quoted: m }).catch(() => {});
+      sock.sendMessage(from, { text: `❌ සින්දුව එවීමට නොහැකි විය: ${err.message}` }, { quoted: m }).catch(() => {});
     }
   });
 }
@@ -121,7 +136,6 @@ export default {
   description: "Fast Direct YouTube Audio Downloader via Chama API",
 
   async execute({ sock, msg, from, args, config }) {
-    // 1. Instant Reaction
     sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
     attachSongReplyEngine(sock);
 
@@ -136,11 +150,10 @@ export default {
 
       let videoUrl = query;
 
-      // YouTube Link එකක් නොවේ නම් ඉක්මනින් search කිරීම
       if (!query.startsWith("http://") && !query.startsWith("https://")) {
         const searchPromise = yts(query);
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error("Timeout")), 4000)
+          setTimeout(() => reject(new Error("Timeout")), 4500)
         );
 
         const search = await Promise.race([searchPromise, timeoutPromise]).catch(() => null);
@@ -154,12 +167,11 @@ export default {
         videoUrl = video.url;
       }
 
-      // 2. Chama Media API එකෙන් තොරතුරු සහ Direct Links ලබා ගැනීම
       const media = await fetchMediaData(videoUrl);
 
       if (!media || !media.audioUrl) {
         sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await reply("❌ මෙම සින්දුව ලබා ගැනීමට නොහැකි විය. සුළු මොහොතකින් නැවත උත්සාහ කරන්න.");
+        return await reply("❌ මෙම සින්දුවේ Download Link එක ලබා ගැනීමට නොහැකි විය.");
       }
 
       const songCard = 
@@ -199,7 +211,6 @@ export default {
           from
         });
 
-        // 5 Minutes Auto-Clean
         setTimeout(() => {
           global.songSessions?.delete(sentMsg.key.id);
         }, 5 * 60 * 1000);
