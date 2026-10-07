@@ -17,31 +17,34 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 const CONFIG = {
-  MONGODB_URI: "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-  DB_NAME: "whatsapp_multi_bots",
-  PREFIX: "."
+  MONGODB_URI:
+    process.env.MONGODB_URI ||
+    "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+  DB_NAME: process.env.DB_NAME || "whatsapp_multi_bots",
+  PREFIX: process.env.PREFIX || "."
 };
 
-const msgRetryCounterCache = new NodeCache();
+const msgRetryCounterCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
 
-// Active Bot Sockets Global Store (Commands සඳහා Direct Access සහිතව)
+// Active Bot Sockets Global Store
 global.activeSockets = global.activeSockets || new Map();
 const activeSockets = global.activeSockets;
 
 const commands = new Map();
 const replyHandlers = new Map();
-let db;
+let db = null;
+let mongoClient = null;
 
 // 1. Dynamic Auto Command Loader
 async function loadCommands() {
   const dir = path.join(__dirname, "commands");
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-  
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
   const files = fs.readdirSync(dir).filter((f) => f.endsWith(".js"));
   commands.clear();
   replyHandlers.clear();
@@ -54,7 +57,6 @@ async function loadCommands() {
         commands.set(cmd.name.toLowerCase(), cmd);
         cmd.aliases?.forEach((a) => commands.set(a.toLowerCase(), cmd));
 
-        // Command එකේ interactive reply handler එකක් ඇත්නම් register කිරීම
         if (typeof cmd.onReply === "function") {
           replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
         }
@@ -154,113 +156,119 @@ app.get("/", (req, res) => {
 
 // 3. Central Socket Launcher & Universal Handler
 async function startBotSocket(sessionId, authCollection) {
-  const { state, saveCreds } = await useMongoDBAuthState(authCollection);
-  const { version } = await fetchLatestBaileysVersion();
+  try {
+    const { state, saveCreds } = await useMongoDBAuthState(authCollection);
+    const { version } = await fetchLatestBaileysVersion();
 
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    logger: pino({ level: "silent" }),
-    printQRInTerminal: false,
-    msgRetryCounterCache,
-    browser: Browsers.ubuntu("Chrome"),
-    connectTimeoutMs: 60000,
-    defaultQueryTimeoutMs: 0,
-    keepAliveIntervalMs: 10000,
-    emitOwnEvents: true,
-    fireInitQueries: true,
-    generateHighQualityLinkPreview: false,
-    syncFullHistory: false
-  });
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      logger: pino({ level: "silent" }),
+      printQRInTerminal: false,
+      msgRetryCounterCache,
+      browser: Browsers.ubuntu("Chrome"),
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 0,
+      keepAliveIntervalMs: 10000,
+      emitOwnEvents: true,
+      fireInitQueries: true,
+      generateHighQualityLinkPreview: false,
+      syncFullHistory: false
+    });
 
-  sock.ev.on("creds.update", saveCreds);
+    sock.ev.on("creds.update", saveCreds);
 
-  sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
-    if (connection === "open") {
-      console.log(`[+] Bot connected: ${sessionId}`);
-      activeSockets.set(sessionId, sock);
-    }
-    if (connection === "close") {
-      activeSockets.delete(sessionId);
-      if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-        console.log(`[*] Reconnecting: ${sessionId}`);
-        setTimeout(() => startBotSocket(sessionId, authCollection), 3000);
-      } else {
-        console.log(`[-] Logged out: ${sessionId}`);
-        await authCollection.drop().catch(() => {});
+    sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
+      if (connection === "open") {
+        console.log(`[+] Bot connected: ${sessionId}`);
+        activeSockets.set(sessionId, sock);
       }
-    }
-  });
-
-  // Universal Message Processor (Owner, Members & Users Supported)
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
-    const msg = messages[0];
-    if (!msg?.message) return;
-
-    const from = msg.key.remoteJid;
-    if (from === "status@broadcast") return;
-
-    const isGroup = from.endsWith("@g.us");
-    const sender = isGroup 
-      ? (msg.key.participant || msg.participant || from) 
-      : (msg.key.fromMe ? (sock.user?.id || from) : from);
-
-    const body =
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      msg.message.videoMessage?.caption ||
-      "";
-
-    const quotedStanzaId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
-
-    // Interactive Reply Handlers පරීක්ෂාව
-    if (quotedStanzaId) {
-      for (const [, handler] of replyHandlers) {
-        try {
-          const handled = await handler({ sock, msg, from, body, quotedStanzaId, config: CONFIG });
-          if (handled) return;
-        } catch (e) {
-          console.error("[Reply Handler Error]:", e);
+      if (connection === "close") {
+        activeSockets.delete(sessionId);
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        if (statusCode !== DisconnectReason.loggedOut) {
+          console.log(`[*] Reconnecting: ${sessionId}`);
+          setTimeout(() => startBotSocket(sessionId, authCollection), 3000);
+        } else {
+          console.log(`[-] Logged out: ${sessionId}`);
+          await authCollection.drop().catch(() => {});
         }
       }
-    }
+    });
 
-    // Command Parsing
-    if (!body.startsWith(CONFIG.PREFIX)) return;
+    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+      if (type !== "notify") return;
+      const msg = messages[0];
+      if (!msg?.message) return;
 
-    const args = body.slice(CONFIG.PREFIX.length).trim().split(/ +/);
-    const cmdName = args.shift().toLowerCase();
-    const command = commands.get(cmdName);
+      const from = msg.key.remoteJid;
+      if (from === "status@broadcast") return;
 
-    if (command) {
-      try {
-        await command.execute({
-          sock,
-          msg,
-          from,
-          args,
-          body,
-          sender,
-          config: CONFIG,
-          activeBotsCount: activeSockets.size,
-          commands
-        });
-      } catch (err) {
-        console.error(`[!] Command error [${cmdName}]:`, err);
-        await sock.sendMessage(from, { text: "❌ Command execution error!" }, { quoted: msg });
+      const isGroup = from.endsWith("@g.us");
+      const sender = isGroup
+        ? (msg.key.participant || msg.participant || from)
+        : (msg.key.fromMe ? (sock.user?.id || from) : from);
+
+      const body =
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        msg.message.imageMessage?.caption ||
+        msg.message.videoMessage?.caption ||
+        "";
+
+      const quotedStanzaId =
+        msg.message?.extendedTextMessage?.contextInfo?.stanzaId ||
+        msg.message?.imageMessage?.contextInfo?.stanzaId;
+
+      if (quotedStanzaId) {
+        for (const [, handler] of replyHandlers) {
+          try {
+            const handled = await handler({ sock, msg, from, body, quotedStanzaId, config: CONFIG });
+            if (handled) return;
+          } catch (e) {
+            console.error("[Reply Handler Error]:", e.message);
+          }
+        }
       }
-    }
-  });
 
-  return sock;
+      if (!body.startsWith(CONFIG.PREFIX)) return;
+
+      const args = body.slice(CONFIG.PREFIX.length).trim().split(/ +/);
+      const cmdName = args.shift().toLowerCase();
+      const command = commands.get(cmdName);
+
+      if (command) {
+        try {
+          await command.execute({
+            sock,
+            msg,
+            from,
+            args,
+            body,
+            sender,
+            config: CONFIG,
+            activeBotsCount: activeSockets.size,
+            commands
+          });
+        } catch (err) {
+          console.error(`[!] Command error [${cmdName}]:`, err.message);
+          await sock.sendMessage(from, { text: "❌ Command execution error!" }, { quoted: msg }).catch(() => {});
+        }
+      }
+    });
+
+    return sock;
+  } catch (err) {
+    console.error(`[Socket Setup Error - ${sessionId}]:`, err.message);
+    return null;
+  }
 }
 
 // 4. Pairing Endpoint
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone?.replace(/[^0-9]/g, "");
   if (!phone) return res.status(400).json({ error: "Phone number required" });
+  if (!db) return res.status(503).json({ error: "Database initializing. Retry in a few seconds." });
 
   const sessionId = `bot_${phone}`;
   try {
@@ -268,34 +276,49 @@ app.get("/pair", async (req, res) => {
     await authCollection.drop().catch(() => {});
 
     const sock = await startBotSocket(sessionId, authCollection);
+    if (!sock) throw new Error("Socket initialization failed");
+
     await delay(3000);
 
     const code = await sock.requestPairingCode(phone);
     return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
   } catch (err) {
-    console.error(`Pairing failed for ${phone}:`, err);
+    console.error(`Pairing failed for ${phone}:`, err.message);
     return res.status(500).json({ error: "Pairing code failed. Retry in 5 seconds." });
   }
 });
 
-// 5. Server Run
-app.listen(PORT, async () => {
-  console.log(`Server started on port ${PORT}`);
+// Health check endpoint (Heroku monitoring)
+app.get("/health", (req, res) => {
+  res.status(200).json({ status: "OK", activeBots: activeSockets.size });
+});
+
+// 5. Server Run (Immediate Port Bind to satisfy Heroku Boot Cutoff)
+app.listen(PORT, "0.0.0.0", async () => {
+  console.log(`[+] Web server listening on port ${PORT}`);
+
   try {
     await loadCommands();
-    const client = new MongoClient(CONFIG.MONGODB_URI);
-    await client.connect();
-    db = client.db(CONFIG.DB_NAME);
-    console.log("MongoDB Connected Successfully!");
+    mongoClient = new MongoClient(CONFIG.MONGODB_URI);
+    await mongoClient.connect();
+    db = mongoClient.db(CONFIG.DB_NAME);
+    console.log("[+] MongoDB Connected Successfully!");
 
     const collections = await db.listCollections().toArray();
     for (const col of collections) {
       if (col.name.startsWith("bot_")) {
-        console.log(`Auto-starting: ${col.name}`);
+        console.log(`[*] Auto-starting session: ${col.name}`);
         startBotSocket(col.name, db.collection(col.name));
       }
     }
   } catch (err) {
-    console.error("MongoDB Error:", err);
+    console.error("[!] Database Startup Error:", err.message);
   }
+});
+
+// Graceful Termination Handler
+process.on("SIGTERM", async () => {
+  console.log("[*] SIGTERM received. Closing active sessions...");
+  if (mongoClient) await mongoClient.close();
+  process.exit(0);
 });
