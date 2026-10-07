@@ -1,9 +1,9 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
-// Global Memory Store (Bot Restart වන තුරු මැසේජ් 10,000ක් දක්වා මතක තබා ගනී)
+// Lightweight Cache (Memory පිරීම වැළැක්වීමට 2,000කට සීමා කර ඇත)
 global.antiDeleteStore = global.antiDeleteStore || new Map();
 global.antiDeleteSettings = global.antiDeleteSettings || new Map();
-global.hookedSockets = global.hookedSockets || new WeakSet();
+global.antiDeleteHookedSockets = global.antiDeleteHookedSockets || new WeakSet();
 
 function getBotPhone(sock) {
   const userJid = sock.user?.id || "";
@@ -21,18 +21,18 @@ function isBotOwner(sock, msg, from) {
   return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
 }
 
-// Background Listener Engine
+// Background Listener Engine (Zero Loop Lag)
 function attachAntiDeleteEngine(sock) {
-  if (!sock || global.hookedSockets.has(sock)) return;
-  global.hookedSockets.add(sock);
+  if (!sock || global.antiDeleteHookedSockets.has(sock)) return;
+  global.antiDeleteHookedSockets.add(sock);
 
-  // 1. Messages.upsert හරහා Caching සහ Revoke අල්ලා ගැනීම
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    // Background execution to prevent event-loop delays
     for (const m of messages) {
       if (!m?.message) continue;
 
       const chatJid = m.key.remoteJid;
-      if (chatJid === "status@broadcast") continue;
+      if (!chatJid || chatJid === "status@broadcast") continue;
 
       // ==========================================
       // A. REVOKE (DELETE FOR EVERYONE) DETECTOR
@@ -46,7 +46,6 @@ function attachAntiDeleteEngine(sock) {
         const isEnabled = global.antiDeleteSettings.get(botPhone) ?? true;
         if (!isEnabled) continue;
 
-        // Cache එකෙන් මැකූ මැසේජ් එක සෙවීම
         const cachedMsg = global.antiDeleteStore.get(deletedKey.id);
         if (!cachedMsg || !cachedMsg.message) continue;
 
@@ -76,80 +75,85 @@ function attachAntiDeleteEngine(sock) {
           null;
 
         if (textContent) {
-          await sock.sendMessage(chatJid, {
+          sock.sendMessage(chatJid, {
             text: `${headerUI}\n\n💬 *Deleted Text:*\n> ${textContent}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
           }).catch(() => {});
           continue;
         }
 
-        // 2. Media Message Recover (Image / Video / Voice / Sticker)
-        try {
-          const mediaBuffer = await downloadMediaMessage(
-            cachedMsg,
-            "buffer",
-            {},
-            { reuploadRequest: sock.updateMediaMessage }
-          );
+        // 2. Media Message Recover (Async Non-blocking)
+        (async () => {
+          try {
+            const mediaBuffer = await downloadMediaMessage(
+              cachedMsg,
+              "buffer",
+              {},
+              { reuploadRequest: sock.updateMediaMessage }
+            );
 
-          if (mediaBuffer && mediaBuffer.length > 0) {
-            if (rawMsg.imageMessage) {
-              const caption = rawMsg.imageMessage.caption ? `\n\n📝 *Caption:* ${rawMsg.imageMessage.caption}` : "";
-              await sock.sendMessage(chatJid, {
-                image: mediaBuffer,
-                caption: `${headerUI}${caption}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
-              }).catch(() => {});
-            } else if (rawMsg.videoMessage) {
-              const caption = rawMsg.videoMessage.caption ? `\n\n📝 *Caption:* ${rawMsg.videoMessage.caption}` : "";
-              await sock.sendMessage(chatJid, {
-                video: mediaBuffer,
-                caption: `${headerUI}${caption}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
-              }).catch(() => {});
-            } else if (rawMsg.audioMessage) {
-              await sock.sendMessage(chatJid, {
-                text: `${headerUI}\n\n🔊 *Deleted Voice Note Below:*`
-              }).catch(() => {});
-              await sock.sendMessage(chatJid, {
-                audio: mediaBuffer,
-                mimetype: "audio/ogg; codecs=opus",
-                ptt: true
-              }).catch(() => {});
-            } else if (rawMsg.stickerMessage) {
-              await sock.sendMessage(chatJid, {
-                text: `${headerUI}\n\n🎭 *Deleted Sticker Below:*`
-              }).catch(() => {});
-              await sock.sendMessage(chatJid, { sticker: mediaBuffer }).catch(() => {});
+            if (mediaBuffer && mediaBuffer.length > 0) {
+              if (rawMsg.imageMessage) {
+                const caption = rawMsg.imageMessage.caption ? `\n\n📝 *Caption:* ${rawMsg.imageMessage.caption}` : "";
+                await sock.sendMessage(chatJid, {
+                  image: mediaBuffer,
+                  caption: `${headerUI}${caption}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
+                }).catch(() => {});
+              } else if (rawMsg.videoMessage) {
+                const caption = rawMsg.videoMessage.caption ? `\n\n📝 *Caption:* ${rawMsg.videoMessage.caption}` : "";
+                await sock.sendMessage(chatJid, {
+                  video: mediaBuffer,
+                  caption: `${headerUI}${caption}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
+                }).catch(() => {});
+              } else if (rawMsg.audioMessage) {
+                await sock.sendMessage(chatJid, {
+                  text: `${headerUI}\n\n🔊 *Deleted Voice Note Below:*`
+                }).catch(() => {});
+                await sock.sendMessage(chatJid, {
+                  audio: mediaBuffer,
+                  mimetype: "audio/ogg; codecs=opus",
+                  ptt: true
+                }).catch(() => {});
+              } else if (rawMsg.stickerMessage) {
+                await sock.sendMessage(chatJid, {
+                  text: `${headerUI}\n\n🎭 *Deleted Sticker Below:*`
+                }).catch(() => {});
+                await sock.sendMessage(chatJid, { sticker: mediaBuffer }).catch(() => {});
+              }
             }
-          }
-        } catch (err) {
-          console.error("[Anti-Delete Media Error]:", err.message);
-        }
+          } catch (_) {}
+        })();
         continue;
       }
 
       // ==========================================
-      // B. NORMAL MESSAGE CACHE STORAGE
+      // B. FAST MESSAGE CACHING
       // ==========================================
       if (m.key?.id && !m.key.fromMe) {
         global.antiDeleteStore.set(m.key.id, m);
 
-        // Memory එක පිරී යාම වැළැක්වීමට මැසේජ් 10,000කට වඩා වැඩි වූ විට පැරණි ඒවා ඉවත් කිරීම
-        if (global.antiDeleteStore.size > 10000) {
-          const firstKey = global.antiDeleteStore.keys().next().value;
-          global.antiDeleteStore.delete(firstKey);
+        // Memory cleanup (පැරණි 500ක් එකවර අයින් කර RAM එක Free තබයි)
+        if (global.antiDeleteStore.size > 2000) {
+          const keys = Array.from(global.antiDeleteStore.keys());
+          for (let i = 0; i < 500; i++) {
+            global.antiDeleteStore.delete(keys[i]);
+          }
         }
       }
     }
   });
 }
 
-// Background Task: Cluster එකේ active sockets සියල්ල auto hook කිරීම
-setInterval(() => {
-  if (global.activeSockets) {
-    for (const [, s] of global.activeSockets.entries()) {
-      attachAntiDeleteEngine(s);
+// Background Monitor: තත්පර 20කට වරක් පමණක් සැහැල්ලුවෙන් Check වේ
+if (!global.antiDeleteIntervalStarted) {
+  global.antiDeleteIntervalStarted = true;
+  setInterval(() => {
+    if (global.activeSockets) {
+      for (const [, s] of global.activeSockets.entries()) {
+        attachAntiDeleteEngine(s);
+      }
     }
-  }
-}, 2000);
+  }, 20000);
+}
 
 export default {
   name: "antidelete",
@@ -164,7 +168,7 @@ export default {
     const botPhone = getBotPhone(sock);
 
     if (!isBotOwner(sock, msg, from)) {
-      await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         { text: "⛔ *ACCESS DENIED:* මෙම setting එක වෙනස් කළ හැක්කේ Bot Owner ට පමණි." },
@@ -177,7 +181,7 @@ export default {
       global.antiDeleteSettings.set(botPhone, status);
 
       const statusText = status ? "✅ *සක්‍රීය කෙරිණි (ACTIVATED)*" : "🛑 *අක්‍රීය කෙරිණි (DISABLED)*";
-      await sock.sendMessage(from, { react: { text: status ? "🛡️" : "🔒", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: status ? "🛡️" : "🔒", key: msg.key } }).catch(() => {});
 
       return await sock.sendMessage(
         from,
