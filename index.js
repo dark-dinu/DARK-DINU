@@ -30,14 +30,17 @@ const CONFIG = {
 const msgRetryCounterCache = new NodeCache();
 const activeSockets = new Map();
 const commands = new Map();
+const replyHandlers = new Map(); // Global dynamic reply handlers registry
 let db;
 
-// Command Loader
+// 1. Dynamic Auto Command Loader
 async function loadCommands() {
   const dir = path.join(__dirname, "commands");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+  
   const files = fs.readdirSync(dir).filter((f) => f.endsWith(".js"));
   commands.clear();
+  replyHandlers.clear();
 
   for (const file of files) {
     try {
@@ -46,15 +49,20 @@ async function loadCommands() {
       if (cmd?.name) {
         commands.set(cmd.name.toLowerCase(), cmd);
         cmd.aliases?.forEach((a) => commands.set(a.toLowerCase(), cmd));
+
+        // Command එකේ reply listener එකක් තිබුණොත් auto bind කිරීම
+        if (typeof cmd.onReply === "function") {
+          replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
+        }
       }
     } catch (e) {
       console.error(`[!] Failed loading ${file}:`, e.message);
     }
   }
-  console.log(`[+] Loaded ${commands.size} commands/aliases`);
+  console.log(`[+] Auto-loaded ${commands.size} commands/aliases into memory.`);
 }
 
-// Pairing Web UI
+// 2. Web UI (Pairing Portal)
 app.get("/", (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -75,11 +83,10 @@ app.get("/", (req, res) => {
     input:focus { border-color: #58a6ff; box-shadow: 0 0 10px rgba(88,166,255,0.25); }
     button { width: 100%; padding: 14px; border-radius: 10px; border: none; background: linear-gradient(135deg, #238636, #2ea043); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
     button:hover { opacity: 0.95; transform: translateY(-1px); }
-    .code-box { display: none; margin-top: 20px; padding: 16px; background: #0d1117; border: 1px dashed #238636; border-radius: 12px; animation: fadeIn 0.4s; }
+    .code-box { display: none; margin-top: 20px; padding: 16px; background: #0d1117; border: 1px dashed #238636; border-radius: 12px; }
     .code-box h3 { font-size: 28px; letter-spacing: 6px; color: #3fb950; margin: 10px 0; font-family: monospace; font-weight: bold; }
-    .copy-btn { background: #21262d; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; font-size: 12px; cursor: pointer; color: #58a6ff; font-weight: 600; margin-top: 6px; }
+    .copy-btn { background: #21262d; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; font-size: 12px; cursor: pointer; color: #58a6ff; font-weight: 600; }
     .stats { margin-top: 24px; font-size: 12px; color: #8b949e; border-top: 1px solid #21262d; padding-top: 16px; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
@@ -141,7 +148,7 @@ app.get("/", (req, res) => {
 </html>`);
 });
 
-// Socket Handler
+// 3. Central Socket Launcher & Universal Handler
 async function startBotSocket(sessionId, authCollection) {
   const { state, saveCreds } = await useMongoDBAuthState(authCollection);
   const { version } = await fetchLatestBaileysVersion();
@@ -181,6 +188,7 @@ async function startBotSocket(sessionId, authCollection) {
     }
   });
 
+  // Universal Message Processor
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const msg = messages[0];
@@ -194,6 +202,21 @@ async function startBotSocket(sessionId, authCollection) {
       msg.message.videoMessage?.caption ||
       "";
 
+    const quotedStanzaId = msg.message?.extendedTextMessage?.contextInfo?.stanzaId;
+
+    // Interactive Reply Handlers පරීක්ෂාව
+    if (quotedStanzaId) {
+      for (const [, handler] of replyHandlers) {
+        try {
+          const handled = await handler({ sock, msg, from, body, quotedStanzaId, config: CONFIG });
+          if (handled) return; // reply එක handle වුණා නම් execution එක නවත්වන්න
+        } catch (e) {
+          console.error("[Reply Handler Error]:", e);
+        }
+      }
+    }
+
+    // Command Parsing
     if (!body.startsWith(CONFIG.PREFIX)) return;
 
     const args = body.slice(CONFIG.PREFIX.length).trim().split(/ +/);
@@ -202,7 +225,16 @@ async function startBotSocket(sessionId, authCollection) {
 
     if (command) {
       try {
-        await command.execute({ sock, msg, from, args, body, config: CONFIG });
+        await command.execute({
+          sock,
+          msg,
+          from,
+          args,
+          body,
+          config: CONFIG,
+          activeBotsCount: activeSockets.size,
+          commands
+        });
       } catch (err) {
         console.error(`[!] Command error [${cmdName}]:`, err);
         await sock.sendMessage(from, { text: "❌ Command execution error!" }, { quoted: msg });
@@ -213,7 +245,7 @@ async function startBotSocket(sessionId, authCollection) {
   return sock;
 }
 
-// Pairing Endpoint
+// 4. Pairing Endpoint
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone?.replace(/[^0-9]/g, "");
   if (!phone) return res.status(400).json({ error: "Phone number required" });
@@ -234,7 +266,7 @@ app.get("/pair", async (req, res) => {
   }
 });
 
-// App Entry
+// 5. Server Run
 app.listen(PORT, async () => {
   console.log(`Server started on port ${PORT}`);
   try {
