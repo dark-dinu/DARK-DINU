@@ -49,8 +49,8 @@ if (!global.turboCleanerStarted) {
 }
 
 export default {
-  name: "ping",
-  aliases: ["speed", "turbo", "fast"],
+  name: "ping2",
+  aliases: ["speed2", "turbo", "fast"],
   category: "utility",
   description: "Check bot latency and flush memory",
 
