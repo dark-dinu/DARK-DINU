@@ -2,11 +2,15 @@ import { proto, initAuthCreds, BufferJSON } from "@whiskeysockets/baileys";
 
 export async function useMongoDBAuthState(collection) {
   const writeData = async (data, id) => {
-    return await collection.replaceOne(
-      { _id: id },
-      { _id: id, data: JSON.stringify(data, BufferJSON.replacer) },
-      { upsert: true }
-    );
+    try {
+      return await collection.replaceOne(
+        { _id: id },
+        { _id: id, data: JSON.stringify(data, BufferJSON.replacer) },
+        { upsert: true }
+      );
+    } catch (e) {
+      console.error("Write error:", e);
+    }
   };
 
   const readData = async (id) => {
@@ -19,12 +23,6 @@ export async function useMongoDBAuthState(collection) {
     }
   };
 
-  const removeData = async (id) => {
-    try {
-      await collection.deleteOne({ _id: id });
-    } catch {}
-  };
-
   const creds = (await readData("creds")) || initAuthCreds();
 
   return {
@@ -33,7 +31,9 @@ export async function useMongoDBAuthState(collection) {
       keys: {
         get: async (type, ids) => {
           const data = {};
-          const docs = await collection.find({ _id: { $in: ids.map(id => `${type}-${id}`) } }).toArray();
+          const keysToFetch = ids.map((id) => `${type}-${id}`);
+          const docs = await collection.find({ _id: { $in: keysToFetch } }).toArray();
+
           for (const doc of docs) {
             try {
               let value = JSON.parse(doc.data, BufferJSON.reviver);
@@ -70,7 +70,7 @@ export async function useMongoDBAuthState(collection) {
             }
           }
           if (operations.length > 0) {
-            await collection.bulkWrite(operations, { ordered: false });
+            await collection.bulkWrite(operations, { ordered: false }).catch(() => {});
           }
         }
       }
