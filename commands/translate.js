@@ -1,22 +1,56 @@
 import axios from "axios";
 
-// Google Direct Engine (Zero Pair Error / Full Sinhala Support)
-async function googleTranslate(text, targetLang = "si", sourceLang = "auto") {
-  const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
-  
-  const { data } = await axios.get(url, {
-    timeout: 10000,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+// 100% Working Engine for Cloud Servers & Sri Lankan IPs
+async function translateText(text, targetLang = "si", sourceLang = "auto") {
+  // Method 1: Google Web Client API (Direct Query)
+  try {
+    const res = await axios({
+      method: "GET",
+      url: "https://translate.googleapis.com/translate_a/single",
+      params: {
+        client: "gtx",
+        sl: sourceLang,
+        tl: targetLang,
+        hl: targetLang,
+        dt: ["t", "bd"],
+        dj: "1",
+        source: "icon",
+        q: text
+      },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Android; Mobile; rv:125.0) Gecko/125.0 Firefox/125.0",
+        "Accept": "application/json"
+      },
+      timeout: 10000
+    });
+
+    if (res.data?.sentences && Array.isArray(res.data.sentences)) {
+      const translated = res.data.sentences
+        .map((s) => s.trans || "")
+        .join("")
+        .trim();
+      const detected = res.data.src || sourceLang;
+      if (translated) return { translatedText: translated, detectedLang: detected };
     }
-  });
+  } catch (_) {}
 
-  if (!data || !data[0]) throw new Error("Translation parse failed");
+  // Method 2: Google Translation Public RPC Fallback
+  try {
+    const rpcUrl = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${sourceLang}&tl=${targetLang}&q=${encodeURIComponent(text)}`;
+    const rpcRes = await axios.get(rpcUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+      },
+      timeout: 10000
+    });
 
-  const translatedText = data[0].map(item => item[0]).join("");
-  const detectedLang = data[2] || sourceLang;
+    if (Array.isArray(rpcRes.data) && rpcRes.data[0]) {
+      const translated = Array.isArray(rpcRes.data[0]) ? rpcRes.data[0].join("") : rpcRes.data[0];
+      return { translatedText: translated, detectedLang: sourceLang };
+    }
+  } catch (_) {}
 
-  return { translatedText, detectedLang };
+  throw new Error("Translation server unreachable. Please try again.");
 }
 
 export default {
@@ -38,31 +72,31 @@ export default {
         "";
 
       let sourceLang = "auto";
-      let targetLang = "si"; // Default සිංහල
+      let targetLang = "si"; // Default: සිංහල
       let textToTranslate = "";
 
       if (args.length > 0) {
         const firstArg = args[0].toLowerCase().trim();
 
-        // 1. .tr si,en <text> ආකාරය
+        // 1. .tr si,en <text>
         if (firstArg.includes(",")) {
           const parts = firstArg.split(",");
           sourceLang = parts[0].trim() || "auto";
           targetLang = parts[1].trim() || "si";
           textToTranslate = args.slice(1).join(" ").trim();
         } 
-        // 2. .tr en <text> හෝ .tr si <text> ආකාරය
+        // 2. .tr en <text> හෝ .tr si <text>
         else if (/^[a-z]{2,5}$/.test(firstArg)) {
           targetLang = firstArg;
           textToTranslate = args.slice(1).join(" ").trim();
         } 
-        // 3. .tr <text> (කෙලින්ම පෙළ ලබා දුන් විට)
+        // 3. .tr <text> (කෙලින්ම සිංහලට)
         else {
           textToTranslate = args.join(" ").trim();
         }
       }
 
-      // Quoted text එකක් ඇත්නම් එය ලබා ගැනීම
+      // Quoted text එකක් ඇත්නම් එය තෝරා ගැනීම
       if (!textToTranslate && quotedText) {
         textToTranslate = quotedText;
       }
@@ -79,7 +113,7 @@ export default {
 
       await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      const res = await googleTranslate(textToTranslate, targetLang, sourceLang);
+      const res = await translateText(textToTranslate, targetLang, sourceLang);
 
       const resultCard = 
 `╔══════════════════════╗
