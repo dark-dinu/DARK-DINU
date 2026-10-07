@@ -4,43 +4,39 @@ import axios from "axios";
 global.songSessions = global.songSessions || new Map();
 global.songHookedSockets = global.songHookedSockets || new WeakSet();
 
-// Direct Fast Audio Downloader (Fail-safe Engines)
-async function fetchAudioBuffer(videoUrl) {
-  // Engine 1: Chamindu API Fast Stream
-  try {
-    const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
-    const res = await axios.get(`https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(videoUrl)}&quality=128kbps&format=mp3&api_key=${apiKey}`, { timeout: 8000 });
-    const dl = res.data?.data?.direct_url || res.data?.data?.download_url;
-    if (dl) {
-      const audioStream = await axios.get(dl, { responseType: "arraybuffer", timeout: 20000 });
-      return Buffer.from(audioStream.data);
-    }
-  } catch (_) {}
+const API_KEY = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 
-  // Engine 2: BK9 Fast Audio
+// Ultra-Fast Info & Direct Audio Resolver
+async function fetchMediaData(videoUrl) {
   try {
-    const res = await axios.get(`https://bk9.fun/download/youtube?url=${encodeURIComponent(videoUrl)}`, { timeout: 8000 });
-    const dl = res.data?.BK9?.BK8;
-    if (dl) {
-      const audioStream = await axios.get(dl, { responseType: "arraybuffer", timeout: 20000 });
-      return Buffer.from(audioStream.data);
-    }
-  } catch (_) {}
+    const apiUrl = `https://api.chamindu.site/api/v1/media/ytmp4/info?url=${encodeURIComponent(videoUrl)}&api_key=${API_KEY}`;
+    const res = await axios.get(apiUrl, { timeout: 10000 });
+    
+    if (res.data?.success && res.data?.data) {
+      const data = res.data.data;
+      
+      // WhatsApp වලට වඩාත්ම සුදුසු Medium M4A Audio (Direct Google Stream) එක තෝරා ගැනීම
+      const audios = data.audio_formats || [];
+      const bestAudio = 
+        audios.find(a => a.quality === "AUDIO_QUALITY_MEDIUM" && a.format === "m4a") ||
+        audios.find(a => a.format === "m4a") ||
+        audios[0];
 
-  // Engine 3: DavidCyril Stream
-  try {
-    const res = await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`, { timeout: 8000 });
-    const dl = res.data?.result?.download_url;
-    if (dl) {
-      const audioStream = await axios.get(dl, { responseType: "arraybuffer", timeout: 20000 });
-      return Buffer.from(audioStream.data);
+      return {
+        title: data.title || "YouTube Audio",
+        channel: data.channel || "YouTube Artist",
+        thumbnail: data.thumbnail,
+        audioUrl: bestAudio?.download_link || bestAudio?.direct_url || null,
+        duration: data.duration_label || "Audio"
+      };
     }
-  } catch (_) {}
-
+  } catch (err) {
+    console.error("[CHAMA API ERR]:", err.message);
+  }
   return null;
 }
 
-// Background Auto-Reply Watcher
+// Background Auto-Reply Interceptor (Zero-Lag Delivery)
 function attachSongReplyEngine(sock) {
   if (!sock || global.songHookedSockets.has(sock)) return;
   global.songHookedSockets.add(sock);
@@ -69,28 +65,30 @@ function attachSongReplyEngine(sock) {
 
     if (!["1", "2", "3"].includes(choice)) return;
 
-    sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
+    // React Non-blocking
+    sock.sendMessage(from, { react: { text: "⚡", key: m.key } }).catch(() => {});
 
     try {
-      const buffer = await fetchAudioBuffer(session.url);
-      if (!buffer) throw new Error("Audio download servers are busy.");
+      const streamUrl = session.audioUrl;
+      if (!streamUrl) throw new Error("Audio direct link unavailable.");
 
+      // Direct Stream Delivery (No Bot RAM buffer lag)
       if (choice === "1") {
         await sock.sendMessage(from, {
-          audio: buffer,
+          audio: { url: streamUrl },
           mimetype: "audio/mp4",
           ptt: false
         }, { quoted: m });
       } else if (choice === "2") {
         await sock.sendMessage(from, {
-          document: buffer,
-          mimetype: "audio/mpeg",
-          fileName: `${session.title}.mp3`
+          document: { url: streamUrl },
+          mimetype: "audio/mp4",
+          fileName: `${session.title}.m4a`
         }, { quoted: m });
       } else if (choice === "3") {
         await sock.sendMessage(from, {
-          audio: buffer,
-          mimetype: "audio/ogg; codecs=opus",
+          audio: { url: streamUrl },
+          mimetype: "audio/mp4",
           ptt: true
         }, { quoted: m });
       }
@@ -120,10 +118,10 @@ export default {
   name: "song",
   aliases: ["play", "mp3", "audio"],
   category: "media",
-  description: "Ultra-Fast YouTube Song Downloader",
+  description: "Fast Direct YouTube Audio Downloader via Chama API",
 
   async execute({ sock, msg, from, args, config }) {
-    // 1. Instant Reaction (Node.js event loop එකට ඉස්සරින්ම Fire වේ)
+    // 1. Instant Reaction
     sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
     attachSongReplyEngine(sock);
 
@@ -137,15 +135,12 @@ export default {
       }
 
       let videoUrl = query;
-      let title = "YouTube Audio";
-      let duration = "N/A";
-      let thumbnail = null;
 
+      // YouTube Link එකක් නොවේ නම් ඉක්මනින් search කිරීම
       if (!query.startsWith("http://") && !query.startsWith("https://")) {
-        // Fast search with 4-second hard cutoff timeout
         const searchPromise = yts(query);
         const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error("Search timeout")), 4000)
+          setTimeout(() => reject(new Error("Timeout")), 4000)
         );
 
         const search = await Promise.race([searchPromise, timeoutPromise]).catch(() => null);
@@ -157,9 +152,14 @@ export default {
         }
 
         videoUrl = video.url;
-        title = video.title || "YouTube Audio";
-        duration = video.timestamp || "3:00";
-        thumbnail = video.thumbnail;
+      }
+
+      // 2. Chama Media API එකෙන් තොරතුරු සහ Direct Links ලබා ගැනීම
+      const media = await fetchMediaData(videoUrl);
+
+      if (!media || !media.audioUrl) {
+        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+        return await reply("❌ මෙම සින්දුව ලබා ගැනීමට නොහැකි විය. සුළු මොහොතකින් නැවත උත්සාහ කරන්න.");
       }
 
       const songCard = 
@@ -168,12 +168,13 @@ export default {
 ╚══════════════════════╝
 
 ┌─〔 🎵 *SONG DETAILS* 〕
-├─▸ 🎼 *Title*    : ${title}
-├─▸ ⏳ *Duration* : ${duration}
+├─▸ 🎼 *Title*    : ${media.title.slice(0, 45)}...
+├─▸ 🎙️ *Artist*   : ${media.channel}
+├─▸ ⚡ *Speed*    : ULTRA FAST CDN
 └───────────────────────
 
 ┌─〔 📥 *SELECT FORMAT* 〕
-├─▸ [ 𝟏 ] ❯ 🎵 Audio (MP3)
+├─▸ [ 𝟏 ] ❯ 🎵 Audio (MP3/M4A)
 ├─▸ [ 𝟐 ] ❯ 📁 Document (File)
 ├─▸ [ 𝟑 ] ❯ 🎙️ Voice Note (PTT)
 └───────────────────────
@@ -182,9 +183,9 @@ export default {
 > *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐁𝐎𝐓 ✨*`;
 
       let sentMsg;
-      if (thumbnail) {
+      if (media.thumbnail) {
         sentMsg = await sock.sendMessage(from, {
-          image: { url: thumbnail },
+          image: { url: media.thumbnail },
           caption: songCard
         }, { quoted: msg });
       } else {
@@ -193,11 +194,12 @@ export default {
 
       if (sentMsg?.key?.id) {
         global.songSessions.set(sentMsg.key.id, {
-          title,
-          url: videoUrl,
+          title: media.title,
+          audioUrl: media.audioUrl,
           from
         });
 
+        // 5 Minutes Auto-Clean
         setTimeout(() => {
           global.songSessions?.delete(sentMsg.key.id);
         }, 5 * 60 * 1000);
@@ -205,9 +207,9 @@ export default {
 
       sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
     } catch (err) {
-      console.error("[SONG MAIN ERROR]:", err.message);
+      console.error("[SONG CMD ERROR]:", err.message);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await reply(`❌ දෝෂයකි: ${err.message || "Search Error"}`);
+      await reply(`❌ දෝෂයකි: ${err.message || "Failed"}`);
     }
   }
 };
