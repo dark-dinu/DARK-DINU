@@ -1,5 +1,38 @@
 import axios from "axios";
 
+// Helper: Multi-engine Translation
+async function fetchTranslation(text, sourceLang, targetLang) {
+  // Engine 1: MyMemory API (ඉතාම වේගවත් සහ 100% stable)
+  try {
+    const pair = `${sourceLang === "auto" ? "autodetect" : sourceLang}\vert{}${targetLang}`;
+    const myMemoryUrl = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=${pair}`;
+    const res = await axios.get(myMemoryUrl, { timeout: 12000 });
+    const trans = res.data?.responseData?.translatedText;
+    if (trans && !trans.includes("MYMEMORY WARNING")) {
+      return {
+        translatedText: trans,
+        detectedLang: sourceLang === "auto" ? (res.data?.matches?.[0]?.["created-by"] || "Auto") : sourceLang
+      };
+    }
+  } catch (_) {}
+
+  // Engine 2: Google Web Client (Fallback)
+  try {
+    const googleUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+    const { data } = await axios.get(googleUrl, { 
+      timeout: 12000,
+      headers: { "User-Agent": "Mozilla/5.0" }
+    });
+    if (data && data[0]) {
+      const translatedText = data[0].map((chunk) => chunk[0]).join("");
+      const detectedLang = data[2] || sourceLang;
+      return { translatedText, detectedLang };
+    }
+  } catch (_) {}
+
+  throw new Error("Translation engines are currently busy. Please try again.");
+}
+
 export default {
   name: "translate",
   aliases: ["tr", "trans", "translete"],
@@ -18,29 +51,30 @@ export default {
         quoted?.videoMessage?.caption ||
         "";
 
+      let sourceLang = "auto";
       let targetLang = "si"; // Default: සිංහල
       let textToTranslate = "";
 
-      // 1. Language code සහ Text එක වෙන් කර ගැනීම
       if (args.length > 0) {
         const firstArg = args[0].toLowerCase().trim();
 
-        // .translate si,en වැනි comma formats ඇති විට target lang එක ගැනීම
+        // .translate si,en වැනි comma format එකක් ආ විට
         if (firstArg.includes(",")) {
           const parts = firstArg.split(",");
-          targetLang = parts[parts.length - 1].trim(); // අන්තිම භාෂාවට හරවයි
+          sourceLang = parts[0].trim() || "auto";
+          targetLang = parts[1].trim() || "si";
           textToTranslate = args.slice(1).join(" ").trim();
-        } else if (firstArg.length === 2 || firstArg.length === 5) {
-          // .translate si hello වැනි format
+        } else if (/^[a-z]{2,5}$/.test(firstArg)) {
+          // .translate en වැනි direct single lang code එකක් ආ විට
           targetLang = firstArg;
           textToTranslate = args.slice(1).join(" ").trim();
         } else {
-          // භාෂාවක් නොදී කෙලින්ම text එකක් දුන්නොත් default සිංහල (si) වලට පරිවර්තනය කරයි
+          // කෙලින්ම text එකක් ලබා දුන් විට
           textToTranslate = args.join(" ").trim();
         }
       }
 
-      // 2. Reply කර ඇති මැසේජ් එකක් ඇත්නම් එය ලබා ගැනීම
+      // Quoted message එකක් තිබේ නම් එය ලබා ගැනීම
       if (!textToTranslate && quotedText) {
         textToTranslate = quotedText;
       }
@@ -49,7 +83,7 @@ export default {
         return await sock.sendMessage(
           from,
           {
-            text: `⚠️ *භාවිතය:*\n\n1. මැසේජ් එකකට reply කර: \`${prefix}tr si\` (හෝ \`${prefix}tr en\`)\n2. කෙලින්ම text එක ලියා: \`${prefix}tr si how are you\`\n\n📌 *පොදු Language Codes:*\n• \`si\` - Sinhala\n• \`en\` - English\n• \`ta\` - Tamil\n• \`hi\` - Hindi\n• \`ja\` - Japanese\n• \`ko\` - Korean\n• \`ar\` - Arabic\n• \`ru\` - Russian`
+            text: `⚠️ *භාවිතය:*\n\n• පණිවිඩයකට reply කර: \`${prefix}tr si\`\n• භාෂා දෙකක් නියම කර: \`${prefix}tr en,si Good morning\`\n• කෙලින්ම පරිවර්තනයට: \`${prefix}tr si How are you?\``
           },
           { quoted: msg }
         );
@@ -57,20 +91,7 @@ export default {
 
       await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Google Translate Public Endpoint
-      const apiUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${encodeURIComponent(
-        targetLang
-      )}&dt=t&q=${encodeURIComponent(textToTranslate)}`;
-
-      const { data } = await axios.get(apiUrl, { timeout: 15000 });
-
-      if (!data || !data[0]) {
-        throw new Error("පරිවර්තනය අසාර්ථක විය.");
-      }
-
-      // Multi-sentence text එක සම්පූර්ණයෙන්ම එකතු කර ගැනීම
-      const translatedText = data[0].map((item) => item[0]).join("");
-      const detectedLang = data[2] || "auto";
+      const result = await fetchTranslation(textToTranslate, sourceLang, targetLang);
 
       const resultCard = 
 `╔══════════════════════╗
@@ -78,7 +99,7 @@ export default {
 ╚══════════════════════╝
 
 ┌─〔 🗣️ *TRANSLATION* 〕
-├─▸ 📥 *From* : \`${detectedLang.toUpperCase()}\`
+├─▸ 📥 *From* : \`${result.detectedLang.toUpperCase()}\`
 ├─▸ 📤 *To*   : \`${targetLang.toUpperCase()}\`
 └───────────────────────
 
@@ -86,7 +107,7 @@ export default {
 ${textToTranslate}
 
 ✨ *Result:*
-${translatedText}
+${result.translatedText}
 
 > *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐂𝐎𝐑𝐄 🐦‍🔥*`;
 
