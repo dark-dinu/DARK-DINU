@@ -1,4 +1,13 @@
-import { downloadMediaMessage } from "@whiskeysockets/baileys";
+import { downloadContentFromMessage } from "@whiskeysockets/baileys";
+
+// Media Stream එක Buffer එකක් බවට හැරවීම
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
 
 export default {
   name: "vv",
@@ -13,103 +22,67 @@ export default {
 
   async execute({ sock, msg, from }) {
     try {
-      const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
-      const quoted = contextInfo?.quotedMessage;
-
+      const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
       if (!quoted) return;
 
-      // 🛑 සාමාන්‍ය Text Message එකක් නම් වහාම නවත්වයි
-      if (
-        quoted.conversation || 
-        (quoted.extendedTextMessage && !quoted.viewOnceMessageV2 && !quoted.viewOnceMessage && !quoted.viewOnceMessageV2Extension)
-      ) {
-        return;
+      // Extract raw target message
+      let targetMsg = quoted;
+      if (targetMsg?.viewOnceMessageV2?.message) {
+        targetMsg = targetMsg.viewOnceMessageV2.message;
+      } else if (targetMsg?.viewOnceMessage?.message) {
+        targetMsg = targetMsg.viewOnceMessage.message;
+      } else if (targetMsg?.viewOnceMessageV2Extension?.message) {
+        targetMsg = targetMsg.viewOnceMessageV2Extension.message;
       }
 
-      // 🛑 Strictly verify if it is an actual View-Once message
-      let viewOnce = null;
-      let isStrictViewOnce = false;
+      // Media Type & Media Object හඳුනාගැනීම
+      let mediaObj = null;
+      let mediaType = null;
 
-      if (quoted.viewOnceMessageV2?.message) {
-        viewOnce = quoted.viewOnceMessageV2.message;
-        isStrictViewOnce = true;
-      } else if (quoted.viewOnceMessage?.message) {
-        viewOnce = quoted.viewOnceMessage.message;
-        isStrictViewOnce = true;
-      } else if (quoted.viewOnceMessageV2Extension?.message) {
-        viewOnce = quoted.viewOnceMessageV2Extension.message;
-        isStrictViewOnce = true;
-      } else if (
-        quoted.imageMessage?.viewOnce || 
-        quoted.videoMessage?.viewOnce || 
-        quoted.audioMessage?.viewOnce
-      ) {
-        viewOnce = quoted;
-        isStrictViewOnce = true;
+      if (targetMsg?.imageMessage) {
+        mediaObj = targetMsg.imageMessage;
+        mediaType = "image";
+      } else if (targetMsg?.videoMessage) {
+        mediaObj = targetMsg.videoMessage;
+        mediaType = "video";
+      } else if (targetMsg?.audioMessage) {
+        mediaObj = targetMsg.audioMessage;
+        mediaType = "audio";
       }
 
-      // Normal Message එකක් නම් silent return
-      if (!isStrictViewOnce || !viewOnce) {
-        return;
-      }
-
-      const isImage = Boolean(viewOnce.imageMessage);
-      const isVideo = Boolean(viewOnce.videoMessage);
-      const isAudio = Boolean(viewOnce.audioMessage);
-
-      if (!isImage && !isVideo && !isAudio) return;
+      if (!mediaObj || !mediaType) return;
 
       await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Decryption Payload with Context Keys
-      const targetPayload = {
-        key: {
-          remoteJid: from,
-          id: contextInfo.stanzaId,
-          participant: contextInfo.participant
-        },
-        message: viewOnce
-      };
+      // Baileys Native Direct Stream Downloader (Zero Key Mismatch)
+      const stream = await downloadContentFromMessage(mediaObj, mediaType);
+      const buffer = await streamToBuffer(stream);
 
-      // Download buffer via native Baileys downloader
-      const buffer = await downloadMediaMessage(
-        targetPayload, 
-        "buffer", 
-        {},
-        {
-          logger: undefined,
-          reuploadRequest: sock.updateMediaMessage
-        }
-      );
-
-      if (!buffer || buffer.length === 0) return;
+      if (!buffer || buffer.length === 0) {
+        await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(from, { text: "❌ Media එක decrypt කරගත නොහැකි විය." }, { quoted: msg });
+      }
 
       const defaultCaption = "> *🔓 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐀𝐍𝐓𝐈-𝐕𝐈𝐄𝐖𝐎𝐍𝐂𝐄*";
 
-      if (isImage) {
-        const caption = viewOnce.imageMessage?.caption 
-          ? `${viewOnce.imageMessage.caption}\n\n${defaultCaption}` 
-          : defaultCaption;
-
+      if (mediaType === "image") {
+        const caption = mediaObj.caption ? `${mediaObj.caption}\n\n${defaultCaption}` : defaultCaption;
         await sock.sendMessage(from, {
           image: buffer,
           caption: caption
         }, { quoted: msg });
 
-      } else if (isVideo) {
-        const caption = viewOnce.videoMessage?.caption 
-          ? `${viewOnce.videoMessage.caption}\n\n${defaultCaption}` 
-          : defaultCaption;
-
+      } else if (mediaType === "video") {
+        const caption = mediaObj.caption ? `${mediaObj.caption}\n\n${defaultCaption}` : defaultCaption;
         await sock.sendMessage(from, {
           video: buffer,
           caption: caption
         }, { quoted: msg });
 
-      } else if (isAudio) {
+      } else if (mediaType === "audio") {
         await sock.sendMessage(from, {
           audio: buffer,
-          mimetype: "audio/ogg; codecs=opus",
+          mimetype: mediaObj.mimetype || "audio/ogg; codecs=opus",
           ptt: true
         }, { quoted: msg });
       }
@@ -117,7 +90,9 @@ export default {
       await sock.sendMessage(from, { react: { text: "🔓", key: msg.key } }).catch(() => {});
 
     } catch (e) {
-      console.error("[VV ERROR]:", e.message);
+      console.error("[VV ERROR]:", e);
+      await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(from, { text: `❌ Decryption Error: ${e.message}` }, { quoted: msg });
     }
   }
 };
