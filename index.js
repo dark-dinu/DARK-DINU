@@ -15,7 +15,6 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- MongoDB Settings ---
 const CONFIG = {
   MONGODB_URI: "mongodb+srv://Darkdinubot_db_user:uQMkdHvMsFO3Z4xf@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
   DB_NAME: "whatsapp_bot",
@@ -25,8 +24,10 @@ const CONFIG = {
 
 const msgRetryCounterCache = new NodeCache();
 let sock = null;
+let authCollection = null;
+let authStateData = null;
 
-// --- Pairing Web Site Interface (HTML/CSS) ---
+// Pairing Web Interface UI
 app.get("/", (req, res) => {
   res.send(`
     <!DOCTYPE html>
@@ -96,12 +97,12 @@ app.get("/", (req, res) => {
               btn.innerText = 'Get Pairing Code';
               btn.disabled = false;
             } else {
-              alert(data.error || 'දෝෂයක් සිදුවිය, මඳ වේලාවකින් නැවත උත්සාහ කරන්න.');
+              alert(data.error || 'දෝෂයක් සිදුවිය.');
               btn.innerText = 'Get Pairing Code';
               btn.disabled = false;
             }
           } catch (err) {
-            alert('Network Error! සර්වර් එක සක්‍රියදැයි පරීක්ෂා කරන්න.');
+            alert('Network Error! මඳ වේලාවකින් නැවත උත්සාහ කරන්න.');
             btn.innerText = 'Get Pairing Code';
             btn.disabled = false;
           }
@@ -118,36 +119,41 @@ app.get("/", (req, res) => {
   `);
 });
 
-// --- Pairing API Endpoint ---
+// Pairing Code Generator Endpoint
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone;
   if (!phone) return res.status(400).json({ error: "Phone number is required" });
   phone = phone.replace(/[^0-9]/g, "");
 
   try {
-    if (!sock.authState.creds.registered) {
-      await delay(1500);
-      const code = await sock.requestPairingCode(phone);
-      return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
-    } else {
-      return res.json({ error: "Bot දැනටමත් ලින්ක් වී ඇත! නැවත ලින්ක් කිරීමට MongoDB collection එක clear කරන්න." });
+    if (!sock || !sock.authState) {
+      return res.status(503).json({ error: "Server initializing, please wait 5 seconds and retry." });
     }
+
+    if (sock.authState.creds.registered) {
+      return res.json({ error: "Bot දැනටමත් ලින්ක් වී ඇත! අලුතින් ලින්ක් කිරීමට Atlas හි Collection එක clear කරන්න." });
+    }
+
+    await delay(2000);
+    const code = await sock.requestPairingCode(phone);
+    const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+    return res.json({ code: formattedCode });
   } catch (err) {
-    console.error("Pairing Error:", err);
-    return res.status(500).json({ error: "Pairing code එක ලබාගැනීමට නොහැකි විය. Server logs පරීක්ෂා කරන්න." });
+    console.error("Pairing Error details:", err);
+    return res.status(500).json({ error: "Pairing code එක generate කරගත නොහැකි විය. අංකය නිවැරදි දැයි බලන්න." });
   }
 });
 
-// --- WhatsApp Bot Engine ---
+// WhatsApp Bot Main Starter
 async function startBot() {
   console.log("Connecting to MongoDB Atlas...");
   const mongoClient = new MongoClient(CONFIG.MONGODB_URI);
   await mongoClient.connect();
 
   const db = mongoClient.db(CONFIG.DB_NAME);
-  const authCollection = db.collection(CONFIG.SESSION_NAME);
+  authCollection = db.collection(CONFIG.SESSION_NAME);
 
-  const { state, saveCreds } = await useMongoDBAuthState(authCollection);
+  authStateData = await useMongoDBAuthState(authCollection);
   const { version, isLatest } = await fetchLatestBaileysVersion();
   console.log(`Baileys Version: v${version.join(".")} (Latest: ${isLatest})`);
 
@@ -155,9 +161,9 @@ async function startBot() {
     version,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
-    auth: state,
+    auth: authStateData.state,
     msgRetryCounterCache,
-    browser: Browsers.macOS("Desktop"),
+    browser: Browsers.ubuntu("Chrome"),
     syncFullHistory: false
   });
 
@@ -170,17 +176,14 @@ async function startBot() {
       console.log(`Connection closed (Code: ${statusCode}). Reconnecting: ${shouldReconnect}`);
       if (shouldReconnect) {
         startBot();
-      } else {
-        console.log("Logged out. MongoDB collection එක clear කරන්න.");
       }
     } else if (connection === "open") {
       console.log("🚀 ✅ WhatsApp Bot සාර්ථකව සම්බන්ධ විය!");
     }
   });
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", authStateData.saveCreds);
 
-  // Message Handling
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const msg = messages[0];
@@ -197,22 +200,15 @@ async function startBot() {
     const args = body.slice(CONFIG.PREFIX.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    switch (command) {
-      case "ping": {
-        const start = Date.now();
-        await sock.sendMessage(from, { text: `Pong! 🏓 Latency: ${Date.now() - start}ms` }, { quoted: msg });
-        break;
-      }
-      case "alive": {
-        await sock.sendMessage(from, { text: "👋 *Dark-Dinu Bot* Render එකේ සුපිරියටම වැඩ!" }, { quoted: msg });
-        break;
-      }
+    if (command === "ping") {
+      await sock.sendMessage(from, { text: "Pong! 🏓 Latency OK" }, { quoted: msg });
+    } else if (command === "alive") {
+      await sock.sendMessage(from, { text: "👋 Dark-Dinu Bot Online!" }, { quoted: msg });
     }
   });
 }
 
-// Start Server and Bot
 app.listen(PORT, () => {
-  console.log(`Pairing Web Server running on port ${PORT}`);
-  startBot().catch((err) => console.error("Bot Start Error:", err));
+  console.log(`Web Server listening on port ${PORT}`);
+  startBot().catch((err) => console.error("Start Bot Error:", err));
 });
