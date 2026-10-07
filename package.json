@@ -1,7 +1,7 @@
 {
-  "name": "dark-dinu-bot",
-  "version": "2.0.0",
-  "description": "WhatsApp Multi-Device Bot with MongoDB Auth for Render",
+  "name": "dark-dinu-multi-manager",
+  "version": "3.0.0",
+  "description": "Multi-Device WhatsApp Bot Manager with Auto Sessions",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -12,7 +12,6 @@
     "express": "^4.19.2",
     "mongodb": "^6.8.0",
     "node-cache": "^5.1.2",
-    "pino": "^9.3.2",
-    "qrcode-terminal": "^0.12.0"
+    "pino": "^9.3.2"
   }
 }
