@@ -1,20 +1,25 @@
 import { MongoClient } from "mongodb";
 
-// Per-Bot Auto Reply Cache & Socket Watchers
+// Global Shared DB Pool & Memory Cache
+global.sharedMongoClient = global.sharedMongoClient || new MongoClient(
+  "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+  {
+    maxPoolSize: 10,
+    minPoolSize: 2,
+    maxIdleTimeMS: 30000,
+    serverSelectionTimeoutMS: 5000
+  }
+);
+global.sharedMongoClient.connect().catch(() => {});
+
 global.autoReplyCache = global.autoReplyCache || new Map();
 global.autoReplyStatus = global.autoReplyStatus || new Map();
 global.autoReplyHookedSockets = global.autoReplyHookedSockets || new WeakSet();
 
-let mongoDbInstance = null;
-
-async function getReplyDB(mongoUri, dbName) {
-  if (mongoDbInstance) return mongoDbInstance;
+function getReplyDB(dbName = "whatsapp_multi_bots") {
   try {
-    const client = new MongoClient(mongoUri);
-    await client.connect();
-    mongoDbInstance = client.db(dbName);
-    return mongoDbInstance;
-  } catch (e) {
+    return global.sharedMongoClient.db(dbName);
+  } catch (_) {
     return null;
   }
 }
@@ -36,10 +41,10 @@ function isBotOwner(sock, msg, from) {
 }
 
 // Background Non-blocking MongoDB Sync
-function syncToDatabase(botPhone, replies, enabled, config) {
+function syncToDatabase(botPhone, replies, enabled, dbName) {
   setImmediate(async () => {
     try {
-      const db = await getReplyDB(config.MONGODB_URI, config.DB_NAME);
+      const db = getReplyDB(dbName);
       const col = db?.collection("custom_autoreplies");
       const objData = Object.fromEntries(replies);
       await col?.updateOne(
@@ -58,7 +63,7 @@ async function loadBotReplies(botPhone, config) {
   }
 
   try {
-    const db = await getReplyDB(config.MONGODB_URI, config.DB_NAME);
+    const db = getReplyDB(config?.DB_NAME);
     if (db) {
       const col = db.collection("custom_autoreplies");
       const record = await col.findOne({ botPhone });
@@ -81,7 +86,7 @@ async function loadBotReplies(botPhone, config) {
   return emptyMap;
 }
 
-// Background Listener (Index.js වෙනස් නොකර ක්‍රියාත්මක වේ)
+// Background Listener (Ultra-Fast Message Interceptor)
 function attachAutoReplyEngine(sock, appConfig) {
   if (!sock || global.autoReplyHookedSockets.has(sock)) return;
   global.autoReplyHookedSockets.add(sock);
@@ -118,8 +123,10 @@ function attachAutoReplyEngine(sock, appConfig) {
     if (replies.has(textBody)) {
       replyToSend = replies.get(textBody);
     } else {
+      // Lightning Fast Safe Boundary Match
       for (const [trigger, reply] of replies.entries()) {
-        const regex = new RegExp(`(^|\\s)${trigger}(\\s\vert{}$)`, "i");
+        const escaped = trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(`(^|\\s)${escaped}(\\s\vert{}$)`, "i");
         if (regex.test(textBody)) {
           replyToSend = reply;
           break;
@@ -128,23 +135,25 @@ function attachAutoReplyEngine(sock, appConfig) {
     }
 
     if (replyToSend) {
-      await sock.sendMessage(chatJid, { text: replyToSend }, { quoted: m }).catch(() => {});
+      sock.sendMessage(chatJid, { text: replyToSend }, { quoted: m }).catch(() => {});
     }
   });
 }
 
-// Cluster Auto Hook Watcher
-setInterval(() => {
-  if (global.activeSockets) {
-    for (const [, s] of global.activeSockets.entries()) {
-      attachAutoReplyEngine(s, {
-        MONGODB_URI: "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-        DB_NAME: "whatsapp_multi_bots",
-        PREFIX: "."
-      });
+// Optimized Cluster Watcher (Zero CPU Loop Lag)
+if (!global.autoReplyIntervalStarted) {
+  global.autoReplyIntervalStarted = true;
+  setInterval(() => {
+    if (global.activeSockets) {
+      for (const [, s] of global.activeSockets.entries()) {
+        attachAutoReplyEngine(s, {
+          DB_NAME: "whatsapp_multi_bots",
+          PREFIX: "."
+        });
+      }
     }
-  }
-}, 2000);
+  }, 20000);
+}
 
 export default {
   name: "autoreply",
@@ -157,6 +166,7 @@ export default {
 
     const prefix = config?.PREFIX || ".";
     const botPhone = getBotPhone(sock);
+    const dbName = config?.DB_NAME || "whatsapp_multi_bots";
 
     if (!isBotOwner(sock, msg, from)) {
       return await sock.sendMessage(from, { text: "⛔ Bot Owner ට පමණි." }, { quoted: msg });
@@ -186,15 +196,14 @@ export default {
         return await sock.sendMessage(from, { text: "❌ අගයන් ලබාදෙන්න." }, { quoted: msg });
       }
 
-      // 1. Memory එකට Save කිරීම (ක්ෂණිකව ක්‍රියාත්මක වීමට)
+      // Memory Store එකට instant update
       replies.set(triggerWord, replyMessage);
       global.autoReplyCache.set(botPhone, replies);
 
-      // 2. MongoDB එකට Background එකේ Save කිරීම
-      syncToDatabase(botPhone, replies, isEnabled, config);
+      // Background Non-blocking DB Sync
+      syncToDatabase(botPhone, replies, isEnabled, dbName);
 
-      // Reaction සහ තනි පේළියේ කෙටි පණිවිඩය
-      await sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, {
         text: `✅ Auto Reply Added: \`${triggerWord}\` ➔ ${replyMessage}`
       }, { quoted: msg });
@@ -210,9 +219,9 @@ export default {
       replies.delete(triggerWord);
       global.autoReplyCache.set(botPhone, replies);
 
-      syncToDatabase(botPhone, replies, isEnabled, config);
+      syncToDatabase(botPhone, replies, isEnabled, dbName);
 
-      await sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, {
         text: `🗑️ Deleted: \`${triggerWord}\``
       }, { quoted: msg });
@@ -239,9 +248,9 @@ export default {
       const isTurnOn = stateArg === "on";
       global.autoReplyStatus.set(botPhone, isTurnOn);
 
-      syncToDatabase(botPhone, replies, isTurnOn, config);
+      syncToDatabase(botPhone, replies, isTurnOn, dbName);
 
-      await sock.sendMessage(from, { react: { text: isTurnOn ? "🟢" : "🔴", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: isTurnOn ? "🟢" : "🔴", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, {
         text: `Auto Reply: *${isTurnOn ? "ON 🟢" : "OFF 🔴"}*`
       }, { quoted: msg });
