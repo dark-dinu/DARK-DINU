@@ -6,7 +6,6 @@ import os from "os";
 import { exec } from "child_process";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
-// FFmpeg Setup
 let ffmpegPath = "ffmpeg";
 try {
   ffmpegPath = ffmpegInstaller?.path || "ffmpeg";
@@ -14,35 +13,36 @@ try {
   ffmpegPath = "ffmpeg";
 }
 
-// Any Audio -> WhatsApp Native Playable Voice Note (OGG Opus) Converter
+// Ultra-Reliable Opus Converter
 function convertToOpusVoice(inputBuffer) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const tempId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const tempInput = path.join(os.tmpdir(), `in_${tempId}.mp3`);
-    const tempOutput = path.join(os.tmpdir(), `out_${tempId}.opus`);
+    const tempOutput = path.join(os.tmpdir(), `out_${tempId}.ogg`);
 
     fs.writeFileSync(tempInput, inputBuffer);
 
-    // WhatsApp New Specs: OGG Container, libopus codec, 48000Hz, Mono channel, 64k bitrate
-    const cmd = `"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 64k -vbr on -compression_level 10 -ar 48000 -ac 1 -f ogg "${tempOutput}"`;
+    const cmd = `"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 64k -ar 48000 -ac 1 "${tempOutput}"`;
 
     exec(cmd, (err) => {
       try { if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput); } catch (_) {}
 
-      if (err) return reject(err);
+      if (err) {
+        // FFmpeg fail වුණොත් මුල් buffer එකම fallback එකක් ලෙස ලබාදෙයි
+        return resolve(inputBuffer);
+      }
 
       try {
         const out = fs.readFileSync(tempOutput);
         if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
         resolve(out);
-      } catch (readErr) {
-        reject(readErr);
+      } catch (_) {
+        resolve(inputBuffer);
       }
     });
   });
 }
 
-// WhatsApp Playable Voice Waveform Dummy Generator (64 bars)
 function generateVoiceWaveform() {
   const bars = [];
   for (let i = 0; i < 64; i++) {
@@ -55,7 +55,7 @@ export default {
   name: "csong",
   aliases: ["channelsong", "cplay"],
   category: "channel",
-  description: "Send Song Card & Real WhatsApp Playable Voice Note to Channel",
+  description: "Send Song Card & Playable Audio to WhatsApp Channel",
 
   async execute({ sock, msg, from, args, config }) {
     const reply = (text) => sock.sendMessage(from, { text }, { quoted: msg });
@@ -79,28 +79,34 @@ export default {
         return await reply("❌ වලංගු WhatsApp Channel Link එකක් ලබාදෙන්න!");
       }
 
-      await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // 1. Channel JID ලබා ගැනීම
-      let channelJid = null;
+      // 1. Channel JID සහ Admin Role එක Check කිරීම
+      let channelMeta = null;
       try {
-        const channelMeta = await sock.newsletterMetadata("invite", inviteCode);
-        channelJid = channelMeta?.id;
+        channelMeta = await sock.newsletterMetadata("invite", inviteCode);
       } catch (e) {
-        console.error("Channel metadata error:", e);
+        return await reply(`❌ Channel තොරතුරු ලබාගත නොහැකි විය: ${e.message}`);
       }
 
-      if (!channelJid) {
-        return await reply("❌ Channel එක සොයාගත නොහැකි විය. Bot අදාළ Channel එකේ Admin ද යන්න පරීක්ෂා කරන්න.");
+      if (!channelMeta?.id) {
+        return await reply("❌ Channel එක හමු නොවීය.");
       }
 
+      let channelJid = channelMeta.id;
       if (!channelJid.endsWith("@newsletter")) {
-        channelJid = `${channelJid.replace(/[^0-9]/g, "")}@newsletter`;
+        channelJid = `${channelJid}@newsletter`;
+      }
+
+      // Role Check (බොට් Admin ද යන්න)
+      const role = channelMeta.viewer_metadata?.role || "GUEST";
+      if (role !== "ADMIN" && role !== "OWNER") {
+        return await reply(`⛔ *අවසර නැත:* මෙම බොට් අදාළ Channel එකේ Admin කෙනෙක් නොවේ! (වත්මන් තත්ත්වය: ${role})\nකරුණාකර බොට්ගේ නම්බර් එක Channel Admin කරන්න.`);
       }
 
       // 2. YouTube Search
       const search = await yts(songName);
-      const video = search.videos[0];
+      const video = search?.videos?.[0];
       if (!video) return await reply("❌ සින්දුව සොයාගත නොහැකි විය.");
 
       // 3. Audio Download API
@@ -109,39 +115,33 @@ export default {
 
       try {
         const apiUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(video.url)}&quality=128kbps&format=mp3&api_key=${apiKey}`;
-        const res = await axios.get(apiUrl, { timeout: 20000 });
+        const res = await axios.get(apiUrl, { timeout: 15000 });
         audioDownloadUrl = res.data?.data?.direct_url || res.data?.data?.download_url || res.data?.direct_url || res.data?.download_url;
       } catch (_) {}
 
       if (!audioDownloadUrl) {
         try {
           const fallbackApi = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(video.url)}&quality=360p&format=mp4&api_key=${apiKey}`;
-          const res2 = await axios.get(fallbackApi, { timeout: 20000 });
+          const res2 = await axios.get(fallbackApi, { timeout: 15000 });
           audioDownloadUrl = res2.data?.data?.direct_url || res2.data?.data?.download_url || res2.data?.direct_url;
         } catch (_) {}
       }
 
       if (!audioDownloadUrl) {
-        return await reply("❌ Audio Download කරගැනීමට නොහැකි විය. නැවත උත්සාහ කරන්න.");
+        return await reply("❌ Audio එක Download කරගැනීමට නොහැකි විය.");
       }
 
-      // 4. Buffering
+      // 4. Download Audio & Thumbnail
       const [audioRes, imgRes] = await Promise.all([
-        axios.get(audioDownloadUrl, { responseType: "arraybuffer", timeout: 60000, headers: { "User-Agent": "Mozilla/5.0" } }),
-        axios.get(video.thumbnail, { responseType: "arraybuffer" })
+        axios.get(audioDownloadUrl, { responseType: "arraybuffer", timeout: 45000 }),
+        axios.get(video.thumbnail, { responseType: "arraybuffer", timeout: 10000 })
       ]);
 
       const rawAudioBuffer = Buffer.from(audioRes.data);
       const imgBuffer = Buffer.from(imgRes.data);
 
-      // 5. Convert to WhatsApp Playable Opus Voice
-      let voiceBuffer;
-      try {
-        voiceBuffer = await convertToOpusVoice(rawAudioBuffer);
-      } catch (convErr) {
-        console.warn("Opus Conversion Fallback:", convErr.message);
-        voiceBuffer = rawAudioBuffer;
-      }
+      // 5. Convert to WhatsApp Voice Format
+      const finalVoiceBuffer = await convertToOpusVoice(rawAudioBuffer);
 
       const cardCaption = 
 `🎶 *“ ${video.title} ”*
@@ -152,27 +152,27 @@ Use Headphones For Best Experience.... 🎧🎵
 
 | ⚡ *DARK-DINU CORE*`;
 
-      // 6. Card Banner එක Channel එකට යැවීම
+      // 6. Send Card to Channel
       await sock.sendMessage(channelJid, {
         image: imgBuffer,
         caption: cardCaption
       });
 
-      // 7. New Update Real Voice Note (Waveform & Direct Play Button සහිතව)
+      // 7. Send Voice Note to Channel
       await sock.sendMessage(channelJid, {
-        audio: voiceBuffer,
+        audio: finalVoiceBuffer,
         mimetype: "audio/ogg; codecs=opus",
         ptt: true,
         waveform: generateVoiceWaveform()
       });
 
-      await sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
-      await reply(`✅ *"${video.title}"*\nChannel එකට Playable Voice Note එකක් ලෙස සාර්ථකව Post කරන ලදී! 🎙️🔥`);
+      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
+      await reply(`✅ *"${video.title}"*\nChannel එකට සාර්ථකව Post කරන ලදී! 🎙️🔥`);
 
     } catch (err) {
       console.error("[CSONG ERROR]:", err);
-      await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await reply(`❌ Error: ${err.message || "Failed to post to channel."}`);
+      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      await reply(`❌ දෝෂයකි: ${err.message || "Channel එකට post කිරීමට නොහැකි විය."}`);
     }
   }
 };
