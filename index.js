@@ -61,86 +61,372 @@ async function loadCommands() {
   console.log(`[+] Auto-loaded ${commands.size} commands/aliases into memory.`);
 }
 
-// 2. Web UI (Pairing Portal)
+// 2. Next-Gen Cyber Glassmorphism Web Portal
 app.get("/", (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${CONFIG.BOT_NAME || "DARK-DINU MULTI-BOT"}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>${CONFIG.BOT_NAME || "DARK-DINU MD"} | Next-Gen Cloud Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;800&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', system-ui, sans-serif; }
-    body { background: radial-gradient(circle at top, #111928, #05070a); color: #f0f6fc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
-    .card { background: rgba(22, 27, 34, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(88, 166, 255, 0.2); border-radius: 18px; padding: 32px 24px; width: 100%; max-width: 400px; text-align: center; box-shadow: 0 16px 40px rgba(0,0,0,0.8); }
-    .badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(35, 134, 54, 0.2); border: 1px solid #2ea043; color: #3fb950; font-size: 11px; padding: 4px 12px; border-radius: 20px; font-weight: 700; margin-bottom: 14px; text-transform: uppercase; }
-    h2 { font-size: 24px; color: #58a6ff; letter-spacing: 1px; font-weight: 800; }
-    p { color: #8b949e; font-size: 13px; margin: 8px 0 24px; line-height: 1.5; }
-    .input-group { text-align: left; margin-bottom: 18px; }
-    label { display: block; font-size: 11px; color: #8b949e; margin-bottom: 6px; font-weight: 600; text-transform: uppercase; }
-    input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #30363d; background: #0d1117; color: #fff; font-size: 15px; outline: none; transition: 0.3s; }
-    input:focus { border-color: #58a6ff; box-shadow: 0 0 10px rgba(88,166,255,0.25); }
-    button { width: 100%; padding: 14px; border-radius: 10px; border: none; background: linear-gradient(135deg, #238636, #2ea043); color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
-    button:hover { opacity: 0.95; transform: translateY(-1px); }
-    .code-box { display: none; margin-top: 20px; padding: 16px; background: #0d1117; border: 1px dashed #238636; border-radius: 12px; }
-    .code-box h3 { font-size: 28px; letter-spacing: 6px; color: #3fb950; margin: 10px 0; font-family: monospace; font-weight: bold; }
-    .copy-btn { background: #21262d; border: 1px solid #30363d; padding: 8px 16px; border-radius: 6px; font-size: 12px; cursor: pointer; color: #58a6ff; font-weight: 600; }
-    .stats { margin-top: 24px; font-size: 12px; color: #8b949e; border-top: 1px solid #21262d; padding-top: 16px; }
+    :root {
+      --bg: #030712;
+      --card-bg: rgba(15, 23, 42, 0.65);
+      --border: rgba(255, 255, 255, 0.08);
+      --accent-cyan: #06b6d4;
+      --accent-blue: #3b82f6;
+      --accent-emerald: #10b981;
+      --text-main: #f8fafc;
+      --text-sub: #94a3b8;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      background-color: var(--bg);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(6, 182, 212, 0.12) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(59, 130, 246, 0.12) 0px, transparent 50%),
+        radial-gradient(at 50% 50%, rgba(16, 185, 129, 0.05) 0px, transparent 50%);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 16px;
+      overflow-x: hidden;
+      position: relative;
+    }
+    /* Grid Mesh Overlay */
+    body::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-size: 32px 32px;
+      background-image: linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+                        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      pointer-events: none;
+      z-index: 1;
+    }
+    .wrapper {
+      width: 100%;
+      max-width: 440px;
+      position: relative;
+      z-index: 2;
+    }
+    .glass-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      padding: 40px 28px 32px;
+      box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.7),
+                  0 0 40px -10px rgba(6, 182, 212, 0.15);
+      position: relative;
+      overflow: hidden;
+    }
+    .glass-card::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(6, 182, 212, 0.5), transparent);
+    }
+    .top-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #34d399;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+    .ping-dot {
+      width: 6px;
+      height: 6px;
+      background: #34d399;
+      border-radius: 50%;
+      box-shadow: 0 0 10px #34d399;
+      animation: pulseDot 2s infinite ease-in-out;
+    }
+    @keyframes pulseDot {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .brand-title {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+    .brand-subtitle {
+      font-size: 13px;
+      color: var(--text-sub);
+      line-height: 1.6;
+      margin-bottom: 32px;
+      font-weight: 500;
+    }
+    .form-group {
+      text-align: left;
+      margin-bottom: 22px;
+    }
+    .input-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 700;
+      color: #cbd5e1;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 8px;
+    }
+    .input-label span {
+      color: var(--accent-cyan);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+    }
+    .input-box {
+      position: relative;
+    }
+    input {
+      width: 100%;
+      background: rgba(3, 7, 18, 0.6);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 14px;
+      padding: 16px 18px;
+      font-size: 15px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #fff;
+      outline: none;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    input:focus {
+      border-color: var(--accent-cyan);
+      background: rgba(3, 7, 18, 0.9);
+      box-shadow: 0 0 0 4px rgba(6, 182, 212, 0.15);
+    }
+    input::placeholder {
+      color: #475569;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+    }
+    .btn-submit {
+      width: 100%;
+      padding: 16px;
+      border-radius: 14px;
+      border: none;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      cursor: pointer;
+      box-shadow: 0 10px 25px -5px rgba(6, 182, 212, 0.4);
+      transition: all 0.25s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .btn-submit:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 15px 30px -5px rgba(6, 182, 212, 0.5);
+    }
+    .btn-submit:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
+    }
+    /* Pairing Display Box */
+    .result-container {
+      display: none;
+      margin-top: 24px;
+      background: rgba(3, 7, 18, 0.8);
+      border: 1px solid rgba(6, 182, 212, 0.3);
+      border-radius: 18px;
+      padding: 22px 18px;
+      animation: fadeIn 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .code-tag {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent-cyan);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .pair-code-display {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 32px;
+      font-weight: 800;
+      letter-spacing: 4px;
+      color: #f8fafc;
+      margin: 10px 0 18px;
+      text-shadow: 0 0 25px rgba(6, 182, 212, 0.4);
+    }
+    .btn-copy {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 12px;
+      border-radius: 10px;
+      color: #cbd5e1;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s;
+    }
+    .btn-copy:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+    /* Stats Bar */
+    .metrics-bar {
+      margin-top: 28px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--text-sub);
+    }
+    .metric-value {
+      font-family: 'JetBrains Mono', monospace;
+      color: #38bdf8;
+      font-weight: 700;
+      background: rgba(56, 189, 248, 0.1);
+      padding: 3px 10px;
+      border-radius: 6px;
+    }
+    .footer-credits {
+      margin-top: 22px;
+      font-size: 12px;
+      color: #64748b;
+      font-weight: 500;
+    }
+    .footer-credits span {
+      color: #cbd5e1;
+      font-weight: 600;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <span class="badge">● Multi-Bot Engine</span>
-    <h2>DARK-DINU PAIRING</h2>
-    <p>WhatsApp අංකය යොදා පහසුවෙන් pairing code එක ලබාගන්න.</p>
-    <div class="input-group">
-      <label>WhatsApp Number (Country Code සහිතව, + රහිතව)</label>
-      <input type="text" id="phone" placeholder="947xxxxxxxx" required>
+  <div class="wrapper">
+    <div class="glass-card">
+      <div style="text-align: center;">
+        <div class="top-badge">
+          <div class="ping-dot"></div>
+          Multi-Device Node v3.0
+        </div>
+        <h1 class="brand-title">DARK-DINU MD</h1>
+        <p class="brand-subtitle">Automate your WhatsApp ecosystem effortlessly with ultra-fast cloud linking.</p>
+      </div>
+
+      <div class="form-group">
+        <label class="input-label">
+          <span>Phone Number</span>
+          <span>E.164 Standard</span>
+        </label>
+        <div class="input-box">
+          <input type="tel" id="phone" placeholder="e.g. 94712345678" autocomplete="off" required>
+        </div>
+      </div>
+
+      <button id="submitBtn" class="btn-submit" onclick="getCode()">
+        Generate Pairing Code
+      </button>
+
+      <div id="resultBox" class="result-container">
+        <div class="code-tag">Authentication Code</div>
+        <div id="pairCode" class="pair-code-display">--------</div>
+        <button id="copyBtn" class="btn-copy" onclick="copyCode()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+          Copy Pairing Code
+        </button>
+      </div>
+
+      <div class="metrics-bar">
+        <span>Active Cloud Instances</span>
+        <span class="metric-value">${activeSockets.size} Sockets</span>
+      </div>
     </div>
-    <button id="submitBtn" onclick="getCode()">Get Pairing Code</button>
-    <div id="resultBox" class="code-box">
-      <div style="font-size: 11px; color: #8b949e; text-transform: uppercase;">YOUR PAIRING CODE</div>
-      <h3 id="pairCode">--------</h3>
-      <button class="copy-btn" onclick="copyCode()">Copy Code</button>
-    </div>
-    <div class="stats">
-      Active Bots in Cloud: <span style="color:#3fb950; font-weight:bold;">${activeSockets.size}</span>
+
+    <div class="footer-credits" style="text-align: center;">
+      Architected & Maintained by <span>Dinidu Heshan</span>
     </div>
   </div>
+
   <script>
     async function getCode() {
-      const phone = document.getElementById('phone').value.trim().replace(/[^0-9]/g, '');
+      const phoneInput = document.getElementById('phone');
+      const phone = phoneInput.value.trim().replace(/[^0-9]/g, '');
       const btn = document.getElementById('submitBtn');
       const box = document.getElementById('resultBox');
       const codeEl = document.getElementById('pairCode');
 
-      if (!phone || phone.length < 10) return alert('කරුණාකර නිවැරදි අංකයක් ලබාදෙන්න!');
+      if (!phone || phone.length < 10) {
+        return alert('Please enter a valid WhatsApp number including country code (without + sign).');
+      }
 
-      btn.innerText = 'Connecting...';
+      btn.innerText = 'Establishing Connection...';
       btn.disabled = true;
 
       try {
         const res = await fetch('/pair?phone=' + phone);
         const data = await res.json();
+        
         if (data.code) {
           codeEl.innerText = data.code;
           box.style.display = 'block';
-          btn.innerText = 'Code Received!';
+          btn.innerText = 'Pairing Code Active';
+          box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         } else {
-          alert(data.error || 'දෝෂයක් ඇති විය!');
-          btn.innerText = 'Get Pairing Code';
+          alert(data.error || 'Connection failed. Please retry.');
+          btn.innerText = 'Generate Pairing Code';
           btn.disabled = false;
         }
       } catch {
-        alert('Server error! මඳ වේලාවකින් නැවත උත්සාහ කරන්න.');
-        btn.innerText = 'Get Pairing Code';
+        alert('Server unreachable. Please verify network and retry.');
+        btn.innerText = 'Generate Pairing Code';
         btn.disabled = false;
       }
     }
+
     function copyCode() {
       const code = document.getElementById('pairCode').innerText.replace(/-/g, '');
+      const copyBtn = document.getElementById('copyBtn');
       navigator.clipboard.writeText(code);
-      alert('Copied: ' + code);
+      copyBtn.innerHTML = '✓ Code Copied to Clipboard!';
+      setTimeout(() => {
+        copyBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg> Copy Pairing Code';
+      }, 2500);
     }
   </script>
 </body>
@@ -286,7 +572,7 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", activeBots: activeSockets.size });
 });
 
-// 5. Server Run (Immediate Port Bind to avoid Heroku R10 Boot Timeout)
+// 5. Server Run
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[+] Web server listening on port ${PORT}`);
 
