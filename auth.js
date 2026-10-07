@@ -1,4 +1,4 @@
-import { proto, initAuthCreds } from "@whiskeysockets/baileys";
+import { proto, initAuthCreds, BufferJSON } from "@whiskeysockets/baileys";
 
 export async function useMongoDBAuthState(collection) {
   const writeData = async (data, id) => {
@@ -33,50 +33,48 @@ export async function useMongoDBAuthState(collection) {
       keys: {
         get: async (type, ids) => {
           const data = {};
-          await Promise.all(
-            ids.map(async (id) => {
-              let value = await readData(`${type}-${id}`);
+          const docs = await collection.find({ _id: { $in: ids.map(id => `${type}-${id}`) } }).toArray();
+          for (const doc of docs) {
+            try {
+              let value = JSON.parse(doc.data, BufferJSON.reviver);
               if (type === "app-state-sync-key" && value) {
                 value = proto.Message.AppStateSyncKeyData.fromObject(value);
               }
+              const id = doc._id.replace(`${type}-`, "");
               data[id] = value;
-            })
-          );
+            } catch {}
+          }
           return data;
         },
         set: async (data) => {
-          const tasks = [];
+          const operations = [];
           for (const category in data) {
             for (const id in data[category]) {
               const value = data[category][id];
               const key = `${category}-${id}`;
-              tasks.push(value ? writeData(value, key) : removeData(key));
+              if (value) {
+                operations.push({
+                  replaceOne: {
+                    filter: { _id: key },
+                    replacement: { _id: key, data: JSON.stringify(value, BufferJSON.replacer) },
+                    upsert: true
+                  }
+                });
+              } else {
+                operations.push({
+                  deleteOne: {
+                    filter: { _id: key }
+                  }
+                });
+              }
             }
           }
-          await Promise.all(tasks);
+          if (operations.length > 0) {
+            await collection.bulkWrite(operations, { ordered: false });
+          }
         }
       }
     },
     saveCreds: () => writeData(creds, "creds")
   };
 }
-
-const BufferJSON = {
-  replacer: (k, v) => {
-    if (Buffer.isBuffer(v) || v instanceof Uint8Array || v?.type === "Buffer") {
-      return { type: "Buffer", data: Array.from(v?.data || v) };
-    }
-    return v;
-  },
-  reviver: (k, v) => {
-    if (
-      typeof v === "object" &&
-      v !== null &&
-      (v.type === "Buffer" || Array.isArray(v.data)) &&
-      Array.isArray(v.data)
-    ) {
-      return Buffer.from(v.data);
-    }
-    return v;
-  }
-};
