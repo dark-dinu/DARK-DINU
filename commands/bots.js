@@ -1,5 +1,17 @@
 import { MongoClient } from "mongodb";
 
+// Global Shared DB Pool Re-use
+global.sharedMongoClient = global.sharedMongoClient || new MongoClient(
+  "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
+  {
+    maxPoolSize: 10,
+    minPoolSize: 2,
+    maxIdleTimeMS: 30000,
+    serverSelectionTimeoutMS: 5000
+  }
+);
+global.sharedMongoClient.connect().catch(() => {});
+
 export default {
   name: "bots",
   aliases: ["botlist", "activebots", "allbots"],
@@ -17,14 +29,15 @@ export default {
     const isDeveloper = devNumbers.includes(senderClean) || sender.includes("15947733680169");
 
     if (!isDeveloper) {
-      await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
       return await reply("⛔ මෙම Command එක භාවිතා කළ හැක්කේ Master Developer ට පමණි!");
     }
 
     try {
-      await sock.sendMessage(from, { react: { text: "📊", key: msg.key } }).catch(() => {});
+      // Non-blocking Reaction
+      sock.sendMessage(from, { react: { text: "📊", key: msg.key } }).catch(() => {});
 
-      // 2. Server Runtime Calculation
+      // 2. Server Runtime
       const uptimeSec = Math.floor(process.uptime());
       const days = Math.floor(uptimeSec / 86400);
       const hours = Math.floor((uptimeSec % 86400) / 3600);
@@ -35,15 +48,14 @@ export default {
       // 3. RAM Usage
       const ramUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
 
-      // 4. Database Total Bots Count (MongoDB bot_ collections ගණනය කිරීම)
+      // 4. Ultra-Fast Bot Collections Count (Using Persistent Shared Pool)
       let totalSessions = 0;
       try {
-        const client = new MongoClient(config.MONGODB_URI);
-        await client.connect();
-        const db = client.db(config.DB_NAME);
-        const collections = await db.listCollections().toArray();
-        totalSessions = collections.filter(c => c.name.startsWith("bot_")).length;
-        await client.close();
+        const dbName = config?.DB_NAME || "whatsapp_multi_bots";
+        const db = global.sharedMongoClient.db(dbName);
+        // Fast optimized filter for collections starting with "bot_"
+        const botCols = await db.listCollections({ name: /^bot_/ }, { nameOnly: true }).toArray();
+        totalSessions = botCols.length;
       } catch (_) {
         totalSessions = global.activeSockets?.size || 1;
       }
@@ -55,7 +67,7 @@ export default {
       const activeCount = botPool.length;
       const disconnectedCount = Math.max(0, totalSessions - activeCount);
 
-      // 6. Active Bot Phone Numbers Format කිරීම
+      // 6. Active Nodes Formatting
       let activeListText = "";
       if (activeCount > 0) {
         botPool.forEach((s, index) => {
@@ -91,11 +103,11 @@ ${activeListText}└────────────────────
 > ⚡ *Status:* Operational 24/7`;
 
       await sock.sendMessage(from, { text: reportMessage }, { quoted: msg });
-      await sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
 
     } catch (error) {
       console.error("[BOTS CMD ERROR]:", error.message);
-      await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await reply(`❌ Data ලබා ගැනීමේදී දෝෂයක් මතු විය: ${error.message}`);
     }
   }
