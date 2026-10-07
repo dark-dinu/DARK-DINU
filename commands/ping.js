@@ -8,16 +8,19 @@ export default {
     try {
       const startTime = performance.now();
 
-      // 1. React පමණක් යැවීම
-      await sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
+      // Non-blocking Reaction (Instant trigger)
+      sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
 
-      const latency = Math.round(performance.now() - startTime);
+      // Calculate latency before sending message
+      const latency = Math.max(1, Math.round(performance.now() - startTime));
 
-      // 2. Direct message එකක් යැවීම (Edit නොකර)
-      await sock.sendMessage(from, {
-        text: `*🎭 pong . \`${latency} ms\` ✨*`
-      }, { quoted: msg });
-
+      await sock.sendMessage(
+        from,
+        {
+          text: `*🎭 pong . \`${latency} ms\` ✨*`
+        },
+        { quoted: msg }
+      );
     } catch (err) {
       console.error("[PING ERR]:", err.message);
     }
