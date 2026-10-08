@@ -1,8 +1,45 @@
 import { delay } from "@whiskeysockets/baileys";
 
-// Global Auto-React Listener Controller
 global.channelAutoReactActive = global.channelAutoReactActive || false;
 global.channelListenerInitialized = global.channelListenerInitialized || false;
+
+// Helper: Newsletter එකට React යැවීමේ නිවැරදි Protocol Function එක
+async function sendChannelReaction(sock, newsletterJid, msgKey, emoji) {
+  try {
+    // 1. Baileys official newsletterReactMessage method එක තිබේ නම්
+    if (typeof sock.newsletterReactMessage === "function") {
+      const serverId = msgKey?.server_id || msgKey?.id;
+      return await sock.newsletterReactMessage(newsletterJid, serverId, emoji);
+    }
+
+    // 2. Direct Query Fallback (Newsletter Relay)
+    if (typeof sock.query === "function") {
+      const serverId = msgKey?.server_id || msgKey?.id;
+      return await sock.query({
+        tag: "message",
+        attrs: {
+          to: newsletterJid,
+          type: "reaction",
+          server_id: String(serverId)
+        },
+        content: [{
+          tag: "reaction",
+          attrs: { code: emoji }
+        }]
+      });
+    }
+
+    // 3. Fallback Standard Relay
+    await sock.sendMessage(newsletterJid, {
+      react: {
+        text: emoji,
+        key: msgKey
+      }
+    });
+  } catch (err) {
+    throw err;
+  }
+}
 
 export default {
   name: "channel",
@@ -23,35 +60,35 @@ export default {
       return await reply("❌ Cloud එකේ කිසිදු active bot instance එකක් හමු නොවීය.");
     }
 
-    // Background Listener Setup (Channel එකට වැටෙන අලුත් post අල්ලන්න)
+    // Background Listener Setup (Channel Updates අල්ලන කොටස)
     if (!global.channelListenerInitialized) {
       for (const [, activeSock] of activeSockets.entries()) {
         activeSock.ev.on("messages.upsert", async ({ messages, type }) => {
-          if (type !== "notify" || !global.channelAutoReactActive) return;
+          if (!global.channelAutoReactActive) return;
 
-          const m = messages[0];
-          if (!m?.message || m.key.remoteJid !== CHANNEL_JID) return;
+          for (const m of messages) {
+            const chatJid = m.key?.remoteJid;
+            if (chatJid !== CHANNEL_JID) continue;
 
-          // චැනල් එකට අලුත් Post එකක් ආ විට සියලුම බොට්ලාගෙන් React යැවීම
-          for (const [id, s] of global.activeSockets.entries()) {
-            try {
-              const randomDelay = Math.floor(Math.random() * 2000) + 800;
-              await delay(randomDelay);
+            console.log(`[+] New Post Detected on Channel: ${m.key?.id}`);
 
-              const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
-              await s.sendMessage(CHANNEL_JID, {
-                react: {
-                  text: randomEmoji,
-                  key: m.key
-                }
-              });
-              console.log(`[✓] Auto-reacted: Bot [${id}] -> ${randomEmoji}`);
-            } catch (err) {
-              console.error(`[Auto-React Error - ${id}]:`, err.message);
+            // Active වෙලා ඉන්න හැම බොටාගෙන්ම Reaction එක Dispatch කිරීම
+            for (const [id, s] of global.activeSockets.entries()) {
+              try {
+                const randomDelay = Math.floor(Math.random() * 2000) + 1000;
+                await delay(randomDelay);
+
+                const randomEmoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+                
+                await sendChannelReaction(s, CHANNEL_JID, m.key, randomEmoji);
+                console.log(`[✓] Bot [${id}] reacted with ${randomEmoji} to channel post.`);
+              } catch (err) {
+                console.error(`[Auto-React Error - ${id}]:`, err.message);
+              }
             }
           }
         });
-        break; // එක Listener එකක් ප්‍රමාණවත්ය
+        break;
       }
       global.channelListenerInitialized = true;
     }
