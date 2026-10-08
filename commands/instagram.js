@@ -1,13 +1,14 @@
 import axios from "axios";
 
-// Fast Stream Fetcher with User-Agent Masquerade
-async function fetchMediaStream(streamUrl) {
+// Fast CDN Buffer Streamer (Bypasses Instagram 403 Forbidden blocks)
+async function downloadInstagramMedia(streamUrl) {
   try {
     const res = await axios.get(streamUrl, {
       responseType: "arraybuffer",
-      timeout: 30000,
+      timeout: 35000,
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+        "Accept": "*/*",
         "Referer": "https://www.instagram.com/"
       }
     });
@@ -29,7 +30,7 @@ export default {
     try {
       const rawUrl = args[0]?.trim();
 
-      if (!rawUrl || !rawUrl.includes("instagram.com")) {
+      if (!rawUrl || (!rawUrl.includes("instagram.com") && !rawUrl.includes("instagr.am"))) {
         sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
@@ -53,55 +54,53 @@ export default {
       sock.sendMessage(from, { react: { text: "📸", key: msg.key } }).catch(() => {});
 
       let directDownloadUrl = null;
-      let mediaType = "video"; // "video" | "image"
-      let mediaCaption = "";
+      let isImage = false;
 
       // -------------------------------------------------------------
-      // 1. ENGINE ALPHA: Thinuzz High-Speed API
+      // 1. PRIMARY ENGINE: Mr-Thinuzz API (Live Working Endpoint)
       // -------------------------------------------------------------
       try {
         const thinuzzKey = "key_525b5ceb068ac7f2";
-        const thinuzzEndpoint = `https://mr-thinuzz-api-build.vercel.app/api/instadown/download?url=${encodeURIComponent(rawUrl)}&apiKey=${thinuzzKey}`;
+        const endpoint = `https://mr-thinuzz-api-build.vercel.app/api/instadown/download?url=${encodeURIComponent(rawUrl)}&apiKey=${thinuzzKey}`;
 
-        const res = await axios.get(thinuzzEndpoint, { timeout: 15000 });
+        const res = await axios.get(endpoint, { timeout: 15000 });
         const resData = res.data;
 
-        const downloadData = resData?.data || resData?.result || resData;
+        // Extract deep links across possible schema variations
+        const payload = resData?.result || resData?.data || resData;
 
-        if (Array.isArray(downloadData)) {
-          const item = downloadData[0];
-          directDownloadUrl = item?.url || item?.download_url || (typeof item === "string" ? item : null);
+        if (Array.isArray(payload) && payload.length > 0) {
+          const item = payload[0];
+          directDownloadUrl = typeof item === "string" ? item : (item.url || item.download_url || item.link);
           if (item?.type === "image" || (directDownloadUrl && directDownloadUrl.includes(".jpg"))) {
-            mediaType = "image";
+            isImage = true;
           }
-        } else if (typeof downloadData === "object" && downloadData !== null) {
-          directDownloadUrl = downloadData.url || downloadData.download_url || downloadData.video_url || downloadData.media?.[0]?.url;
-          if (downloadData.type === "image" || downloadData.is_video === false) {
-            mediaType = "image";
+        } else if (typeof payload === "object" && payload !== null) {
+          directDownloadUrl = payload.url || payload.download_url || payload.video_url || payload.media?.[0]?.url;
+          if (payload.type === "image" || payload.is_video === false) {
+            isImage = true;
           }
         }
-      } catch (_) {}
+      } catch (err) {
+        console.error("[THINUZZ API FAIL]:", err.message);
+      }
 
       // -------------------------------------------------------------
-      // 2. ENGINE BETA: Chamindu Site Relay
+      // 2. BACKUP ENGINE: GuruAPI / Siputz Engine
       // -------------------------------------------------------------
       if (!directDownloadUrl) {
         try {
-          const chamKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
-          const chamUrl = `https://api.chamindu.site/api/v1/media/instagram?url=${encodeURIComponent(rawUrl)}&api_key=${chamKey}`;
-          const resCham = await axios.get(chamUrl, { timeout: 15000 });
-          const cData = resCham.data?.data || resCham.data?.result || resCham.data;
-
-          if (Array.isArray(cData)) {
-            directDownloadUrl = cData[0]?.url || cData[0]?.download_url;
-          } else if (typeof cData === "object" && cData !== null) {
-            directDownloadUrl = cData.url || cData.download_url;
+          const guruRes = await axios.get(`https://api.guruapi.tech/insta/v1/igdl?url=${encodeURIComponent(rawUrl)}`, { timeout: 12000 });
+          const gData = guruRes.data?.result || guruRes.data?.media;
+          if (Array.isArray(gData) && gData.length > 0) {
+            directDownloadUrl = gData[0]?.url || gData[0]?.download_url;
+            if (gData[0]?.type === "image") isImage = true;
           }
         } catch (_) {}
       }
 
       // -------------------------------------------------------------
-      // 3. ENGINE GAMMA: BK9 Cloud Fallback
+      // 3. BACKUP ENGINE: BK9 Fast Scraper
       // -------------------------------------------------------------
       if (!directDownloadUrl) {
         try {
@@ -109,7 +108,7 @@ export default {
           const items = bkRes.data?.BK9;
           if (Array.isArray(items) && items.length > 0) {
             directDownloadUrl = items[0]?.url || items[0]?.link;
-            if (items[0]?.type === "image") mediaType = "image";
+            if (items[0]?.type === "image") isImage = true;
           }
         } catch (_) {}
       }
@@ -119,30 +118,30 @@ export default {
         return await sock.sendMessage(
           from,
           {
-            text: "🌸 *Could not fetch this media!* The post might be private, age-restricted, or removed, honey~"
+            text: "🌸 *Could not fetch this media!* The post might be private, restricted, or unavailable, honey~"
           },
           { quoted: msg }
         );
       }
 
       // -------------------------------------------------------------
-      // Stream Media Buffer (Guaranteed Delivery)
+      // 4. Download Direct Buffer to Prevent Socket/CDN Drops
       // -------------------------------------------------------------
-      const mediaBuffer = await fetchMediaStream(directDownloadUrl);
+      const mediaBuffer = await downloadInstagramMedia(directDownloadUrl);
 
       const aestheticCaption = 
 `🎀 ｡ﾟ•┈୨ *INSTAGRAM DOWNLOADER* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
   📸 *Source:* Instagram Public Reel / Post
-  ✨ *Format:* High Definition (${mediaType.toUpperCase()})
+  ✨ *Format:* High Definition (${isImage ? "IMAGE" : "VIDEO"})
   ⚡ *Engine:* Ultra-Fast Stream Relay
 
 ━━━━━━━━━━━━━━━━━━━━━
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      // Dispatch Media
-      if (mediaType === "video" || directDownloadUrl.includes(".mp4")) {
+      // 5. Send Video or Image
+      if (!isImage) {
         if (mediaBuffer) {
           await sock.sendMessage(
             from,
@@ -150,9 +149,10 @@ export default {
             { quoted: msg }
           );
         } else {
+          // Buffer fail වුණොත් direct stream URL එකෙන් යවයි
           await sock.sendMessage(
             from,
-            { video: { url: directDownloadUrl }, caption: aestheticCaption },
+            { video: { url: directDownloadUrl }, caption: aestheticCaption, mimetype: "video/mp4" },
             { quoted: msg }
           );
         }
@@ -179,7 +179,7 @@ export default {
       sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `🌸 *Glitch detected:* ${err.message || "Network timeout"}` },
+        { text: `🌸 *Glitch detected:* ${err.message || "Failed to download media softly"}` },
         { quoted: msg }
       ).catch(() => {});
     }
