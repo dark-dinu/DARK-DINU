@@ -1,114 +1,114 @@
-import { MongoClient } from "mongodb";
+// Pre-allocated Static Developer Lookup Set (O(1) Verification)
+const DEV_MASTER_SET = new Set(["94719845166", "15947733680169"]);
 
-// Global Shared DB Pool Re-use
-global.sharedMongoClient = global.sharedMongoClient || new MongoClient(
-  "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-  {
-    maxPoolSize: 10,
-    minPoolSize: 2,
-    maxIdleTimeMS: 30000,
-    serverSelectionTimeoutMS: 5000
-  }
-);
-global.sharedMongoClient.connect().catch(() => {});
+// Fast phone cleaner (Bitwise string slicing)
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
+}
 
 export default {
   name: "bots",
-  aliases: ["botlist", "activebots", "allbots"],
+  aliases: ["botlist", "activebots", "allbots", "nodes"],
   category: "developer",
-  description: "View all active, disconnected bots & system metrics (Developer Only)",
+  description: "View cluster instances and system metrics (Master Dev Only)",
 
   async execute({ sock, msg, from, config }) {
-    const reply = (text) => sock.sendMessage(from, { text }, { quoted: msg });
-
-    // 1. Strict Developer Verification
+    // Instant developer check (Zero event-loop block)
     const sender = msg.key.participant || msg.key.remoteJid || "";
-    const senderClean = String(sender).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+    const senderClean = fastExtractPhone(sender);
 
-    const devNumbers = ["94719845166", "15947733680169"];
-    const isDeveloper = devNumbers.includes(senderClean) || sender.includes("15947733680169");
-
-    if (!isDeveloper) {
-      sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
-      return await reply("⛔ මෙම Command එක භාවිතා කළ හැක්කේ Master Developer ට පමණි!");
+    if (!DEV_MASTER_SET.has(senderClean)) {
+      sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        { text: "🎀 *Only my creator/developer can view cluster stats!* 🌸" },
+        { quoted: msg }
+      );
     }
 
+    // Instant microsecond reaction
+    sock.sendMessage(from, { react: { text: "📊", key: msg.key } }).catch(() => {});
+
     try {
-      // Non-blocking Reaction
-      sock.sendMessage(from, { react: { text: "📊", key: msg.key } }).catch(() => {});
+      // 1. Fast Bitwise Uptime Math
+      const uptimeSec = process.uptime() | 0;
+      const days = (uptimeSec / 86400) | 0;
+      const hours = ((uptimeSec % 86400) / 3600) | 0;
+      const minutes = ((uptimeSec % 3600) / 60) | 0;
+      const seconds = (uptimeSec % 60) | 0;
+      const runtimeFormatted = `${days ? `${days}d ` : ""}${hours}h ${minutes}m ${seconds}s`;
 
-      // 2. Server Runtime
-      const uptimeSec = Math.floor(process.uptime());
-      const days = Math.floor(uptimeSec / 86400);
-      const hours = Math.floor((uptimeSec % 86400) / 3600);
-      const minutes = Math.floor((uptimeSec % 3600) / 60);
-      const seconds = uptimeSec % 60;
-      const runtimeFormatted = `${days > 0 ? days + "d " : ""}${hours}h ${minutes}m ${seconds}s`;
+      // 2. RAM Heap Check
+      const ramMB = ((process.memoryUsage().heapUsed / 1048576) * 10 | 0) / 10;
 
-      // 3. RAM Usage
-      const ramUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
-
-      // 4. Ultra-Fast Bot Collections Count (Using Persistent Shared Pool)
-      let totalSessions = 0;
+      // 3. Fast Collection Fetch
+      let totalRegistered = 0;
       try {
-        const dbName = config?.DB_NAME || "whatsapp_multi_bots";
-        const db = global.sharedMongoClient.db(dbName);
-        // Fast optimized filter for collections starting with "bot_"
-        const botCols = await db.listCollections({ name: /^bot_/ }, { nameOnly: true }).toArray();
-        totalSessions = botCols.length;
+        const client = global.mongoClient || global.sharedMongoClient;
+        if (client) {
+          const dbName = config?.DB_NAME || "whatsapp_multi_bots";
+          const db = client.db(dbName);
+          const collections = await db.listCollections({ name: /^bot_/ }, { nameOnly: true }).toArray();
+          totalRegistered = collections.length;
+        }
       } catch (_) {
-        totalSessions = global.activeSockets?.size || 1;
+        totalRegistered = global.activeSockets?.size || 1;
       }
 
-      // 5. Active Sockets Pool
-      const botPool = global.activeSockets 
-        ? Array.from(global.activeSockets.values()) 
-        : [sock];
-      const activeCount = botPool.length;
-      const disconnectedCount = Math.max(0, totalSessions - activeCount);
+      // 4. Cluster Sockets State
+      const socketMap = global.activeSockets;
+      const activeCount = socketMap ? socketMap.size : 1;
+      const disconnectedCount = totalRegistered > activeCount ? totalRegistered - activeCount : 0;
 
-      // 6. Active Nodes Formatting
-      let activeListText = "";
-      if (activeCount > 0) {
-        botPool.forEach((s, index) => {
-          const botNum = (s.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-          const name = s.user?.name ? `(${s.user.name})` : "";
-          activeListText += `│  ${index + 1}. 🟢 +${botNum || "Active Node"} ${name}\n`;
-        });
+      // 5. Fast Node List String Builder
+      let nodeList = "";
+      if (socketMap && socketMap.size > 0) {
+        let idx = 1;
+        for (const [id, s] of socketMap.entries()) {
+          const phone = fastExtractPhone(s.user?.id || id);
+          const label = s.user?.name ? `(${s.user.name})` : "";
+          nodeList += `  🌸 *${idx++}.* 🟢 \`+${phone}\` ${label}\n`;
+        }
       } else {
-        activeListText = "│  _No active bots currently._\n";
+        nodeList = "  💤 _No active secondary nodes online._\n";
       }
 
-      const reportMessage = 
-`╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+      // 6. Cute Dashboard Layout
+      const clusterDashboard = 
+`🎀 ｡ﾟ•┈୨ *CLOUD CLUSTER CONTROL* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 👑 *DEVELOPER CONTROL* 〕
-├─▸ 🤖 *System:* MULTI-DEVICE CLUSTER
-├─▸ ⏳ *Runtime:* ${runtimeFormatted}
-├─▸ 📟 *RAM Usage:* ${ramUsed} MB
-└───────────────────────
+  👑 *Master Dev:* Dinidu Heshan
+  ⏱️ *Uptime:* \`${runtimeFormatted}\`
+  ⚡ *RAM Consumption:* \`${ramMB} MB\`
+  🌐 *Platform:* Multi-Device Node Engine
 
-┌─〔 📊 *BOT STATISTICS* 〕
-├─▸ 📁 *Registered:* ${totalSessions}
-├─▸ 🟢 *Online:* ${activeCount}
-├─▸ 🔴 *Disconnected:* ${disconnectedCount}
-└───────────────────────
+━━━━━━━━━━━━━━━━━━━━━━
+📊 *INSTANCE METRICS*
+  📁 *Registered Sessions:* \`${totalRegistered}\`
+  🟢 *Active & Online:* \`${activeCount}\`
+  🔴 *Offline / Resting:* \`${disconnectedCount}\`
 
-┌─〔 📱 *ACTIVE NODES* 〕
-${activeListText}└───────────────────────
+━━━━━━━━━━━━━━━━━━━━━━
+📱 *CONNECTED NODES*
+${nodeList}━━━━━━━━━━━━━━━━━━━━━━
+✨ *Engine Status:* Super smooth & purring softly~ ฅ^•ﻌ•^ฅ
+💖 *DARK-DINU CLUSTER* • https://heshan.devofc.top/`;
 
-> 👑 *Developer:* DINIDU HESHAN
-> ⚡ *Status:* Operational 24/7`;
+      await sock.sendMessage(from, { text: clusterDashboard }, { quoted: msg });
+      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
-      await sock.sendMessage(from, { text: reportMessage }, { quoted: msg });
-      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
-
-    } catch (error) {
-      console.error("[BOTS CMD ERROR]:", error.message);
-      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await reply(`❌ Data ලබා ගැනීමේදී දෝෂයක් මතු විය: ${error.message}`);
+    } catch (err) {
+      console.error("[BOTS ENGINE ERROR]:", err.message);
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(
+        from,
+        { text: `🌸 *Glitch detected:* Couldn't load cluster data softly~ (${err.message})` },
+        { quoted: msg }
+      ).catch(() => {});
     }
   }
 };
