@@ -1,121 +1,187 @@
 import axios from "axios";
 
+// Fast Stream Fetcher with User-Agent Masquerade
+async function fetchMediaStream(streamUrl) {
+  try {
+    const res = await axios.get(streamUrl, {
+      responseType: "arraybuffer",
+      timeout: 30000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.instagram.com/"
+      }
+    });
+    return Buffer.from(res.data);
+  } catch (_) {
+    return null;
+  }
+}
+
 export default {
   name: "instagram",
   aliases: ["insta", "ig", "igdl", "reel"],
   category: "download",
-  description: "Download Instagram Reels, Videos, and Photos",
+  description: "Download Instagram Reels, Videos, and Photos softly",
 
   async execute({ sock, msg, from, args, prefix, config }) {
     const pref = prefix || config?.PREFIX || ".";
-    const reply = (text) => sock.sendMessage(from, { text }, { quoted: msg });
 
     try {
-      const url = args[0]?.trim();
+      const rawUrl = args[0]?.trim();
 
-      if (!url) {
-        return await reply(
-          `⚠️ *කරුණාකර Instagram Link එකක් ලබාදෙන්න!*\n\n*භාවිතය:* \`${pref}insta <link>\`\n*උදා:* \`${pref}insta https://www.instagram.com/reel/xxxxxx/\``
+      if (!rawUrl || !rawUrl.includes("instagram.com")) {
+        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          {
+            text: 
+`🌸 ｡ﾟ•┈୨ *INSTAGRAM DOWNLOAD GUIDE* ୧┈•ﾟ｡ 🐾
+
+  🍭 *Usage:*
+  \`${pref}insta <instagram_post_or_reel_url>\`
+
+  ✨ *Example:*
+  \`${pref}insta https://www.instagram.com/reel/DYYnrwzA4Yw/\`
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+          },
+          { quoted: msg }
         );
       }
 
-      if (!url.includes("instagram.com")) {
-        return await reply("❌ කරුණාකර නිවැරදි Instagram Link එකක් ඇතුළත් කරන්න.");
-      }
+      // Microsecond Reaction
+      sock.sendMessage(from, { react: { text: "📸", key: msg.key } }).catch(() => {});
 
-      sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
+      let directDownloadUrl = null;
+      let mediaType = "video"; // "video" | "image"
+      let mediaCaption = "";
 
-      let mediaList = [];
-      const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
-      const apiUrl = `https://api.chamindu.site/api/v1/media/instagram?url=${encodeURIComponent(url)}&api_key=${apiKey}`;
-
-      // 1. Primary Engine: Chamindu API
+      // -------------------------------------------------------------
+      // 1. ENGINE ALPHA: Thinuzz High-Speed API
+      // -------------------------------------------------------------
       try {
-        const res = await axios.get(apiUrl, { timeout: 20000 });
+        const thinuzzKey = "key_525b5ceb068ac7f2";
+        const thinuzzEndpoint = `https://mr-thinuzz-api-build.vercel.app/api/instadown/download?url=${encodeURIComponent(rawUrl)}&apiKey=${thinuzzKey}`;
+
+        const res = await axios.get(thinuzzEndpoint, { timeout: 15000 });
         const resData = res.data;
 
-        if (resData?.data?.status === "inaccessible_or_private" || resData?.message?.includes("Could not resolve")) {
-          sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-          return await reply("❌ මෙම Post එක Private ගිණුමක එකක් හෝ ලබාගත නොහැකි Link එකකි. Public Post එකක Link එකක් ලබාදෙන්න.");
-        }
+        const downloadData = resData?.data || resData?.result || resData;
 
-        const mediaData = resData?.data || resData?.result || resData;
-        if (Array.isArray(mediaData)) {
-          mediaList = mediaData;
-        } else if (Array.isArray(mediaData?.downloads)) {
-          mediaList = mediaData.downloads;
-        } else if (Array.isArray(mediaData?.media)) {
-          mediaList = mediaData.media;
-        } else if (typeof mediaData === "object" && mediaData !== null) {
-          mediaList = [mediaData];
+        if (Array.isArray(downloadData)) {
+          const item = downloadData[0];
+          directDownloadUrl = item?.url || item?.download_url || (typeof item === "string" ? item : null);
+          if (item?.type === "image" || (directDownloadUrl && directDownloadUrl.includes(".jpg"))) {
+            mediaType = "image";
+          }
+        } else if (typeof downloadData === "object" && downloadData !== null) {
+          directDownloadUrl = downloadData.url || downloadData.download_url || downloadData.video_url || downloadData.media?.[0]?.url;
+          if (downloadData.type === "image" || downloadData.is_video === false) {
+            mediaType = "image";
+          }
         }
       } catch (_) {}
 
-      // 2. Backup Engine: BK9 Fallback
-      if (!mediaList.length) {
+      // -------------------------------------------------------------
+      // 2. ENGINE BETA: Chamindu Site Relay
+      // -------------------------------------------------------------
+      if (!directDownloadUrl) {
         try {
-          const bkRes = await axios.get(`https://bk9.fun/download/instagram?url=${encodeURIComponent(url)}`, { timeout: 15000 });
-          if (bkRes.data?.BK9?.length) {
-            mediaList = bkRes.data.BK9;
+          const chamKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
+          const chamUrl = `https://api.chamindu.site/api/v1/media/instagram?url=${encodeURIComponent(rawUrl)}&api_key=${chamKey}`;
+          const resCham = await axios.get(chamUrl, { timeout: 15000 });
+          const cData = resCham.data?.data || resCham.data?.result || resCham.data;
+
+          if (Array.isArray(cData)) {
+            directDownloadUrl = cData[0]?.url || cData[0]?.download_url;
+          } else if (typeof cData === "object" && cData !== null) {
+            directDownloadUrl = cData.url || cData.download_url;
           }
         } catch (_) {}
       }
 
-      const caption = 
-`╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
-
-┌─〔 📸 *INSTAGRAM DOWNLOADER* 〕
-├─▸ ⚡ *Status*  : High Quality Fetched
-├─▸ 🎯 *Engine*  : Ultra Stream Relay
-└───────────────────────
-
-> 👑 *Developer:* DINIDU HESHAN
-> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐂𝐎𝐑𝐄 🐦‍🔥*`;
-
-      let sentMedia = false;
-
-      for (const item of mediaList) {
-        const downloadUrl = item.url || item.download_url || item.link || (typeof item === "string" ? item : null);
-        const isVideo = item.type === "video" || item.type === "mp4" || (downloadUrl && downloadUrl.includes(".mp4"));
-
-        if (downloadUrl && typeof downloadUrl === "string" && downloadUrl.startsWith("http")) {
-          // Direct buffer pipe with timeout to prevent silent drop
-          const mediaRes = await axios.get(downloadUrl, {
-            responseType: "arraybuffer",
-            timeout: 25000,
-            headers: { "User-Agent": "Mozilla/5.0" }
-          });
-          const mediaBuffer = Buffer.from(mediaRes.data);
-
-          if (isVideo) {
-            await sock.sendMessage(from, {
-              video: mediaBuffer,
-              caption: caption,
-              mimetype: "video/mp4"
-            }, { quoted: msg });
-          } else {
-            await sock.sendMessage(from, {
-              image: mediaBuffer,
-              caption: caption
-            }, { quoted: msg });
+      // -------------------------------------------------------------
+      // 3. ENGINE GAMMA: BK9 Cloud Fallback
+      // -------------------------------------------------------------
+      if (!directDownloadUrl) {
+        try {
+          const bkRes = await axios.get(`https://bk9.fun/download/instagram?url=${encodeURIComponent(rawUrl)}`, { timeout: 12000 });
+          const items = bkRes.data?.BK9;
+          if (Array.isArray(items) && items.length > 0) {
+            directDownloadUrl = items[0]?.url || items[0]?.link;
+            if (items[0]?.type === "image") mediaType = "image";
           }
-          sentMedia = true;
-          break;
+        } catch (_) {}
+      }
+
+      if (!directDownloadUrl) {
+        sock.sendMessage(from, { react: { text: "💔", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          {
+            text: "🌸 *Could not fetch this media!* The post might be private, age-restricted, or removed, honey~"
+          },
+          { quoted: msg }
+        );
+      }
+
+      // -------------------------------------------------------------
+      // Stream Media Buffer (Guaranteed Delivery)
+      // -------------------------------------------------------------
+      const mediaBuffer = await fetchMediaStream(directDownloadUrl);
+
+      const aestheticCaption = 
+`🎀 ｡ﾟ•┈୨ *INSTAGRAM DOWNLOADER* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
+
+  📸 *Source:* Instagram Public Reel / Post
+  ✨ *Format:* High Definition (${mediaType.toUpperCase()})
+  ⚡ *Engine:* Ultra-Fast Stream Relay
+
+━━━━━━━━━━━━━━━━━━━━━
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+      // Dispatch Media
+      if (mediaType === "video" || directDownloadUrl.includes(".mp4")) {
+        if (mediaBuffer) {
+          await sock.sendMessage(
+            from,
+            { video: mediaBuffer, caption: aestheticCaption, mimetype: "video/mp4" },
+            { quoted: msg }
+          );
+        } else {
+          await sock.sendMessage(
+            from,
+            { video: { url: directDownloadUrl }, caption: aestheticCaption },
+            { quoted: msg }
+          );
+        }
+      } else {
+        if (mediaBuffer) {
+          await sock.sendMessage(
+            from,
+            { image: mediaBuffer, caption: aestheticCaption },
+            { quoted: msg }
+          );
+        } else {
+          await sock.sendMessage(
+            from,
+            { image: { url: directDownloadUrl }, caption: aestheticCaption },
+            { quoted: msg }
+          );
         }
       }
 
-      if (!sentMedia) {
-        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await reply("❌ මෙම Link එකෙන් Media එක බාගත කිරීමට නොහැකි විය.");
-      }
+      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
-      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
     } catch (err) {
       console.error("[INSTAGRAM ERROR]:", err.message);
-      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await reply(`❌ Instagram බාගත කිරීම අසාර්ථක විය: ${err.message || "Network Error"}`);
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(
+        from,
+        { text: `🌸 *Glitch detected:* ${err.message || "Network timeout"}` },
+        { quoted: msg }
+      ).catch(() => {});
     }
   }
 };
