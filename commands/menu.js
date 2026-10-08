@@ -5,7 +5,7 @@ import path from "path";
 global.menuTracker = global.menuTracker || new Map();
 global.menuHookedSockets = global.menuHookedSockets || new WeakSet();
 
-// 🔒 PERMANENT LOCKED OFFICIAL LOGO (Cannot be altered or overridden)
+// 🔒 PERMANENT LOCKED OFFICIAL LOGO
 let lockedLogoBuffer = null;
 
 (function initLockedLogo() {
@@ -23,7 +23,6 @@ let lockedLogoBuffer = null;
     }
   }
 
-  // Immutable Official Default URL
   lockedLogoBuffer = { url: "https://files.catbox.moe/k315x4.jpg" };
 })();
 
@@ -72,10 +71,11 @@ function attachMenuReplyEngine(sock) {
 `🎀 ｡ﾟ•┈୨ *GENERAL & INFO* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━━
 
-  🌸 *${p}ping*    ➔ Check bot latency & response ✨
-  🍰 *${p}menu*    ➔ Display aesthetic dashboard 📜
-  💖 *${p}alive*   ➔ Server heartbeat & cute card 🐾
-  🍬 *${p}status*  ➔ Cluster nodes & live metrics ⚡
+  🌸 *${p}ping*       ➔ Check bot response latency ✨
+  🍰 *${p}menu*       ➔ Display aesthetic dashboard 📜
+  💖 *${p}alive*      ➔ Server heartbeat & cute card 🐾
+  🍬 *${p}status*     ➔ Cluster nodes & live metrics ⚡
+  🏷️ *${p}jid*        ➔ Extract instant chat/user JID 🍬
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🐾 *${bName}* • ${link}`;
@@ -87,12 +87,13 @@ function attachMenuReplyEngine(sock) {
 `🎀 ｡ﾟ•┈୨ *MEDIA DOWNLOADER* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━━
 
-  🎵 *${p}song*    ➔ High quality MP3 & Voice notes 🎧
-  🎬 *${p}video*   ➔ Crisp YouTube video downloader 📺
-  🍿 *${p}fb*      ➔ Facebook reels & videos in HD/SD 💌
-  🍭 *${p}tiktok*  ➔ TikTok watermark-free videos 🫧
-  📸 *${p}insta*   ➔ Instagram reels & carousel posts 🌷
-  👁️ *${p}vv*      ➔ Decrypt secret ViewOnce media 🔓
+  🎵 *${p}song*       ➔ High quality MP3 & Voice notes (PTT) 🎧
+  🎬 *${p}video*      ➔ Crisp multi-quality YouTube videos 📺
+  🍿 *${p}fb*         ➔ Facebook HD/SD video downloader 💌
+  🍭 *${p}tiktok*     ➔ TikTok watermark-free HD videos 🫧
+  📸 *${p}insta*      ➔ Instagram Reels & Carousels 🌷
+  🔍 *${p}img*        ➔ Google image search & downloader 🖼️
+  👁️ *${p}vv*         ➔ Decrypt secret ViewOnce media 🔓
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🐾 *${bName}* • ${link}`;
@@ -101,14 +102,16 @@ function attachMenuReplyEngine(sock) {
       case "3":
         reactIcon = "🛡️";
         subText = 
-`🎀 ｡ﾟ•┈୨ *STEALTH & UTILITY* ୧┈•ﾟ｡ 🐾
+`🎀 ｡ﾟ•┈୨ *STEALTH & CONFIG* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━━
 
-  🖼️ *${p}getdp*   ➔ Download user/group profile picture 📸
-  🛡️ *${p}antidel* ➔ Recover deleted chat messages 🌸
-  🍭 *${p}areact*  ➔ Automated sweet message reactions ✨
-  💌 *${p}reply*   ➔ Interactive custom auto-replies 💬
-  🏷️ *${p}jid*     ➔ Extract instant user/group JID 🍬
+  🎛️ *${p}setting*    ➔ All-in-one Master Settings Dashboard ⚙️
+  🎯 *${p}mode*       ➔ Switch Public / Private / Group / Inbox 🌐
+  🛡️ *${p}antisend*   ➔ Auto delete messages (me/from/all) 🚫
+  📸 *${p}getdp*      ➔ Download user/group profile picture 🖼️
+  💌 *${p}addmsg*     ➔ Save permanent auto-reply trigger ✨
+  🗑️ *${p}delmsg*     ➔ Remove saved auto-reply trigger 🧹
+  📑 *${p}allmsg*     ➔ View all stored auto-replies 📋
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🐾 *${bName}* • ${link}`;
@@ -120,26 +123,47 @@ function attachMenuReplyEngine(sock) {
 `🎀 ｡ﾟ•┈୨ *SYSTEM & CLUSTER* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━━
 
-  🤖 *${p}bots*    ➔ View active nodes & RAM metrics 📊
-  📢 *${p}channel* ➔ Auto follow & newsletter reactions 🐦‍🔥
-  ⚡ *${p}creact*  ➔ Turbo channel post multi-reactor 🚀
-  🎶 *${p}csong*   ➔ Post audio notes directly to channel 🎙️
-  🔄 *${p}restart* ➔ Gracefully reboot bot session 💤
+  🤖 *${p}bots*       ➔ View active connected bot instances 📊
+  🔄 *${p}restart*    ➔ Gracefully reboot bot session 💤
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🐾 *${bName}* • ${link}`;
         break;
 
       case "5":
+        reactIcon = "⏰";
+        subText = 
+`🎀 ｡ﾟ•┈୨ *AUTOMATION & TIMERS* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
+
+  ⏰ *${p}settime*     ➔ Set daily recurring timed message 💌
+     _Ex: \`${p}settime <number>,<msg>,<HH:mm>\`_
+  🗑️ *${p}deltime*     ➔ Remove daily timed message 🛑
+  📋 *${p}time list*   ➔ View active scheduled timers 📑
+
+  🚀 *${p}autosend*    ➔ Reply to post & set recurring interval ⏱️
+     _Ex: Reply post with \`${p}autosend <channel_link>\`_
+  🛑 *${p}delautosend* ➔ Cancel recurring post for channel 🧹
+  📑 *${p}listautosend*➔ View all active recurring channel posts 📋
+
+  📢 *${p}autoch*      ➔ Set text interval broadcast to channel 💬
+     _Ex: \`${p}autoch <channel_link>,<msg>,30m\`_
+
+━━━━━━━━━━━━━━━━━━━━━━
+🐾 *${bName}* • ${link}`;
+        break;
+
+      case "6":
         reactIcon = "📜";
         subText = 
 `🎀 ｡ﾟ•┈୨ *COMPLETE INDEX* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━━
 
-  🌸 *${p}ping • ${p}menu • ${p}alive • ${p}status*
-  📥 *${p}song • ${p}video • ${p}fb • ${p}tiktok • ${p}getdp*
-  🛡️ *${p}antidelete • ${p}autoreact • ${p}autoreply*
-  👑 *${p}bots • ${p}channel • ${p}creact • ${p}csong*
+  🌸 *${p}ping • ${p}menu • ${p}alive • ${p}status • ${p}jid*
+  📥 *${p}song • ${p}video • ${p}fb • ${p}tiktok • ${p}insta • ${p}img*
+  🛡️ *${p}setting • ${p}mode • ${p}antisend • ${p}addmsg • ${p}delmsg*
+  👑 *${p}bots • ${p}restart*
+  ⏰ *${p}settime • ${p}deltime • ${p}autosend • ${p}autoch*
 
 ━━━━━━━━━━━━━━━━━━━━━━
 🐾 *${bName}* • ${link}`;
@@ -172,11 +196,9 @@ export default {
   async execute({ sock, msg, from, config, activeBotsCount, commands }) {
     attachMenuReplyEngine(sock);
 
-    // Instant Microsecond Reaction
     sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
     try {
-      // Bitwise Sub-Nanosecond Uptime Math
       const uptimeSec = process.uptime() | 0;
       const hours = (uptimeSec / 3600) | 0;
       const mins = ((uptimeSec % 3600) / 60) | 0;
@@ -188,7 +210,6 @@ export default {
       const fixedLink = "https://heshan.devofc.top/";
       const totalCmds = commands?.size || 0;
 
-      // Cute Aesthetic Pastel Main Menu UI
       const mainCard = 
 `🎀 ｡ﾟ•┈୨ *${botDisplayName.toUpperCase()}* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━━
@@ -204,12 +225,13 @@ export default {
 
   🌸 *[ 1 ]* ➔ General & Info
   📥 *[ 2 ]* ➔ Media Downloader
-  🛡️ *[ 3 ]* ➔ Stealth & Utility
+  🛡️ *[ 3 ]* ➔ Stealth & Config
   👑 *[ 4 ]* ➔ System & Cluster
-  📜 *[ 5 ]* ➔ Full Command Index
+  ⏰ *[ 5 ]* ➔ Automation & Timers ✨
+  📜 *[ 6 ]* ➔ Full Command Index
 
 ━━━━━━━━━━━━━━━━━━━━━━
-🍬 _Reply with *1 - 5* to view commands softly~ (˶˃ ᵕ ˂˶)_
+🍬 _Reply with *1 - 6* to view commands softly~ (˶˃ ᵕ ˂˶)_
 💖 *Official Core* • ${fixedLink}`;
 
       const sentMsg = await sock.sendMessage(
@@ -221,7 +243,6 @@ export default {
         { quoted: msg }
       );
 
-      // Session Tracking (5-Minute O(1) Auto Prune)
       const menuId = sentMsg?.key?.id;
       if (menuId) {
         global.menuTracker.set(menuId, {
