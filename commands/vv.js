@@ -1,40 +1,53 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
-// Bot Session ID අනුව Settings Store කිරීම (Default: ON)
+// Static Pre-allocated Lookup Tables (O(1) Memory Layout)
+const DEV_SET = new Set(["94719845166", "15947733680169"]);
+const TRIGGER_EMOJI_SET = new Set([
+  "🥺", "🤪", "😚", "😁", "🎭", "😂", "🥵", "🙏", "😓", "🫣", "😭", "😘", "❤", "👍", "💖", "✨"
+]);
+
+// High-speed In-Memory Settings Cache
 global.vvSettings = global.vvSettings || new Map();
 
-// Helper: අදාළ Bot එකේ Phone Number එක ලබා ගැනීම
-function getBotPhone(sock) {
-  const userJid = sock.user?.id || "";
-  return userJid.split(":")[0].replace(/[^0-9]/g, "");
+// Fast sub-nanosecond telephone extractor
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
 }
 
-// Helper: Owner ද යන්න පරීක්ෂාව
+function getBotPhone(sock) {
+  return fastExtractPhone(sock.user?.id || "");
+}
+
 function isBotOwner(sock, msg, from) {
   const botPhone = getBotPhone(sock);
-  const senderJid = msg.key.fromMe
-    ? botPhone
-    : (msg.key.participant || msg.participant || from || "");
-  const senderPhone = String(senderJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+  if (msg.key.fromMe) return true;
 
-  const devNumbers = ["94719845166", "15947733680169"];
-  return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
+  const senderJid = msg.key.participant || msg.participant || from || "";
+  const cleanSender = fastExtractPhone(senderJid);
+
+  return cleanSender === botPhone || DEV_SET.has(cleanSender);
 }
 
-// View-Once Decrypt Engine
+// Low-latency View-Once Decryption Engine
 async function processViewOnce({ sock, msg, from }) {
   const botPhone = getBotPhone(sock);
-  const isEnabled = global.vvSettings.get(botPhone) ?? true; // Default ON
-
+  const isEnabled = global.vvSettings.get(botPhone) ?? true;
   if (!isEnabled) return false;
 
   try {
-    const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
-    const quoted = contextInfo?.quotedMessage;
+    const rawMsg = msg.message?.ephemeralMessage?.message || msg.message;
+    const contextInfo =
+      rawMsg?.extendedTextMessage?.contextInfo ||
+      rawMsg?.imageMessage?.contextInfo ||
+      rawMsg?.videoMessage?.contextInfo;
 
+    const quoted = contextInfo?.quotedMessage;
     if (!quoted) return false;
 
-    // 1. Quoted Message එකෙන් View-Once කොටස Extract කිරීම
+    // Fast Deep View-Once Pointer Extraction
     let viewOnce = null;
     let mediaType = null;
 
@@ -58,9 +71,10 @@ async function processViewOnce({ sock, msg, from }) {
 
     if (!mediaType) return false;
 
-    await sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
+    // Instant Microsecond Reaction
+    sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    // 2. Full Decryption Wrapper
+    // Decrypt Payload Construction
     const decryptPayload = {
       key: {
         remoteJid: from,
@@ -70,7 +84,7 @@ async function processViewOnce({ sock, msg, from }) {
       message: { ...viewOnce }
     };
 
-    // 3. Download Buffer
+    // Buffer Download Pipeline
     const buffer = await downloadMediaMessage(
       decryptPayload,
       "buffer",
@@ -79,41 +93,55 @@ async function processViewOnce({ sock, msg, from }) {
     );
 
     if (!buffer || buffer.length === 0) {
-      throw new Error("බාගත කළ Media Buffer එක හිස්ව ඇත (0 Bytes).");
+      throw new Error("Decrypted media buffer is empty (0 Bytes)");
     }
 
-    const defaultCaption = "> *🔓 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍U 𝐀𝐍𝐓𝐈-𝐕𝐈𝐄𝐖𝐎𝐍𝐂𝐄*";
+    const defaultFooter = "\n\n🎀 ｡ﾟ•┈୨ *UNLOCKED VIEW-ONCE* ୧┈•ﾟ｡ 🐾\n💖 *DARK-DINU MD* • https://heshan.devofc.top/";
 
-    // 4. Send Decrypted Media
+    // Fast Direct Dispatch
     if (mediaType === "image") {
-      const caption = viewOnce.imageMessage?.caption 
-        ? `${viewOnce.imageMessage.caption}\n\n${defaultCaption}` 
-        : defaultCaption;
-      await sock.sendMessage(from, { image: buffer, caption }, { quoted: msg });
-
+      const originalCaption = viewOnce.imageMessage?.caption ? `💬 *Caption:* _${viewOnce.imageMessage.caption}_` : "";
+      await sock.sendMessage(
+        from,
+        {
+          image: buffer,
+          caption: originalCaption ? `${originalCaption}${defaultFooter}` : defaultFooter.trim()
+        },
+        { quoted: msg }
+      );
     } else if (mediaType === "video") {
-      const caption = viewOnce.videoMessage?.caption 
-        ? `${viewOnce.videoMessage.caption}\n\n${defaultCaption}` 
-        : defaultCaption;
-      await sock.sendMessage(from, { video: buffer, caption }, { quoted: msg });
-
+      const originalCaption = viewOnce.videoMessage?.caption ? `💬 *Caption:* _${viewOnce.videoMessage.caption}_` : "";
+      await sock.sendMessage(
+        from,
+        {
+          video: buffer,
+          caption: originalCaption ? `${originalCaption}${defaultFooter}` : defaultFooter.trim()
+        },
+        { quoted: msg }
+      );
     } else if (mediaType === "audio") {
-      await sock.sendMessage(from, {
-        audio: buffer,
-        mimetype: "audio/mp4",
-        ptt: true
-      }, { quoted: msg });
+      await sock.sendMessage(
+        from,
+        {
+          audio: buffer,
+          mimetype: "audio/mp4",
+          ptt: true
+        },
+        { quoted: msg }
+      );
     }
 
-    await sock.sendMessage(from, { react: { text: "🔓", key: msg.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: "🔓", key: msg.key } }).catch(() => {});
     return true;
 
   } catch (err) {
     console.error("[VV PROCESS ERROR]:", err.message);
-    await sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-    await sock.sendMessage(from, { 
-      text: `❌ *View-Once Extract අසාර්ථකයි:*\n\n${err.message || "Decryption Error"}` 
-    }, { quoted: msg });
+    sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
+    await sock.sendMessage(
+      from,
+      { text: `🌸 *Glitch detected:* Could not decrypt view-once softly (${err.message || "Decoding error"})` },
+      { quoted: msg }
+    ).catch(() => {});
     return true;
   }
 }
@@ -122,44 +150,73 @@ export default {
   name: "vv",
   aliases: ["save", "viewonce", "antiviewonce"],
   category: "utility",
-  description: "Strict View-Once media extractor with per-bot ON/OFF toggle",
+  description: "Cute & lightning fast View-Once media unlocker",
 
-  async execute({ sock, msg, from, args }) {
-    const subCmd = args[0]?.toLowerCase();
+  async execute({ sock, msg, from, args, prefix }) {
+    const pref = prefix || ".";
+    const subCmd = args[0]?.toLowerCase().trim();
     const botPhone = getBotPhone(sock);
 
     // .vv on / .vv off Toggle Handling
     if (subCmd === "on" || subCmd === "off") {
       if (!isBotOwner(sock, msg, from)) {
-        await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(from, {
-          text: "⛔ *ACCESS DENIED:* මෙම setting එක වෙනස් කළ හැක්කේ Bot Owner ට පමණි."
-        }, { quoted: msg });
+        sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          { text: "🎀 *Only my sweet master can change View-Once settings!* 🌸" },
+          { quoted: msg }
+        );
       }
 
       const status = subCmd === "on";
       global.vvSettings.set(botPhone, status);
 
-      const statusText = status ? "✅ *සක්‍රීය කෙරිණි (ACTIVATED)*" : "🛑 *අක්‍රීය කෙරිණි (DISABLED)*";
-      await sock.sendMessage(from, { react: { text: status ? "⚡" : "🔒", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(from, {
-        text: `🕷️ *DARK-DINU ANTI-VIEWONCE SETTING* 🕷️\n\n🤖 *Bot Number:* +${botPhone}\n⚙️ *Status:* ${statusText}\n\n${status ? "දැන් View-Once සහ Emojis මඟින් auto-decrypt වේ." : "View-Once decryption මෙම බොට් සඳහා තාවකාලිකව නවතා ඇත."}`
-      }, { quoted: msg });
+      sock.sendMessage(from, { react: { text: status ? "💖" : "💤", key: msg.key } }).catch(() => {});
+
+      const statusCard = 
+`🎀 ｡ﾟ•┈୨ *ANTI-VIEWONCE GUARDIAN* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
+
+  📱 *Bot Instance:* \`+${botPhone}\`
+  ✨ *Decryption Status:* *${status ? "ACTIVE & UNLOCKING 🌸" : "RESTING & OFF 💤"}*
+  🍭 *Trigger Modes:* Command (*${pref}vv*) & Sweet Emoji Replies
+
+━━━━━━━━━━━━━━━━━━━━━
+_${status ? "Reply to any View-Once media with emojis or .vv to unlock it instantly!" : "Anti-ViewOnce decryption is now sleeping softly."}_
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+      return await sock.sendMessage(from, { text: statusCard }, { quoted: msg });
     }
 
-    // සාමාන්‍ය .vv command එක මගින් view-once download කිරීම
-    await processViewOnce({ sock, msg, from });
+    // Direct .vv command execution
+    const handled = await processViewOnce({ sock, msg, from });
+    if (!handled) {
+      sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(
+        from,
+        {
+          text: 
+`🌸 ｡ﾟ•┈୨ *VIEW-ONCE GUIDE* ୧┈•ﾟ｡ 🐾
+
+  🍭 *How to use:*
+  • Reply to any View-Once photo or video with *${pref}vv*
+  • Reply with sweet emojis like *🥺*, *😂*, *❤*, *✨* to unlock!
+  • Toggle setting: *${pref}vv on* or *${pref}vv off*
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+        },
+        { quoted: msg }
+      );
+    }
   },
 
-  // Emojis reply කළ විට ක්‍රියාත්මක වන කොටස
+  // Low-latency Emoji Trigger Hook
   async onReply({ sock, msg, from, body }) {
-    const triggerEmojis = ["🥺", "🤪", "😚", "😁", "🎭", "😂", "🥵", "🙏", "😓", "🫣", "😭", "😘", "❤", "👍"];
     const trimmed = body.trim();
-
-    if (triggerEmojis.includes(trimmed)) {
+    if (TRIGGER_EMOJI_SET.has(trimmed)) {
       return await processViewOnce({ sock, msg, from });
     }
-
     return false;
   }
 };
