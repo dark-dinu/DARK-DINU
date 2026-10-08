@@ -1,11 +1,23 @@
 import fs from "fs";
 import path from "path";
 
-// Global Store
+// Global In-Memory Stores
 global.scheduledTimers = global.scheduledTimers || new Map();
 global.schedulerEngineRunning = global.schedulerEngineRunning || false;
 
 const LOCAL_STORAGE_PATH = path.join(process.cwd(), "scheduled_tasks.json");
+
+// Sub-nanosecond Phone Cleaner
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
+}
+
+function getBotPhone(sock) {
+  return fastExtractPhone(sock.user?.id || "");
+}
 
 function loadTasksFromFile() {
   try {
@@ -62,8 +74,8 @@ function formatTargetJid(input = "") {
   return `${cleaned}@s.whatsapp.net`;
 }
 
-// ⏰ 24/7 Precision Scheduler Engine
-export function startGlobalSchedulerEngine(sock) {
+// ⏰ 24/7 Precision Scheduler Engine (Strict Node Matching)
+export function startGlobalSchedulerEngine(defaultSock) {
   if (global.schedulerEngineRunning) return;
   global.schedulerEngineRunning = true;
 
@@ -86,17 +98,31 @@ export function startGlobalSchedulerEngine(sock) {
         task.lastExecutedDate = todayDate;
         syncTaskToDB(task);
 
+        // කමාන්ඩ් එක දැමූ අදාළ බොට්ගේ Socket එක පමණක් සොයා ගැනීම
+        let targetSocket = null;
         const activeSockets = global.activeSockets || new Map();
-        const activeSock = activeSockets.size > 0 ? Array.from(activeSockets.values())[0] : sock;
 
-        if (activeSock) {
+        for (const [nodeId, s] of activeSockets.entries()) {
+          const sPhone = getBotPhone(s);
+          if (sPhone === task.senderBotPhone || String(nodeId).includes(task.senderBotPhone)) {
+            targetSocket = s;
+            break;
+          }
+        }
+
+        // Pool එකේ නැත්නම් කමාන්ඩ් එක run කළ instance එක fallback කරගනී
+        if (!targetSocket && getBotPhone(defaultSock) === task.senderBotPhone) {
+          targetSocket = defaultSock;
+        }
+
+        if (targetSocket) {
           try {
-            await activeSock.sendMessage(task.targetJid, {
+            await targetSocket.sendMessage(task.targetJid, {
               text: task.message
             });
-            console.log(`[SCHEDULE DELIVERED]: ${task.targetJid} ->${timeStr}`);
+            console.log(`[SCHEDULE SENT via +${task.senderBotPhone}]: -> ${task.targetJid} at${timeStr}`);
           } catch (err) {
-            console.error(`[SCHEDULE ERROR]:`, err.message);
+            console.error(`[SCHEDULE SEND FAILED]:`, err.message);
           }
         }
       }
@@ -108,30 +134,37 @@ export default {
   name: "settime",
   aliases: ["time", "deltime", "automsg", "scheduletime"],
   category: "utility",
-  description: "Schedule sweet automatic daily recurring messages",
+  description: "Schedule daily recurring messages strictly from your own bot instance",
 
   async execute({ sock, msg, from, args, body, prefix, config }) {
     startGlobalSchedulerEngine(sock);
     const pref = prefix || config?.PREFIX || ".";
     const fullBody = body.trim();
+    const currentBotPhone = getBotPhone(sock);
 
     // 1. LIST COMMAND: .time list හෝ .listtime
     if (fullBody.toLowerCase().includes("list") && (fullBody.includes("time") || fullBody.includes("schedule"))) {
-      if (global.scheduledTimers.size === 0) {
+      // මෙම බොට් විසින් සකසන ලද ටයිමර් පමණක් ෆිල්ටර් කිරීම
+      const myTasks = Array.from(global.scheduledTimers.values()).filter(
+        (t) => t.senderBotPhone === currentBotPhone
+      );
+
+      if (myTasks.length === 0) {
         sock.sendMessage(from, { react: { text: "💤", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "🌸 *No active scheduled messages found!* Add one softly using `.settime` darling~" },
+          { text: "🌸 *No active scheduled messages found for this bot instance!* Add one using `.settime` darling~" },
           { quoted: msg }
         );
       }
 
       let listText = 
-`🎀 ｡ﾟ•┈୨ *ACTIVE SCHEDULED MESSAGES* ୧┈•ﾟ｡ 🐾
-━━━━━━━━━━━━━━━━━━━━━\n\n`;
+`🎀 ｡ﾟ•┈୨ *YOUR SCHEDULED MESSAGES* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
+🤖 *Sender Instance:* \`+${currentBotPhone}\`\n\n`;
 
       let index = 1;
-      for (const [, t] of global.scheduledTimers.entries()) {
+      for (const t of myTasks) {
         const phone = t.targetJid.split("@")[0];
         listText += `  🌸 *${index}. Target:* \`+${phone}\`\n`;
         listText += `     ⏰ *Time:* \`${t.time}\` (Asia/Colombo)\n`;
@@ -162,7 +195,7 @@ export default {
 
       for (const [id, t] of global.scheduledTimers.entries()) {
         const taskPhone = t.targetJid.split("@")[0];
-        if (taskPhone === targetPhone || id.includes(targetPhone)) {
+        if ((taskPhone === targetPhone || id.includes(targetPhone)) && t.senderBotPhone === currentBotPhone) {
           global.scheduledTimers.delete(id);
           await syncTaskToDB({ id }, true);
           removedCount++;
@@ -173,13 +206,13 @@ export default {
         sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: `🧹 *Removed:* Cleared *${removedCount}* timer(s) for \`+${targetPhone}\` softly!` },
+          { text: `🧹 *Removed:* Cleared *${removedCount}* timer(s) from node \`+${currentBotPhone}\` softly!` },
           { quoted: msg }
         );
       } else {
         return await sock.sendMessage(
           from,
-          { text: `🌸 *No timers found* for \`+${targetPhone}\`, darling!` },
+          { text: `🌸 *No timers found* for \`+${targetPhone}\` under your bot instance!` },
           { quoted: msg }
         );
       }
@@ -201,9 +234,9 @@ export default {
   \`${pref}settime <number>,<message>,<HH:mm>\`
 
   ✨ *Example:*
-  \`${pref}settime 94719845166,නිදියගන්නේ නැද්ද බන්. 😴,23:25\`
+  \`${pref}settime 94719845166,නිදියගන්නේ නැද්ද බන්. 😁,23:28\`
 
-  ⏰ *Note:* Time must be in 24-hour format (\`06:00\`, \`23:25\`).
+  ⏰ *Note:* Time must be in 24-hour format (\`HH:mm\`).
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
@@ -227,9 +260,11 @@ export default {
       );
     }
 
-    const taskId = `${inputPhone.replace(/[^0-9]/g, "")}_${timePart.replace(":", "")}`;
+    // Node-bound Unique Task ID
+    const taskId = `${currentBotPhone}_${inputPhone.replace(/[^0-9]/g, "")}_${timePart.replace(":", "")}`;
     const newTask = {
       id: taskId,
+      senderBotPhone: currentBotPhone, // කමාන්ඩ් එක දැමූ ඔබගේ බොට්ගේ අංකය
       targetJid,
       message: messagePart,
       time: timePart,
@@ -247,13 +282,14 @@ export default {
 `🎀 ｡ﾟ•┈୨ *TIMER SCHEDULED SOFTLY* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
-  📱 *Target:* \`+${inputPhone.replace(/[^0-9]/g, "")}\`
+  🤖 *Sending Node:* \`+${currentBotPhone}\` (Your Bot Only)
+  📱 *Delivering To:* \`+${inputPhone.replace(/[^0-9]/g, "")}\`
   ⏰ *Daily Time:* \`${timePart}\` (Asia/Colombo)
   💌 *Message:* "${messagePart}"
   🔄 *Repeat:* Everyday Daily
 
 ━━━━━━━━━━━━━━━━━━━━━
-_The bot node will automatically deliver this message everyday at the exact minute! (˶˃ ᵕ ˂˶)_
+_This message will strictly be sent from your own bot instance at the exact minute! (˶˃ ᵕ ˂˶)_
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
