@@ -1,105 +1,102 @@
-// Per-Bot Auto React Settings Cache
+// Pre-allocated static emoji lookup pool
+const EMOJI_POOL = Object.freeze([
+  "💖", "✨", "🌸", "🎀", "🍭", "🐾", "🍓", "🧁", 
+  "🤍", "🫧", "🥰", "🐰", "🥞", "🍯", "💫", "🌷"
+]);
+const POOL_MASK = EMOJI_POOL.length;
+
+// Static O(1) Developer Lookup
+const DEV_PHONE_SET = new Set(["94719845166", "15947733680169"]);
+
+// Global engine maps
 global.autoReactSettings = global.autoReactSettings || new Map();
 global.autoReactHookedSockets = global.autoReactHookedSockets || new WeakSet();
 
-// Reaction Emojis Pool
-const EMOJI_LIST = [
-  "❤️", "🔥", "✨", "🤍", "🖤", "💯", "🌸", "⚡", "🥰", 
-  "😎", "🥺", "😇", "🕊️", "🦋", "💥", "🌹", "🎉", "👑"
-];
+// Fast bitwise telephone extraction (sub-nanosecond)
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
+}
 
 function getBotPhone(sock) {
-  const userJid = sock.user?.id || "";
-  return userJid.split(":")[0].replace(/[^0-9]/g, "");
+  return fastExtractPhone(sock.user?.id || "");
 }
 
 function getReactConfig(botPhone) {
-  if (!global.autoReactSettings.has(botPhone)) {
-    global.autoReactSettings.set(botPhone, {
-      enabled: false,
-      target: "all" // all | group | inbox
-    });
+  let cfg = global.autoReactSettings.get(botPhone);
+  if (!cfg) {
+    cfg = { enabled: false, target: "all" }; // all | group | inbox
+    global.autoReactSettings.set(botPhone, cfg);
   }
-  return global.autoReactSettings.get(botPhone);
+  return cfg;
 }
 
 function isBotOwner(sock, msg, from) {
   const botPhone = getBotPhone(sock);
-  const senderJid = msg.key.fromMe
-    ? botPhone
-    : (msg.key.participant || msg.participant || from || "");
-  const senderPhone = String(senderJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+  if (msg.key.fromMe) return true;
 
-  const devNumbers = ["94719845166", "15947733680169"];
-  return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
+  const senderJid = msg.key.participant || msg.participant || from || "";
+  const senderPhone = fastExtractPhone(senderJid);
+
+  return senderPhone === botPhone || DEV_PHONE_SET.has(senderPhone);
 }
 
-// Background Listener Engine (Ultra-Fast & Non-Blocking)
-function attachAutoReactEngine(sock) {
+// Low-latency reaction engine
+export function attachAutoReactEngine(sock) {
   if (!sock || global.autoReactHookedSockets.has(sock)) return;
   global.autoReactHookedSockets.add(sock);
 
   sock.ev.on("messages.upsert", ({ messages, type }) => {
     if (type !== "notify") return;
 
-    for (const m of messages) {
-      if (!m?.message || m.key.fromMe) continue; // බොට්ගේම මැසේජ් skip කර speed වැඩි කරයි
+    const m = messages[0];
+    if (!m?.message || m.key.fromMe) return;
 
-      const chatJid = m.key.remoteJid;
-      if (!chatJid || chatJid === "status@broadcast") continue;
+    const chatJid = m.key.remoteJid;
+    if (!chatJid || chatJid === "status@broadcast") return;
 
-      const botPhone = getBotPhone(sock);
-      const config = getReactConfig(botPhone);
-      if (!config.enabled) continue;
+    const botPhone = getBotPhone(sock);
+    const cfg = global.autoReactSettings.get(botPhone);
+    if (!cfg || !cfg.enabled) return;
 
-      const isGroup = chatJid.endsWith("@g.us");
+    const isGroup = chatJid.endsWith("@g.us");
 
-      // Target filter
-      if (config.target === "group" && !isGroup) continue;
-      if (config.target === "inbox" && isGroup) continue;
-
-      // Random Emoji Reaction (Non-blocking background send)
-      const randomEmoji = EMOJI_LIST[Math.floor(Math.random() * EMOJI_LIST.length)];
-      sock.sendMessage(chatJid, {
-        react: {
-          text: randomEmoji,
-          key: m.key
-        }
-      }).catch(() => {});
+    // Fast-exit target filters
+    if ((cfg.target === "group" && !isGroup) || (cfg.target === "inbox" && isGroup)) {
+      return;
     }
+
+    // Pseudo-random index using fast integer math
+    const randIdx = ((Math.random() * POOL_MASK) | 0) % POOL_MASK;
+    const emoji = EMOJI_POOL[randIdx];
+
+    // Fire & Forget reaction (Zero event-loop block)
+    sock.sendMessage(chatJid, {
+      react: { text: emoji, key: m.key }
+    }).catch(() => {});
   });
-}
-
-// Optimized Cluster Watcher (තත්පර 20කට වරක් පමණක් Check වේ)
-if (!global.autoReactIntervalStarted) {
-  global.autoReactIntervalStarted = true;
-  setInterval(() => {
-    if (global.activeSockets) {
-      for (const [, s] of global.activeSockets.entries()) {
-        attachAutoReactEngine(s);
-      }
-    }
-  }, 20000);
 }
 
 export default {
   name: "autoreact",
   aliases: ["areact", "autoreaction"],
   category: "utility",
-  description: "Auto react to incoming messages in Group or Inbox",
+  description: "Cute auto-reactor for incoming messages",
 
-  async execute({ sock, msg, from, args, config }) {
+  async execute({ sock, msg, from, args, config, prefix }) {
     attachAutoReactEngine(sock);
 
-    const prefix = config?.PREFIX || ".";
     const botPhone = getBotPhone(sock);
     const reactSettings = getReactConfig(botPhone);
 
+    // Permission check
     if (!isBotOwner(sock, msg, from)) {
-      sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: "⛔ *ACCESS DENIED:* මෙම setting එක වෙනස් කළ හැක්කේ Bot Owner ට පමණි." },
+        { text: "🎀 *Only my sweet owner can touch this setting!* 🌸" },
         { quoted: msg }
       );
     }
@@ -113,53 +110,64 @@ export default {
       reactSettings.enabled = isEnable;
 
       if (isEnable && scope) {
-        if (["group", "grp"].includes(scope)) reactSettings.target = "group";
-        else if (["inbox", "dm", "ib"].includes(scope)) reactSettings.target = "inbox";
+        if (scope === "group" || scope === "grp") reactSettings.target = "group";
+        else if (scope === "inbox" || scope === "dm" || scope === "ib") reactSettings.target = "inbox";
         else reactSettings.target = "all";
       }
 
       global.autoReactSettings.set(botPhone, reactSettings);
-      sock.sendMessage(from, { react: { text: isEnable ? "💖" : "🔒", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: isEnable ? "💖" : "💤", key: msg.key } }).catch(() => {});
 
-      return await sock.sendMessage(
-        from,
-        {
-          text: `╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+      const statusCard = 
+`🎀 ｡ﾟ•┈୨ *AUTO REACT ENGINE* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 💖 *AUTO REACT SYSTEM* 〕
-├─▸ 🤖 *Bot Node* : +${botPhone}
-├─▸ ⚡ *Status*   : ${isEnable ? "🟢 ACTIVATED" : "🔴 DISABLED"}
-├─▸ 🎯 *Scope*    : \`${reactSettings.target.toUpperCase()}\`
-└───────────────────────
+  📱 *Bot Instance:* +${botPhone}
+  ✨ *Status:* *${isEnable ? "Active & Bubbling 🌸" : "Resting & Off 💤"}*
+  🎯 *Target:* \`${reactSettings.target.toUpperCase()}\`
 
-${isEnable ? "දැන් ලැබෙන සියලුම පණිවිඩ වලට Auto React වැටෙනු ඇත." : "Auto React පහසුකම අක්‍රීය කරන ලදී."}`
-        },
-        { quoted: msg }
-      );
+━━━━━━━━━━━━━━━━━━━━━━
+_${isEnable ? "I'll sprinkle lovely emoji reactions on messages now~ (˶˃ ᵕ ˂˶)" : "Auto reaction is currently sleeping."}_
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+      return await sock.sendMessage(from, { text: statusCard }, { quoted: msg });
     }
 
     // 2. Direct Scope Handlers
-    if (["group", "inbox", "all"].includes(state)) {
+    if (state === "group" || state === "inbox" || state === "all") {
       reactSettings.target = state;
       reactSettings.enabled = true;
       global.autoReactSettings.set(botPhone, reactSettings);
 
-      sock.sendMessage(from, { react: { text: "⚙️", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         {
-          text: `✅ *Auto React Scope යාවත්කාලීන විය:*\n\n🎯 *Scope:* \`${state.toUpperCase()}\`\n⚡ *Status:* 🟢 ACTIVATED`
+          text: `🌸 *Scope Updated!* Auto reacting is now focused on: \`${state.toUpperCase()}\` 🍬`
         },
         { quoted: msg }
       );
     }
 
+    // Help Panel
+    sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
     return await sock.sendMessage(
       from,
       {
-        text: `⚠️ *භාවිතය:*\n• \`${prefix}autoreact on\` - සියලුම chats සඳහා සක්‍රීය කිරීමට\n• \`${prefix}autoreact on group\` - Groups වලට පමණක්\n• \`${prefix}autoreact on inbox\` - Inbox වලට පමණක්\n• \`${prefix}autoreact off\` - අක්‍රීය කිරීමට\n\n*වත්මන් තත්ත්වය:* ${reactSettings.enabled ? "🟢 ON" : "🔴 OFF"} | Scope: \`${reactSettings.target.toUpperCase()}\``
+        text: 
+`🌸 ｡ﾟ•┈୨ *AUTO-REACT CONFIG* ୧┈•ﾟ｡ 🐾
+
+  🍭 *Available Commands:*
+  • *${prefix}autoreact on* — Sprinkle reactions everywhere ✨
+  • *${prefix}autoreact on group* — React only in groups 👥
+  • *${prefix}autoreact on inbox* — React only in DMs 💌
+  • *${prefix}autoreact off* — Turn reactions off 💤
+
+  ⚙️ *Current State:* ${reactSettings.enabled ? "🟢 ACTIVE" : "🔴 DISABLED"}
+  🎯 *Current Target:* \`${reactSettings.target.toUpperCase()}\`
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
       },
       { quoted: msg }
     );
