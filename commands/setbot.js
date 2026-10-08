@@ -60,7 +60,7 @@ export default {
 👤 *Bot Number :* +${botNumber}
 🏷️ *New Name   :* ${value}
 
-> ✅ MongoDB හි සාර්ථකව Save විය. Restart වුවද වෙනස් නොවේ!`
+> *https://heshan.devofc.top/ 📍`
         );
       }
 
@@ -101,7 +101,7 @@ export default {
 👤 *Bot Number :* +${botNumber}
 🔗 *Logo URL   :* ${logoUrl}
 
-> ✅ MongoDB හි සාර්ථකව Save විය. Restart වුවද වෙනස් නොවේ!`
+> *https://heshan.devofc.top/ 📍*`
         );
       }
 
