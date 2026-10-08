@@ -1,31 +1,31 @@
 import { MongoClient } from "mongodb";
 
-// Cache & Mutex Stores
+// Static Developer Lookup Table (O(1) Memory Set)
+const DEV_SET = new Set(["94719845166", "15947733680169"]);
+
+// In-Memory Fast Cache Store
 global.botSettingsStore = global.botSettingsStore || new Map();
 global.settingsHookedSockets = global.settingsHookedSockets || new WeakSet();
 
-let mongoDbInstance = null;
-
-// MongoDB Connection Instance එක ලබාගැනීම
-async function getSettingsDB(mongoUri, dbName) {
-  if (mongoDbInstance) return mongoDbInstance;
-  try {
-    const client = new MongoClient(mongoUri);
-    await client.connect();
-    mongoDbInstance = client.db(dbName);
-    return mongoDbInstance;
-  } catch (e) {
-    console.error("[Settings DB Error]:", e.message);
-    return null;
-  }
+// Fast sub-nanosecond telephone extractor
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
 }
 
 function getBotPhone(sock) {
-  const userJid = sock.user?.id || "";
-  return userJid.split(":")[0].replace(/[^0-9]/g, "");
+  return fastExtractPhone(sock.user?.id || "");
 }
 
-// 1. Settings Database එකෙන් Load කර Memory එකට Sync කිරීම
+function getDbInstance(appConfig) {
+  const client = global.mongoClient || global.sharedMongoClient;
+  if (!client) return null;
+  return client.db(appConfig?.DB_NAME || "whatsapp_multi_bots");
+}
+
+// 1. Fast Memory Cache with Background Fallback
 async function loadBotConfig(botPhone, config) {
   if (global.botSettingsStore.has(botPhone)) {
     return global.botSettingsStore.get(botPhone);
@@ -33,16 +33,16 @@ async function loadBotConfig(botPhone, config) {
 
   const defaultSettings = {
     botPhone,
-    mode: "public", // public | private | group | inbox
-    antiSend: "off", // off | me | from | all
+    mode: "public",
+    antiSend: "off",
     antiDelete: true,
     statusSeen: true,
     statusReact: true,
-    statusEmoji: "💚"
+    statusEmoji: "💖"
   };
 
   try {
-    const db = await getSettingsDB(config.MONGODB_URI, config.DB_NAME);
+    const db = getDbInstance(config);
     if (db) {
       const col = db.collection("cluster_settings");
       const savedData = await col.findOne({ botPhone });
@@ -63,65 +63,63 @@ async function loadBotConfig(botPhone, config) {
   return defaultSettings;
 }
 
-// 2. Settings වෙනස් වූ විට Database එකට Save කිරීම
-async function saveBotConfig(botPhone, newSettings, config) {
+// 2. Non-blocking Asynchronous DB Persistence
+function saveBotConfig(botPhone, newSettings, config) {
   global.botSettingsStore.set(botPhone, newSettings);
-  try {
-    const db = await getSettingsDB(config.MONGODB_URI, config.DB_NAME);
-    if (db) {
-      const col = db.collection("cluster_settings");
-      await col.updateOne(
-        { botPhone },
-        { $set: newSettings },
-        { upsert: true }
-      );
+  setImmediate(async () => {
+    try {
+      const db = getDbInstance(config);
+      if (db) {
+        const col = db.collection("cluster_settings");
+        await col.updateOne(
+          { botPhone },
+          { $set: newSettings },
+          { upsert: true }
+        );
+      }
+    } catch (err) {
+      console.error("[DB Settings Save Error]:", err.message);
     }
-  } catch (err) {
-    console.error("[DB Settings Save Error]:", err.message);
-  }
+  });
 }
 
-// Bot Owner Check
 function isBotOwner(sock, msg, from) {
   const botPhone = getBotPhone(sock);
-  const senderJid = msg.key.fromMe
-    ? botPhone
-    : (msg.key.participant || msg.participant || from || "");
-  const senderPhone = String(senderJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+  if (msg.key.fromMe) return true;
 
-  const devNumbers = ["94719845166", "15947733680169"];
-  return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
+  const senderJid = msg.key.participant || msg.participant || from || "";
+  const cleanSender = fastExtractPhone(senderJid);
+
+  return cleanSender === botPhone || DEV_SET.has(cleanSender);
 }
 
-// Background Middleware (Modes & Anti-Send Interceptor)
-function attachSettingsEngine(sock, appConfig) {
+// Low-latency Interceptor Engine
+export function attachSettingsEngine(sock, appConfig) {
   if (!sock || global.settingsHookedSockets.has(sock)) return;
   global.settingsHookedSockets.add(sock);
 
-  // Pre-load from MongoDB
   const botPhone = getBotPhone(sock);
   if (botPhone) loadBotConfig(botPhone, appConfig);
 
-  // Mode Enforcement
+  // Fast-Path Mode Check
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const m = messages[0];
     if (!m?.message) return;
 
     const from = m.key.remoteJid;
-    if (from === "status@broadcast") return;
+    if (!from || from === "status@broadcast") return;
 
     const currentPhone = getBotPhone(sock);
-    const settings = await loadBotConfig(currentPhone, appConfig);
+    const settings = global.botSettingsStore.get(currentPhone) || await loadBotConfig(currentPhone, appConfig);
 
     const isGroup = from.endsWith("@g.us");
-    const sender = isGroup 
-      ? (m.key.participant || m.participant || from) 
+    const sender = isGroup
+      ? (m.key.participant || m.participant || from)
       : (m.key.fromMe ? (sock.user?.id || from) : from);
-    const cleanSender = String(sender).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+    const cleanSender = fastExtractPhone(sender);
 
-    const devNumbers = ["94719845166", "15947733680169"];
-    const isOwner = m.key.fromMe || cleanSender === currentPhone || devNumbers.includes(cleanSender);
+    const isOwner = m.key.fromMe || cleanSender === currentPhone || DEV_SET.has(cleanSender);
 
     if (!isOwner) {
       if (settings.mode === "private") {
@@ -144,7 +142,7 @@ function attachSettingsEngine(sock, appConfig) {
     for (const m of messages) {
       if (!m?.message) continue;
       const chatJid = m.key.remoteJid;
-      if (chatJid === "status@broadcast") continue;
+      if (!chatJid || chatJid === "status@broadcast") continue;
 
       const currentPhone = getBotPhone(sock);
       const settings = global.botSettingsStore.get(currentPhone);
@@ -160,23 +158,11 @@ function attachSettingsEngine(sock, appConfig) {
   });
 }
 
-// Background Cluster Auto Hook
-setInterval(() => {
-  if (global.activeSockets) {
-    for (const [, s] of global.activeSockets.entries()) {
-      attachSettingsEngine(s, {
-        MONGODB_URI: "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-        DB_NAME: "whatsapp_multi_bots"
-      });
-    }
-  }
-}, 2000);
-
 export default {
   name: "setting",
   aliases: ["settings", "botmode", "mode", "antisend", "config"],
   category: "owner",
-  description: "Persistent Cluster Control Panel (MongoDB Backed)",
+  description: "Cute & fast persistent cluster settings manager",
 
   async execute({ sock, msg, from, args, body, config: botAppConfig }) {
     attachSettingsEngine(sock, botAppConfig);
@@ -186,61 +172,96 @@ export default {
     const settings = await loadBotConfig(botPhone, botAppConfig);
 
     if (!isBotOwner(sock, msg, from)) {
-      await sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: "⛔ *ACCESS DENIED:* මෙම සැකසුම් වෙනස් කළ හැක්කේ Bot Owner හට පමණි." },
+        { text: "🎀 *Only my sweet master can change bot configurations!* 🌸" },
         { quoted: msg }
       );
     }
 
     const fullBody = body.trim().slice(prefix.length).trim();
-    const commandTrigger = fullBody.split(/ +/)[0].toLowerCase();
+    const commandTrigger = fullBody.split(/\s+/)[0].toLowerCase();
 
     // 1. Anti-Send Controller (.antisend me / from / all / off)
     if (commandTrigger === "antisend") {
       const modeArg = args[0]?.toLowerCase().trim();
       if (!["me", "from", "all", "off"].includes(modeArg)) {
-        return await sock.sendMessage(from, {
-          text: `⚠️ *භාවිතය:*\n• \`${prefix}antisend me\` (මම යවන ඒවා Auto Delete)\n• \`${prefix}antisend from\` (අනික් අය එවන ඒවා Auto Delete)\n• \`${prefix}antisend all\` (සියල්ල Auto Delete)\n• \`${prefix}antisend off\` (අක්‍රීය කිරීමට)\n\n*වත්මන් තත්ත්වය:* \`${settings.antiSend.toUpperCase()}\``
-        }, { quoted: msg });
+        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          {
+            text: 
+`🌸 ｡ﾟ•┈୨ *ANTI-SEND OPTIONS* ୧┈•ﾟ｡ 🐾
+
+  • *${prefix}antisend me*   ➔ Auto-delete messages sent by me
+  • *${prefix}antisend from* ➔ Auto-delete incoming messages
+  • *${prefix}antisend all*  ➔ Auto-delete all messages
+  • *${prefix}antisend off*  ➔ Disable anti-send
+
+  ⚙️ *Current Mode:* \`${settings.antiSend.toUpperCase()}\`
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+          },
+          { quoted: msg }
+        );
       }
 
       settings.antiSend = modeArg;
-      await saveBotConfig(botPhone, settings, botAppConfig);
+      saveBotConfig(botPhone, settings, botAppConfig);
 
-      await sock.sendMessage(from, { react: { text: "🛡️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(from, {
-        text: `✅ *Anti-Send යාවත්කාලීන විය (Saved to DB):*\n\n🤖 *Node:* +${botPhone}\n⚡ *Mode:* \`${modeArg.toUpperCase()}\``
-      }, { quoted: msg });
+      sock.sendMessage(from, { react: { text: "🛡️", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        {
+          text: `✨ *Anti-Send Updated!* Active mode set to: \`${modeArg.toUpperCase()}\` softly. 🌸`
+        },
+        { quoted: msg }
+      );
     }
 
     // 2. Mode Controller (.mode public / private / group / inbox)
     if (commandTrigger === "mode" || commandTrigger === "botmode") {
       let modeArg = args[0]?.toLowerCase().trim();
 
-      // Typos Auto-Correction
       if (modeArg === "privet" || modeArg === "prv" || modeArg === "pvt") modeArg = "private";
       else if (modeArg === "pub" || modeArg === "pbl") modeArg = "public";
       else if (modeArg === "grp" || modeArg === "groups") modeArg = "group";
       else if (modeArg === "dm" || modeArg === "ib") modeArg = "inbox";
 
       if (!["public", "private", "group", "inbox"].includes(modeArg)) {
-        return await sock.sendMessage(from, {
-          text: `⚠️ *භාවිතය:*\n• \`${prefix}mode public\` (සියල්ලන්ටම විවෘතයි)\n• \`${prefix}mode private\` (Owner ට පමණයි)\n• \`${prefix}mode group\` (Groups වලට පමණයි)\n• \`${prefix}mode inbox\` (DM/Inbox වලට පමණයි)\n\n*වත්මන් Mode එක:* \`${settings.mode.toUpperCase()}\``
-        }, { quoted: msg });
+        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          {
+            text: 
+`🌸 ｡ﾟ•┈୨ *BOT WORK MODES* ୧┈•ﾟ｡ 🐾
+
+  • *${prefix}mode public*  ➔ Open to all users & chats 🌐
+  • *${prefix}mode private* ➔ Only respond to owner 🔒
+  • *${prefix}mode group*   ➔ Active only in groups 👥
+  • *${prefix}mode inbox*   ➔ Active only in direct messages 💌
+
+  ⚙️ *Current Mode:* \`${settings.mode.toUpperCase()}\`
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+          },
+          { quoted: msg }
+        );
       }
 
       settings.mode = modeArg;
-      await saveBotConfig(botPhone, settings, botAppConfig);
+      saveBotConfig(botPhone, settings, botAppConfig);
 
-      await sock.sendMessage(from, { react: { text: "⚙️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(from, {
-        text: `✅ *Bot Mode එක සාර්ථකව මාරු විය (Saved to DB):*\n\n🤖 *Node:* +${botPhone}\n🎯 *New Mode:* \`${modeArg.toUpperCase()}\``
-      }, { quoted: msg });
+      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        {
+          text: `🌸 *Bot Mode Updated!* Successfully shifted to \`${modeArg.toUpperCase()}\` mode sweetly~ ✨`
+        },
+        { quoted: msg }
+      );
     }
 
-    // 3. Status & Anti-Delete Sync Toggle
+    // 3. Status & Anti-Delete Sync Toggles
     const subAction = args[0]?.toLowerCase();
     const subVal = args[1]?.toLowerCase();
 
@@ -248,56 +269,71 @@ export default {
       const state = subVal === "on";
       settings.antiDelete = state;
       global.antiDeleteSettings?.set(botPhone, state);
-      await saveBotConfig(botPhone, settings, botAppConfig);
-      return await sock.sendMessage(from, { text: `🛡️ Anti-Delete: *${state ? "ENABLED" : "DISABLED"}* (Saved)` }, { quoted: msg });
+      saveBotConfig(botPhone, settings, botAppConfig);
+
+      sock.sendMessage(from, { react: { text: state ? "🛡️" : "💤", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        { text: `🌸 *Anti-Delete Guardian:* *${state ? "ACTIVATED 🛡️✨" : "DISABLED 💤"}*` },
+        { quoted: msg }
+      );
     }
 
     if (subAction === "stseen") {
       const state = subVal === "on";
       settings.statusSeen = state;
       if (global.statusSettings?.get(botPhone)) global.statusSettings.get(botPhone).seen = state;
-      await saveBotConfig(botPhone, settings, botAppConfig);
-      return await sock.sendMessage(from, { text: `👁️ Status Auto Seen: *${state ? "ENABLED" : "DISABLED"}* (Saved)` }, { quoted: msg });
+      saveBotConfig(botPhone, settings, botAppConfig);
+
+      sock.sendMessage(from, { react: { text: state ? "👁️" : "💤", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        { text: `🌸 *Status Auto-Seen:* *${state ? "ACTIVATED 👁️✨" : "DISABLED 💤"}*` },
+        { quoted: msg }
+      );
     }
 
     if (subAction === "stract") {
       const state = subVal === "on";
       settings.statusReact = state;
       if (global.statusSettings?.get(botPhone)) global.statusSettings.get(botPhone).react = state;
-      await saveBotConfig(botPhone, settings, botAppConfig);
-      return await sock.sendMessage(from, { text: `💖 Status Auto React: *${state ? "ENABLED" : "DISABLED"}* (Saved)` }, { quoted: msg });
+      saveBotConfig(botPhone, settings, botAppConfig);
+
+      sock.sendMessage(from, { react: { text: state ? "💖" : "💤", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        { text: `🌸 *Status Auto-React:* *${state ? "ACTIVATED 💖✨" : "DISABLED 💤"}*` },
+        { quoted: msg }
+      );
     }
 
-    // 4. Default Settings Main Dashboard
+    // 4. Main Cute Configuration Dashboard
+    sock.sendMessage(from, { react: { text: "🎛️", key: msg.key } }).catch(() => {});
+
     const dashboardCard = 
-`╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+`🎀 ｡ﾟ•┈୨ *SETTINGS & CONTROL* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 ⚙️ *BOT CONFIGURATION PANEL* 〕
-├─▸ 🤖 *Active Node* : +${botPhone}
-├─▸ 🎯 *Work Mode*   : \`${settings.mode.toUpperCase()}\`
-├─▸ 🚫 *Anti-Send*   : \`${settings.antiSend.toUpperCase()}\`
-├─▸ 🛡️ *Anti-Delete* : ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"}
-├─▸ 👁️ *Status Seen* : ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"}
-├─▸ 💖 *Status React*: ${settings.statusReact ? "🟢 ON" : "🔴 OFF"}
-├─▸ 🎭 *React Emoji* : ${settings.statusEmoji}
-├─▸ 💾 *Storage*     : 🟢 MongoDB Synced
-└───────────────────────
+  📱 *Bot Instance:* \`+${botPhone}\`
+  🎯 *Working Mode:* \`${settings.mode.toUpperCase()}\`
+  🚫 *Anti-Send:* \`${settings.antiSend.toUpperCase()}\`
+  🛡️ *Anti-Delete:* ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"}
+  👁️ *Status Seen:* ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"}
+  💖 *Status React:* ${settings.statusReact ? "🟢 ON" : "🔴 OFF"}
+  🍭 *React Symbol:* ${settings.statusEmoji}
+  💾 *Database Sync:* 🟢 Cloud Memory
 
-┌─〔 🛠️ *CONTROL COMMANDS* 〕
-├─▸ \`${prefix}mode public / private / group / inbox\`
-├─▸ \`${prefix}antisend me / from / all / off\`
-├─▸ \`${prefix}antidel on / off\`
-├─▸ \`${prefix}stseen on / off\`
-├─▸ \`${prefix}stract on / off\`
-├─▸ \`${prefix}setst react <emoji>\`
-└───────────────────────
+━━━━━━━━━━━━━━━━━━━━━━
+🍬 *QUICK CONTROL COMMANDS*
+  • *${prefix}mode <public|private|group|inbox>*
+  • *${prefix}antisend <me|from|all|off>*
+  • *${prefix}setting antidel <on|off>*
+  • *${prefix}setting stseen <on|off>*
+  • *${prefix}setting stract <on|off>*
 
-> 👑 *Developer:* DINIDU HESHAN
-> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐂𝐋𝐔𝐒𝐓𝐄𝐑 🐦‍🔥*`;
+━━━━━━━━━━━━━━━━━━━━━━
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
     await sock.sendMessage(from, { text: dashboardCard }, { quoted: msg });
-    await sock.sendMessage(from, { react: { text: "🎛️", key: msg.key } }).catch(() => {});
   }
 };
