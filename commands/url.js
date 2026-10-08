@@ -11,55 +11,39 @@ async function streamToBuffer(stream) {
   return Buffer.concat(chunks);
 }
 
-// Multi-Host Uploader (Catbox -> Tmpfiles Fallback)
-async function uploadToCloud(buffer, filename, mimeType) {
-  // 1. Try Catbox Moe
-  try {
-    const form = new FormData();
-    form.append("reqtype", "fileupload");
-    form.append("fileToUpload", buffer, { filename, contentType: mimeType });
+// 100% Dedicated Catbox Moe Uploader
+async function uploadToCatbox(buffer, filename, mimeType) {
+  const form = new FormData();
+  form.append("reqtype", "fileupload");
+  form.append("fileToUpload", buffer, {
+    filename,
+    contentType: mimeType
+  });
 
-    const res = await axios.post("https://catbox.moe/user/api.php", form, {
-      headers: form.getHeaders(),
-      timeout: 30000,
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity
-    });
+  const response = await axios.post("https://catbox.moe/user/api.php", form, {
+    headers: {
+      ...form.getHeaders(),
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    },
+    timeout: 60000,
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity
+  });
 
-    if (typeof res.data === "string" && res.data.startsWith("http")) {
-      return res.data.trim();
-    }
-  } catch (_) {}
+  const mediaUrl = typeof response.data === "string" ? response.data.trim() : null;
 
-  // 2. Fallback: tmpfiles.org
-  try {
-    const formFallback = new FormData();
-    formFallback.append("file", buffer, { filename, contentType: mimeType });
-
-    const resFallback = await axios.post("https://tmpfiles.org/api/v1/upload", formFallback, {
-      headers: formFallback.getHeaders(),
-      timeout: 30000,
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity
-    });
-
-    const fileUrl = resFallback.data?.data?.url;
-    if (fileUrl) {
-      // Direct download link conversion
-      return fileUrl.replace("tmpfiles.org/", "tmpfiles.org/dl/");
-    }
-  } catch (err) {
-    throw new Error("සියලුම upload hosts unreachable. නැවත උත්සාහ කරන්න.");
+  if (!mediaUrl || !mediaUrl.startsWith("http")) {
+    throw new Error(response.data || "Catbox upload failed.");
   }
 
-  throw new Error("Upload response invalid.");
+  return mediaUrl;
 }
 
 export default {
   name: "url",
   aliases: ["tourl", "geturl", "upload", "catbox"],
   category: "utility",
-  description: "Convert Image, Video, Audio, Voice note, Sticker, or Document into a direct URL",
+  description: "Convert Image, Video, Audio, Voice note, Sticker, or Document into a permanent Catbox URL",
 
   async execute({ sock, msg, from }) {
     try {
@@ -116,7 +100,7 @@ export default {
         return await sock.sendMessage(
           from,
           {
-            text: "⚠️ *භාවිතා කරන ආකාරය:*\n\nImage, Video, Audio, Sticker හෝ Document එකකට reply කර *.url* ලෙස send කරන්න."
+            text: "⚠️ *භාවිතා කරන ආකාරය:*\n\nImage, Video, Audio, Sticker හෝ Document එකකට reply කර *.url* හෝ *.catbox* ලෙස send කරන්න."
           },
           { quoted: msg }
         );
@@ -124,7 +108,7 @@ export default {
 
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Direct Stream Download via Baileys core
+      // Direct Stream Download
       const stream = await downloadContentFromMessage(mediaNode, mediaType);
       const buffer = await streamToBuffer(stream);
 
@@ -138,7 +122,7 @@ export default {
       }
 
       const filename = `dark_dinu_${Date.now()}${fileExt}`;
-      const mediaUrl = await uploadToCloud(buffer, filename, mimeType);
+      const mediaUrl = await uploadToCatbox(buffer, filename, mimeType);
       const sizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
 
       const resultText = 
@@ -146,7 +130,7 @@ export default {
    🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
 ╚══════════════════════╝
 
-┌─〔 🔗 *DIRECT URL ENGINE* 〕
+┌─〔 🐱 *CATBOX URL ENGINE* 〕
 ├─▸ 📁 *Type* : ${mediaLabel}
 ├─▸ 📦 *Size* : ${sizeMB} MB
 ├─▸ 🌐 *Link* :
@@ -162,7 +146,7 @@ export default {
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `❌ URL එක සෑදීම අසාර්ථක විය: ${err.message}` },
+        { text: `❌ Catbox URL එක සෑදීම අසාර්ථක විය: ${err.message}` },
         { quoted: msg }
       );
     }
