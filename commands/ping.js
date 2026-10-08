@@ -2,20 +2,33 @@ export default {
   name: "ping",
   aliases: ["p", "speed"],
   category: "general",
-  description: "Ultra Fast Real-Time Latency Ping",
+  description: "Ultra Fast Real Network Latency",
 
   async execute({ sock, msg, from }) {
-    const start = performance.now();
-    const msgTimestamp = Number(msg.messageTimestamp) * 1000 || Date.now();
-    const inboundLatency = Math.max(1, Math.round(Date.now() - msgTimestamp));
-    const latency = Math.round(performance.now() - start + (inboundLatency > 300 ? 38 : inboundLatency));
+    const tStart = Date.now();
+    const msgStamp = Number(msg.messageTimestamp) * 1000 || tStart;
+    
+    // Inbound network delay (Message sent -> Server received)
+    const inbound = Math.max(1, tStart - msgStamp);
 
-    // Instant Direct Reply
-    await sock.sendMessage(from, {
-      text: `🕷️ 𝐏𝐨𝐧𝐠 ! ❯❯ ${latency} ms ⚡`
+    // Initial message send
+    const sent = await sock.sendMessage(from, {
+      text: `🕷️ 𝐏𝐨𝐧𝐠 ! ❯❯ ... ms ⚡`
     });
 
-    // Fast background reaction
+    // Outbound round-trip duration
+    const roundTrip = Date.now() - tStart;
+    const finalPing = inbound > 0 && inbound < 2000 ? Math.round((inbound + roundTrip) / 2) : roundTrip;
+
+    // Direct in-place edit for accurate round-trip calculation
+    if (sent?.key) {
+      await sock.sendMessage(from, {
+        text: `🕷️ 𝐏𝐨𝐧𝐠 ! ❯❯ ${finalPing} ms ⚡`,
+        edit: sent.key
+      });
+    }
+
+    // Reaction in background
     sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
   }
 };
