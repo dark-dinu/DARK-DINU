@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
-// In-Memory Fast Lookup Maps (O(1))
+// In-Memory Fast Lookup Maps
 global.autoSendSessions = global.autoSendSessions || new Map();
 global.autoSendTimers = global.autoSendTimers || new Map();
 global.autoSendEngineRunning = global.autoSendEngineRunning || false;
@@ -10,7 +10,6 @@ global.autoSendHookedSockets = global.autoSendHookedSockets || new WeakSet();
 
 const LOCAL_STORAGE_PATH = path.join(process.cwd(), "autosend_tasks.json");
 
-// Sub-nanosecond Phone Cleaner
 function fastExtractPhone(jid = "") {
   const atIdx = jid.indexOf("@");
   const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
@@ -22,13 +21,11 @@ function getBotPhone(sock) {
   return fastExtractPhone(sock.user?.id || "");
 }
 
-// Extract Invite Code from Channel Link
 function extractChannelInviteCode(input = "") {
   const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
   return match ? match[1] : input.trim();
 }
 
-// Resolve Channel JID (@newsletter)
 async function resolveChannelJid(sock, input) {
   if (!input) return null;
   const cleanInput = input.trim();
@@ -44,7 +41,24 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
-// Time Interval Preset Map
+// Deep Multi-Layer Text Extractor (Handles massive forwarded posts & link previews)
+function extractFullPostText(quotedMsg) {
+  if (!quotedMsg) return "";
+
+  const unwrap = quotedMsg.ephemeralMessage?.message || quotedMsg.viewOnceMessage?.message || quotedMsg;
+
+  return (
+    unwrap.conversation ||
+    unwrap.extendedTextMessage?.text ||
+    unwrap.imageMessage?.caption ||
+    unwrap.videoMessage?.caption ||
+    unwrap.documentMessage?.caption ||
+    unwrap.extendedTextMessage?.matchedText ||
+    unwrap.extendedTextMessage?.description ||
+    ""
+  ).trim();
+}
+
 const INTERVAL_OPTIONS = Object.freeze({
   "0": { label: "Every 1 Minute ⚡ (Live Fast Test)", ms: 1 * 60 * 1000 },
   "00": { label: "Every 2 Minutes ⏱️ (Short Test)", ms: 2 * 60 * 1000 },
@@ -55,7 +69,6 @@ const INTERVAL_OPTIONS = Object.freeze({
   "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
 });
 
-// Storage Handlers
 function loadTasksFromFile() {
   try {
     if (fs.existsSync(LOCAL_STORAGE_PATH)) {
@@ -105,7 +118,7 @@ async function syncTaskToDB(task, isDelete = false) {
   } catch (_) {}
 })();
 
-// Core Dispatch Function to Newsletter
+// Full Payload Dispatch Engine
 async function dispatchToChannel(sock, task) {
   try {
     if (task.imageBufferBase64) {
@@ -119,7 +132,7 @@ async function dispatchToChannel(sock, task) {
         text: task.caption
       });
     }
-    console.log(`[AUTOSEND DISPATCHED]: Successfully sent to ${task.channelJid}`);
+    console.log(`[AUTOSEND DISPATCHED]: Big post delivered to ${task.channelJid}`);
     return true;
   } catch (err) {
     console.error(`[AUTOSEND DISPATCH ERROR]: ${err.message}`);
@@ -127,7 +140,7 @@ async function dispatchToChannel(sock, task) {
   }
 }
 
-// Precision Publishing Loop (Runs every 10 seconds)
+// Precision Loop
 export function startAutoSendEngine(defaultSock) {
   if (global.autoSendEngineRunning) return;
   global.autoSendEngineRunning = true;
@@ -142,7 +155,6 @@ export function startAutoSendEngine(defaultSock) {
         task.lastSentTime = now;
         syncTaskToDB(task);
 
-        // Find Exact Socket
         let targetSocket = null;
         const activeSockets = global.activeSockets || new Map();
 
@@ -193,7 +205,6 @@ export function hookAutoSendReplyEngine(sock) {
 
     if (!INTERVAL_OPTIONS[choice]) return;
 
-    // Session lock & removal
     global.autoSendSessions.delete(quotedId);
     const chosen = INTERVAL_OPTIONS[choice];
 
@@ -208,13 +219,13 @@ export function hookAutoSendReplyEngine(sock) {
       imageBufferBase64: session.imageBufferBase64,
       intervalMs: chosen.ms,
       intervalLabel: chosen.label,
-      lastSentTime: Date.now() // Timer initialized
+      lastSentTime: Date.now()
     };
 
     global.autoSendTimers.set(taskId, newTask);
     await syncTaskToDB(newTask);
 
-    // ⚡ INSTANT DISPATCH: ක්ෂණිකව පළමු post එක දැන්ම channel එකට යවයි
+    // Instant Delivery
     await dispatchToChannel(sock, newTask);
 
     sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
@@ -226,10 +237,11 @@ export function hookAutoSendReplyEngine(sock) {
   📢 *Target Channel:* \`${session.channelJid}\`
   ⏳ *Selected Time:* ${chosen.label}
   🚀 *Initial Post:* Dispatched Right Now! ✨
-  🖼️ *Attachment:* ${session.imageBufferBase64 ? "🟢 Image + Text Post" : "📝 Text Only"}
+  📝 *Characters Captured:* \`${session.caption.length} Characters\`
+  🖼️ *Attachment:* ${session.imageBufferBase64 ? "🟢 Image + Big Post" : "📝 Full Text Post"}
 
 ━━━━━━━━━━━━━━━━━━━━━
-_The first post has been sent! Next posts will automatically repeat every ${chosen.label}! (˶˃ ᵕ ˂˶)_
+_The full post has been sent! Repeating every ${chosen.label}! (˶˃ ᵕ ˂˶)_
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
@@ -241,7 +253,7 @@ export default {
   name: "autosend",
   aliases: ["delautosend", "listautosend"],
   category: "owner",
-  description: "Reply to any post or image and schedule recurring publishing to channels",
+  description: "Schedule massive posts or images to channels recurringly",
 
   async execute({ sock, msg, from, args, body, prefix, config }) {
     startAutoSendEngine(sock);
@@ -252,7 +264,7 @@ export default {
     const cleanCmd = fullBody.slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
     const currentBotPhone = getBotPhone(sock);
 
-    // 1. LIST COMMAND: .listautosend
+    // 1. LIST COMMAND
     if (cleanCmd === "listautosend") {
       const myTasks = Array.from(global.autoSendTimers.values()).filter(
         (t) => t.senderBotPhone === currentBotPhone
@@ -275,7 +287,7 @@ export default {
         listText += `  🌸 *${index}. Channel:* \`${t.channelJid}\`\n`;
         listText += `     ⏳ *Repeat:* ${t.intervalLabel}\n`;
         listText += `     🖼️ *Media:* ${t.imageBufferBase64 ? "Image Attached" : "Text"}\n`;
-        listText += `     💬 *Caption Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
+        listText += `     💬 *Preview:* "${(t.caption || "").slice(0, 40)}..."\n\n`;
         index++;
       }
 
@@ -284,18 +296,9 @@ export default {
       return await sock.sendMessage(from, { text: listText }, { quoted: msg });
     }
 
-    // 2. DELETE COMMAND: .delautosend <channel_link_or_jid>
+    // 2. DELETE COMMAND
     if (cleanCmd === "delautosend") {
       const targetInput = args.join(" ").trim();
-
-      if (!targetInput) {
-        return await sock.sendMessage(
-          from,
-          { text: `🌸 *Usage:* \`${pref}delautosend <channel_link_or_jid>\`\n*Example:* \`${pref}delautosend https://whatsapp.com/channel/xxxxxx\`` },
-          { quoted: msg }
-        );
-      }
-
       const channelJid = await resolveChannelJid(sock, targetInput);
       const searchKey = channelJid || targetInput;
 
@@ -335,7 +338,7 @@ export default {
 `🌸 ｡ﾟ•┈୨ *AUTOSEND POST GUIDE* ୧┈•ﾟ｡ 🐾
 
   🍭 *How to use:*
-  1. Forward or send your post (Image with caption, or long text).
+  1. Forward or send your big post (Image with caption, or long formatted text).
   2. Reply to that message with:
      \`${pref}autosend <channel_link>\`
   3. Choose the recurring interval from the sweet menu!
@@ -370,15 +373,12 @@ export default {
       );
     }
 
-    let captionText = 
-      quotedMsg.conversation ||
-      quotedMsg.extendedTextMessage?.text ||
-      quotedMsg.imageMessage?.caption ||
-      quotedMsg.videoMessage?.caption ||
-      "";
+    // Capture Full Post Content (No limits)
+    const captionText = extractFullPostText(quotedMsg);
 
     let imageBase64 = null;
-    if (quotedMsg.imageMessage) {
+    const targetImgObj = quotedMsg.imageMessage || quotedMsg.ephemeralMessage?.message?.imageMessage;
+    if (targetImgObj) {
       try {
         const imgBuffer = await downloadMediaMessage(
           { key: { id: contextInfo.stanzaId, remoteJid: from }, message: quotedMsg },
@@ -398,8 +398,9 @@ export default {
 ━━━━━━━━━━━━━━━━━━━━━
 
   📢 *Target Channel:* \`${targetChannelJid}\`
-  🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Text Only 📝"}
-  💬 *Post Preview:* "${captionText.slice(0, 45)}..."
+  📝 *Text Size:* \`${captionText.length} Characters Captured\`
+  🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Full Text Only 📝"}
+  💬 *Preview:* "${captionText.slice(0, 50)}..."
 
 ━━━━━━━━━━━━━━━━━━━━━
 🍬 *Reply with your preferred time interval:*
