@@ -1,75 +1,98 @@
+import fs from "fs";
+import path from "path";
+import axios from "axios";
+
+// Local Logo Loader (root folder එකේ logo.jpg හෝ logo.png කියවයි)
+function getLocalLogo() {
+  const possiblePaths = [
+    path.join(process.cwd(), "logo.jpg"),
+    path.join(process.cwd(), "logo.png"),
+    path.join(process.cwd(), "assets", "logo.jpg"),
+    path.join(process.cwd(), "assets", "logo.png")
+  ];
+
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      return fs.readFileSync(p);
+    }
+  }
+  return { url: "https://files.catbox.moe/k315x4.jpg" };
+}
+
 export default {
   name: "alive",
   aliases: ["bot", "live", "status"],
   category: "general",
-  description: "Play cute intro audio voice note followed by permanent alive card",
+  description: "Play voice note and send clean single-line alive card",
 
   async execute({ sock, msg, from }) {
-    // 🍓 Cute Reaction
-    sock.sendMessage(from, { react: { text: "🍓", key: msg.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: "🥰", key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Send Intro Voice Note (PTT) Instantly
-      const introAudioUrl = "https://files.catbox.moe/37unrg.ogg";
-      await sock.sendMessage(
-        from,
-        {
-          audio: { url: introAudioUrl },
-          mimetype: "audio/ogg; codecs=opus",
-          ptt: true
-        },
-        { quoted: msg }
-      ).catch(() => {});
+      // 1. Voice Note Buffer Fetch & Send (WhatsApp 100% Playable)
+      try {
+        const audioRes = await axios.get("https://files.catbox.moe/37unrg.ogg", {
+          responseType: "arraybuffer",
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
+          },
+          timeout: 20000
+        });
 
-      // Fixed Bot Info (No DB Overrides)
-      const botName = "DARK-DINU";
-      const botLogo = "https://telegra.ph/file/2a2a075031b23aa24b744.jpg";
-      const aliveMsg = "Ready for your sweet commands~ ✨";
-      const fixedFooterLink = "https://heshan.devofc.top/";
+        await sock.sendMessage(
+          from,
+          {
+            audio: Buffer.from(audioRes.data),
+            mimetype: "audio/ogg; codecs=opus",
+            ptt: true
+          },
+          { quoted: msg }
+        );
+      } catch (audioErr) {
+        console.error("[ALIVE AUDIO ERROR]:", audioErr.message);
+      }
 
-      // Compact Runtime Calculation (e.g. 1h 24m 12s)
+      // 2. Load Local Image Buffer
+      const imageBuffer = getLocalLogo();
+
+      // Runtime Calculation (Compact)
       const uptimeSec = Math.floor(process.uptime());
       const hours = Math.floor(uptimeSec / 3600);
       const minutes = Math.floor((uptimeSec % 3600) / 60);
       const seconds = uptimeSec % 60;
+      const runtimeStr = `${hours ? `${hours}h ` : ""}${minutes}m ${seconds}s`;
 
-      const runtimeParts = [];
-      if (hours > 0) runtimeParts.push(`${hours}h`);
-      if (minutes > 0 || hours > 0) runtimeParts.push(`${minutes}m`);
-      runtimeParts.push(`${seconds}s`);
-      const runtimeStr = runtimeParts.join(" ");
+      const botName = "DARK-DINU";
+      const fixedFooterLink = "https://heshan.devofc.top/";
 
-      // Kitty Kawaii Compact Permanent Layout
-      const cuteAliveCard = 
-`🍓⃝⃘̉̉̉̉̉̉🐾 *Purring Online, Sweetie~* 🎀 🐾🍓⃝⃘̉̉̉̉̉̉
-┊ ˚୨୧⋆｡˚ 🍰
+      // Clean Single-Line Quality Layout (No Boxes)
+      const aliveCard = 
+`🍓 ༆⃝⃤ *Purring Online, Sweetie~* 🎀 🐾
+━━━━━━━━━━━━━━━━━━━━
 
-> 🌷 *ᴍᴏᴏᴅ :* 100% Sugar & Hugs (ฅ^•ﻌ•^ฅ)
-> ⏳ *ᴜᴘᴛɪᴍᴇ :* ${runtimeStr}
-> 💬 *ᴍꜱɢ :* _${aliveMsg}_
+┊◈ 🌷 *ᴍᴏᴏᴅ :* 100% Sugar & Hugs (ฅ^•ﻌ•^ฅ)
+┊◈ ⏳ *ᴜᴘᴛɪᴍᴇ :* ${runtimeStr}
+┊◈ 💬 *ᴍꜱɢ :* _Ready for your sweet commands~ ✨_
 
-🍰 *© ${botName} 𝐎ꜰᴄ* 🤍 | 📍 ${fixedFooterLink}`;
+────────────────────
+🍰 *© ${botName} 𝐎ꜰᴄ* 🤍 | ➥ ${fixedFooterLink}`;
 
-      // 2. Send Alive Card (Image with fallback to text)
-      try {
-        await sock.sendMessage(
-          from,
-          {
-            image: { url: botLogo },
-            caption: cuteAliveCard
-          },
-          { quoted: msg }
-        );
-      } catch (_) {
-        await sock.sendMessage(from, { text: cuteAliveCard }, { quoted: msg });
-      }
-
-    } catch (err) {
-      console.error("[ALIVE ERROR]:", err);
+      // 3. Send Image with Caption
       await sock.sendMessage(
         from,
         {
-          text: `🍓 *DARK-DINU MD IS ONLINE* ✨\n\n> ⏳ *Uptime :* Online & Cozy\n📍 https://heshan.devofc.top/`
+          image: imageBuffer,
+          caption: aliveCard
+        },
+        { quoted: msg }
+      );
+
+    } catch (err) {
+      console.error("[ALIVE ERROR]:", err.message);
+      await sock.sendMessage(
+        from,
+        {
+          text: `🍓 *DARK-DINU MD IS ONLINE* ✨\n\n📍 https://heshan.devofc.top/`
         },
         { quoted: msg }
       ).catch(() => {});
