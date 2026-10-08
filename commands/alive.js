@@ -1,8 +1,14 @@
 import fs from "fs";
 import path from "path";
 import axios from "axios";
+import { exec } from "child_process";
+import { promisify } from "util";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
-// Local Logo Loader
+const execPromise = promisify(exec);
+const ffmpegPath = ffmpegInstaller.path;
+
+// Local Image Loader (root හෝ assets එකේ තියෙන logo image එක ගන්නවා)
 function getLocalLogo() {
   const possiblePaths = [
     path.join(process.cwd(), "logo.jpg"),
@@ -12,9 +18,7 @@ function getLocalLogo() {
   ];
 
   for (const p of possiblePaths) {
-    if (fs.existsSync(p)) {
-      return fs.readFileSync(p);
-    }
+    if (fs.existsSync(p)) return fs.readFileSync(p);
   }
   return { url: "https://files.catbox.moe/k315x4.jpg" };
 }
@@ -23,37 +27,44 @@ export default {
   name: "alive",
   aliases: ["bot", "live", "status"],
   category: "general",
-  description: "Play voice note with profile view and send clean alive card",
+  description: "Play voice note and send alive card",
 
   async execute({ sock, msg, from }) {
-    sock.sendMessage(from, { react: { text: "🍓", key: msg.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Playable Audio (Download complete stream buffer)
+      // 1. Download & Convert Audio to Valid WhatsApp PTT Spec using @ffmpeg-installer
+      const tempInput = path.join(process.cwd(), `temp_${Date.now()}.ogg`);
+      const tempOutput = path.join(process.cwd(), `voice_${Date.now()}.opus`);
+
       try {
         const audioRes = await axios.get("https://files.catbox.moe/37unrg.ogg", {
           responseType: "arraybuffer",
-          headers: {
-            "Accept": "*/*",
-            "User-Agent": "Mozilla/5.0"
-          },
           timeout: 25000
         });
+        fs.writeFileSync(tempInput, Buffer.from(audioRes.data));
 
-        const audioBuffer = Buffer.from(audioRes.data);
+        // WhatsApp Opus Standard: 48000Hz, 1 Channel (Mono)
+        await execPromise(`"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 32k -vbr on -ar 48000 -ac 1 "${tempOutput}"`);
 
-        // Standard WhatsApp Voice Note (audio/mp4 format ensures 100% playback on all devices)
-        await sock.sendMessage(
-          from,
-          {
-            audio: audioBuffer,
-            mimetype: "audio/mp4",
-            ptt: true
-          },
-          { quoted: msg }
-        );
+        if (fs.existsSync(tempOutput)) {
+          const pttBuffer = fs.readFileSync(tempOutput);
+
+          await sock.sendMessage(
+            from,
+            {
+              audio: pttBuffer,
+              mimetype: "audio/ogg; codecs=opus",
+              ptt: true
+            },
+            { quoted: msg }
+          );
+        }
       } catch (audioErr) {
-        console.error("[ALIVE AUDIO ERROR]:", audioErr.message);
+        console.error("[VOICE ENCODE ERROR]:", audioErr.message);
+      } finally {
+        if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput);
+        if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
       }
 
       // 2. Load Local Image Buffer
