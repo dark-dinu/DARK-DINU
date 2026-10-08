@@ -14,13 +14,14 @@ async function getDB() {
 
 export default {
   name: "alive",
-  aliases: ["bot", "status"],
+  aliases: ["bot", "live", "status"],
   category: "general",
-  description: "Display bot alive status card with custom settings and web link",
+  description: "Cute compact Kitty Kawaii alive card",
 
   async execute({ sock, msg, from, config }) {
     try {
-      sock.sendMessage(from, { react: { text: "🐦‍🔥", key: msg.key } }).catch(() => {});
+      // Cute soft strawberry reaction
+      sock.sendMessage(from, { react: { text: "🍓", key: msg.key } }).catch(() => {});
 
       const rawUser = sock.user?.id || "";
       const botNum = rawUser.split(":")[0]?.replace(/[^0-9]/g, "");
@@ -28,117 +29,52 @@ export default {
       const database = await getDB();
       const custom = await database.collection("bot_custom_settings").findOne({ botNumber: botNum });
 
-      const botName = custom?.botName || config?.BOT_NAME || "DARK-DINU MD";
+      const botName = custom?.botName || config?.BOT_NAME || "DARK-DINU";
       const botLogo = custom?.botLogo || config?.BOT_LOGO || "https://files.catbox.moe/o8k8v7.jpg";
+
+      // Custom message (User .set bot alive මඟින් දැමූ එකක් ඇත්නම් එය, නැතිනම් default sweet message එක)
+      const aliveMsg = custom?.aliveMessage || "Ready for your sweet commands~ ✨";
+
+      // Compact Runtime Calculation (e.g. 1h 24m 12s)
+      const uptimeSec = Math.floor(process.uptime());
+      const hours = Math.floor(uptimeSec / 3600);
+      const minutes = Math.floor((uptimeSec % 3600) / 60);
+      const seconds = uptimeSec % 60;
       
-      // වෙනම alive text එකක් නැත්නම් වැටෙන Default Alive Message එක
-      const aliveMsg = custom?.aliveMessage || 
-`Hey! I'm online and running at full speed.
-Ready to serve your commands with zero-lag cloud automation.`;
+      const runtimeParts = [];
+      if (hours > 0) runtimeParts.push(`${hours}h`);
+      if (minutes > 0 || hours > 0) runtimeParts.push(`${minutes}m`);
+      runtimeParts.push(`${seconds}s`);
+      const runtimeStr = runtimeParts.join(" ");
 
       const fixedFooterLink = "https://heshan.devofc.top/";
 
-      const aliveCard = 
-`╔══════════════════════╗
-   🕷️ ${botName.toUpperCase()} 🕷️
-╚══════════════════════╝
+      // Kitty Kawaii Compact Layout
+      const cuteAliveCard = 
+`🍓⃝⃘̉̉̉̉̉̉🐾 *Purring Online, Sweetie~* 🎀 🐾🍓⃝⃘̉̉̉̉̉̉
+┊ ˚୨୧⋆｡˚ 🍰
 
-┌─〔 🟢 *STATUS: OPERATIONAL* 〕
-├─▸ 📱 *Instance* : +${botNum}
-├─▸ 🛰️ *Engine*   : Multi-Device Node v3.0
-├─▸ 💬 *Status*   :
-│   _${aliveMsg}_
-└───────────────────────
+> 🌷 *ᴍᴏᴏᴅ :* 100% Sugar & Hugs (ฅ^•ﻌ•^ฅ)
+> ⏳ *ᴜᴘᴛɪᴍᴇ :* ${runtimeStr}
+> 💬 *ᴍꜱɢ :* _${aliveMsg}_
 
-> 🔗 ${fixedFooterLink}`;
+🍰 *© ${botName.toUpperCase()} 𝐎ꜰᴄ* 🤍 | 💞 ${fixedFooterLink}`;
 
-      if (botLogo.startsWith("http")) {
+      if (botLogo && botLogo.startsWith("http")) {
         await sock.sendMessage(
           from,
           {
             image: { url: botLogo },
-            caption: aliveCard
+            caption: cuteAliveCard
           },
           { quoted: msg }
         );
       } else {
-        await sock.sendMessage(from, { text: aliveCard }, { quoted: msg });
+        await sock.sendMessage(from, { text: cuteAliveCard }, { quoted: msg });
       }
     } catch (err) {
       console.error("[ALIVE ERROR]:", err.message);
-      await sock.sendMessage(from, { text: "❌ Failed to fetch alive status." }, { quoted: msg }).catch(() => {});
-    }
-  }
-};
-import { MongoClient } from "mongodb";
-import CONFIG from "../config.js";
-
-let mongoClient = null;
-let db = null;
-
-async function getDB() {
-  if (db) return db;
-  mongoClient = new MongoClient(CONFIG.MONGODB_URI);
-  await mongoClient.connect();
-  db = mongoClient.db(CONFIG.DB_NAME);
-  return db;
-}
-
-export default {
-  name: "alive",
-  aliases: ["bot", "status"],
-  category: "general",
-  description: "Display bot alive status card with custom settings and web link",
-
-  async execute({ sock, msg, from, config }) {
-    try {
-      sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
-
-      const rawUser = sock.user?.id || "";
-      const botNum = rawUser.split(":")[0]?.replace(/[^0-9]/g, "");
-
-      const database = await getDB();
-      const custom = await database.collection("bot_custom_settings").findOne({ botNumber: botNum });
-
-      const botName = custom?.botName || config?.BOT_NAME || "DARK-DINU MD";
-      const botLogo = custom?.botLogo || config?.BOT_LOGO || "https://files.catbox.moe/o8k8v7.jpg";
-      
-      // වෙනම alive text එකක් නැත්නම් වැටෙන Default Alive Message එක
-      const aliveMsg = custom?.aliveMessage || 
-`Hey! I'm online and running at full speed.
-Ready to serve your commands with zero-lag cloud automation.`;
-
-      const fixedFooterLink = "https://heshan.devofc.top/";
-
-      const aliveCard = 
-`╔══════════════════════╗
-   🕷️ ${botName.toUpperCase()} 🕷️
-╚══════════════════════╝
-
-┌─〔 🟢 *STATUS: OPERATIONAL* 〕
-├─▸ 📱 *Instance* : +${botNum}
-├─▸ 🛰️ *Engine*   : Multi-Device Node v3.0
-├─▸ 💬 *Status*   :
-│   _${aliveMsg}_
-└───────────────────────
-
-> 🔗 ${fixedFooterLink}`;
-
-      if (botLogo.startsWith("http")) {
-        await sock.sendMessage(
-          from,
-          {
-            image: { url: botLogo },
-            caption: aliveCard
-          },
-          { quoted: msg }
-        );
-      } else {
-        await sock.sendMessage(from, { text: aliveCard }, { quoted: msg });
-      }
-    } catch (err) {
-      console.error("[ALIVE ERROR]:", err.message);
-      await sock.sendMessage(from, { text: "❌ Failed to fetch alive status." }, { quoted: msg }).catch(() => {});
+      await sock.sendMessage(from, { text: "❌ Failed to show alive status." }, { quoted: msg }).catch(() => {});
     }
   }
 };
