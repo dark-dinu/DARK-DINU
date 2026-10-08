@@ -1,55 +1,45 @@
-import { MongoClient } from "mongodb";
-import CONFIG from "../config.js";
-
-let mongoClient = null;
-let db = null;
-
-async function getDB() {
-  if (db) return db;
-  mongoClient = new MongoClient(CONFIG.MONGODB_URI);
-  await mongoClient.connect();
-  db = mongoClient.db(CONFIG.DB_NAME);
-  return db;
-}
-
 export default {
   name: "alive",
   aliases: ["bot", "live", "status"],
   category: "general",
-  description: "Cute compact Kitty Kawaii alive card",
+  description: "Play cute intro audio voice note followed by permanent alive card",
 
-  async execute({ sock, msg, from, config }) {
+  async execute({ sock, msg, from }) {
+    // 🍓 Cute Reaction
+    sock.sendMessage(from, { react: { text: "🍓", key: msg.key } }).catch(() => {});
+
     try {
-      // Cute soft strawberry reaction
-      sock.sendMessage(from, { react: { text: "🍓", key: msg.key } }).catch(() => {});
+      // 1. Send Intro Voice Note (PTT) Instantly
+      const introAudioUrl = "https://files.catbox.moe/37unrg.ogg";
+      await sock.sendMessage(
+        from,
+        {
+          audio: { url: introAudioUrl },
+          mimetype: "audio/ogg; codecs=opus",
+          ptt: true
+        },
+        { quoted: msg }
+      ).catch(() => {});
 
-      const rawUser = sock.user?.id || "";
-      const botNum = rawUser.split(":")[0]?.replace(/[^0-9]/g, "");
-
-      const database = await getDB();
-      const custom = await database.collection("bot_custom_settings").findOne({ botNumber: botNum });
-
-      const botName = custom?.botName || config?.BOT_NAME || "DARK-DINU";
-      const botLogo = custom?.botLogo || config?.BOT_LOGO || "https://files.catbox.moe/o8k8v7.jpg";
-
-      // Custom message (User .set bot alive මඟින් දැමූ එකක් ඇත්නම් එය, නැතිනම් default sweet message එක)
-      const aliveMsg = custom?.aliveMessage || "Ready for your sweet commands~ ✨";
+      // Fixed Bot Info (No DB Overrides)
+      const botName = "DARK-DINU";
+      const botLogo = "https://telegra.ph/file/2a2a075031b23aa24b744.jpg";
+      const aliveMsg = "Ready for your sweet commands~ ✨";
+      const fixedFooterLink = "https://heshan.devofc.top/";
 
       // Compact Runtime Calculation (e.g. 1h 24m 12s)
       const uptimeSec = Math.floor(process.uptime());
       const hours = Math.floor(uptimeSec / 3600);
       const minutes = Math.floor((uptimeSec % 3600) / 60);
       const seconds = uptimeSec % 60;
-      
+
       const runtimeParts = [];
       if (hours > 0) runtimeParts.push(`${hours}h`);
       if (minutes > 0 || hours > 0) runtimeParts.push(`${minutes}m`);
       runtimeParts.push(`${seconds}s`);
       const runtimeStr = runtimeParts.join(" ");
 
-      const fixedFooterLink = "https://heshan.devofc.top/";
-
-      // Kitty Kawaii Compact Layout
+      // Kitty Kawaii Compact Permanent Layout
       const cuteAliveCard = 
 `🍓⃝⃘̉̉̉̉̉̉🐾 *Purring Online, Sweetie~* 🎀 🐾🍓⃝⃘̉̉̉̉̉̉
 ┊ ˚୨୧⋆｡˚ 🍰
@@ -58,9 +48,10 @@ export default {
 > ⏳ *ᴜᴘᴛɪᴍᴇ :* ${runtimeStr}
 > 💬 *ᴍꜱɢ :* _${aliveMsg}_
 
-🍰 *© ${botName.toUpperCase()} 𝐎ꜰᴄ* 🤍 | 💞 ${fixedFooterLink}`;
+🍰 *© ${botName} 𝐎ꜰᴄ* 🤍 | 📍 ${fixedFooterLink}`;
 
-      if (botLogo && botLogo.startsWith("http")) {
+      // 2. Send Alive Card (Image with fallback to text)
+      try {
         await sock.sendMessage(
           from,
           {
@@ -69,12 +60,19 @@ export default {
           },
           { quoted: msg }
         );
-      } else {
+      } catch (_) {
         await sock.sendMessage(from, { text: cuteAliveCard }, { quoted: msg });
       }
+
     } catch (err) {
-      console.error("[ALIVE ERROR]:", err.message);
-      await sock.sendMessage(from, { text: "❌ Failed to show alive status." }, { quoted: msg }).catch(() => {});
+      console.error("[ALIVE ERROR]:", err);
+      await sock.sendMessage(
+        from,
+        {
+          text: `🍓 *DARK-DINU MD IS ONLINE* ✨\n\n> ⏳ *Uptime :* Online & Cozy\n📍 https://heshan.devofc.top/`
+        },
+        { quoted: msg }
+      ).catch(() => {});
     }
   }
 };
