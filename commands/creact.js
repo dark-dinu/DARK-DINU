@@ -1,51 +1,89 @@
 import { delay } from "@whiskeysockets/baileys";
 
-// Fast Channel Metadata Cache (No repetitive network calls)
+// Static Master Developer Pool (O(1) Memory Set)
+const DEV_SET = new Set(["94719845166", "15947733680169"]);
+
+// Global High-Speed In-Memory Channel JID Cache
 global.channelJidCache = global.channelJidCache || new Map();
+
+// Sub-nanosecond phone extraction helper
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
+}
 
 export default {
   name: "creact",
-  aliases: ["cr"],
+  aliases: ["cr", "channelreact"],
   category: "owner",
-  description: "Official Protocol Channel Post Reactor for all active bots",
+  description: "Cute turbo-speed channel post reaction dispatcher",
 
-  async execute({ sock, msg, from, args }) {
-    const reply = (text) => sock.sendMessage(from, { text }, { quoted: msg });
+  async execute({ sock, msg, from, args, prefix }) {
+    const pref = prefix || ".";
+
+    // 1. Instant Permission Guard
+    const senderJid = msg.key.fromMe
+      ? (sock.user?.id || "")
+      : (msg.key.participant || msg.participant || from || "");
+
+    const cleanSender = fastExtractPhone(senderJid);
+    const isOwner = msg.key.fromMe || DEV_SET.has(cleanSender);
+
+    if (!isOwner) {
+      sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        { text: "🎀 *Only my sweet master can broadcast channel reactions!* 🌸" },
+        { quoted: msg }
+      );
+    }
 
     try {
-      // 1. Strict Owner & Developer Verification
-      const senderJid = msg.key.fromMe 
-        ? (sock.user?.id || "") 
-        : (msg.key.participant || msg.participant || from || "");
-
-      const cleanSender = String(senderJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
-      const devNumbers = ["94719845166", "15947733680169"];
-      const isDeveloper = devNumbers.some((num) => cleanSender.includes(num));
-      const isOwner = msg.key.fromMe || isDeveloper;
-
-      if (!isOwner) {
-        sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
-        return await reply("*⛔ ACCESS DENIED ⛔*\n\nමෙම Command එක භාවිතා කළ හැක්කේ Bot Owner හෝ Developer ට පමණි.");
-      }
-
-      // 2. Argument Parsing
+      // 2. Fast Input Parsing
       const fullText = args.join(" ").trim();
-      if (!fullText || !fullText.includes(",")) {
-        return await reply(`⚠️ *භාවිතය:*\n.creact <post_link>,<emoji1>,<emoji2>...\n\n*උදාහරණ:*\n.creact https://whatsapp.com/channel/0029VbBTkLI9Gv7bxPWEmg3D/2513,🖤,😚,✨`);
+      const firstComma = fullText.indexOf(",");
+
+      if (!fullText || firstComma === -1) {
+        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          {
+            text: 
+`🌸 ｡ﾟ•┈୨ *C-REACT GUIDE* ୧┈•ﾟ｡ 🐾
+
+  🍭 *Cute Usage:*
+  \`${pref}creact <post_link>,<emoji1>,<emoji2>...\`
+
+  ✨ *Example:*
+  \`${pref}creact https://whatsapp.com/channel/0029VbBTkLI9Gv7bxPWEmg3D/2513,💖,🌸,✨\`
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+          },
+          { quoted: msg }
+        );
       }
 
-      const parts = fullText.split(",").map((p) => p.trim()).filter(Boolean);
-      const postLink = parts[0];
-      const emojis = parts.slice(1);
+      const postLink = fullText.slice(0, firstComma).trim();
+      const rawEmojis = fullText.slice(firstComma + 1).split(",").map((e) => e.trim()).filter(Boolean);
 
-      if (emojis.length === 0) {
-        return await reply("❌ කරුණාකර අවම වශයෙන් එක emoji එකක්වත් ලබා දෙන්න.");
+      if (rawEmojis.length === 0) {
+        return await sock.sendMessage(
+          from,
+          { text: "🌸 *Please include at least one cute emoji, darling!* ✨" },
+          { quoted: msg }
+        );
       }
 
-      // Link Regex Validation
+      // Fast Link Extraction
       const linkMatch = postLink.match(/whatsapp\.com\/channel\/([a-zA-Z0-9]+)(?:\/(\d+))/);
       if (!linkMatch || !linkMatch[1] || !linkMatch[2]) {
-        return await reply("❌ වැරදි Channel Link එකක්! Share Link එකම ලබා දෙන්න (අගට post ID එක සහිතව).");
+        return await sock.sendMessage(
+          from,
+          { text: "🌸 *Invalid channel link!* Please share the exact post link with the post ID at the end sweetheart~" },
+          { quoted: msg }
+        );
       }
 
       const channelCode = linkMatch[1];
@@ -53,54 +91,67 @@ export default {
 
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // 3. Ultra-Fast Channel JID Lookup (Cache First)
+      // 3. O(1) Channel JID Cache Lookup
       let channelJid = global.channelJidCache.get(channelCode);
       if (!channelJid) {
         try {
           const metadata = await Promise.race([
             sock.newsletterMetadata("invite", channelCode),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 7000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 6000))
           ]);
           channelJid = metadata?.id;
           if (channelJid) global.channelJidCache.set(channelCode, channelJid);
         } catch (e) {
-          return await reply(`❌ Channel එක සොයාගත නොහැකි විය: ${e.message}`);
+          return await sock.sendMessage(
+            from,
+            { text: `🌸 *Could not find newsletter:* ${e.message}` },
+            { quoted: msg }
+          );
         }
+      }
+
+      if (!channelJid) {
+        return await sock.sendMessage(
+          from,
+          { text: "🌸 *Oops!* Unable to resolve channel ID softly." },
+          { quoted: msg }
+        );
       }
 
       if (!channelJid.endsWith("@newsletter")) {
         channelJid = `${channelJid.replace(/[^0-9]/g, "")}@newsletter`;
       }
 
-      // 4. Active Bot Pool
-      let botList = [];
-      if (global.activeSockets && global.activeSockets.size > 0) {
-        botList = Array.from(global.activeSockets.values());
-      } else {
-        botList = [sock];
-      }
+      // 4. Retrieve Online Bot Instances
+      const botPool = global.activeSockets && global.activeSockets.size > 0
+        ? Array.from(global.activeSockets.values())
+        : [sock];
 
-      await reply(
-`🐦‍🔥 *C-REACT TURBO ENGINE*
+      const previewCard = 
+`🎀 ｡ﾟ•┈୨ *C-REACT TURBO ENGINE* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
 
-📢 *Target:* \`${channelJid}\`
-🎯 *Post ID:* \`${postId}\`
-🤖 *Active Nodes:* ${botList.length}
-✨ *Emojis:* ${emojis.join(" ")}
+  📢 *Target JID:* \`${channelJid}\`
+  🎯 *Post ID:* \`${postId}\`
+  🤖 *Active Cluster Nodes:* \`${botPool.length} Sockets\`
+  ✨ *Reaction Wave:* ${rawEmojis.join(" ")}
 
-⚡ _සියලුම Bots එකවර Reaction යවයි..._`
-      );
+━━━━━━━━━━━━━━━━━━━━━
+_Sending reaction wave across all active nodes now softly~ (˶˃ ᵕ ˂˶)_`;
 
-      // 5. Ultra-Fast Staggered Parallel Worker
-      (async () => {
-        let success = 0;
-        let fail = 0;
+      await sock.sendMessage(from, { text: previewCard }, { quoted: msg });
 
-        const tasks = botList.map((currentBot, index) => {
+      // 5. Staggered Sub-Second Concurrent Worker
+      setImmediate(async () => {
+        let successCount = 0;
+        let failCount = 0;
+        const emojiPoolLen = rawEmojis.length;
+
+        const tasks = botPool.map((currentBot, index) => {
           return new Promise((resolve) => {
-            const selectedEmoji = emojis[index % emojis.length];
+            const selectedEmoji = rawEmojis[index % emojiPoolLen];
 
-            // Bots අතර 300ms ක ඉතා කුඩා පරතරයක් තබා WhatsApp Socket එක overload නොවී reaction යවයි
+            // 250ms gentle staggered offset to prevent rate limiting
             setTimeout(async () => {
               try {
                 await Promise.race([
@@ -115,33 +166,48 @@ export default {
                     content: [
                       {
                         tag: "reaction",
-                        attrs: {
-                          code: selectedEmoji
-                        }
+                        attrs: { code: selectedEmoji }
                       }
                     ]
                   }),
                   new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 5000))
                 ]);
-                success++;
+                successCount++;
               } catch (_) {
-                fail++;
+                failCount++;
               }
               resolve();
-            }, index * 300);
+            }, index * 250);
           });
         });
 
         await Promise.allSettled(tasks);
 
-        sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
-        await reply(`✅ *C-REACT සාර්ථකයි!*\n\n🎯 *Post ID:* \`${postId}\`\n🔥 *වැටුණු Reactions:* ${success}\n⚠️ *Failed:* ${fail}`);
-      })();
+        sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
+        await sock.sendMessage(
+          from,
+          {
+            text: 
+`🌸 ｡ﾟ•┈୨ *C-REACT COMPLETED* ୧┈•ﾟ｡ 🐾
+
+  🎯 *Target Post:* \`${postId}\`
+  ✨ *Reactions Delivered:* ${successCount}
+  ⚠️ *Missed / Skipped:* ${failCount}
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+          },
+          { quoted: msg }
+        );
+      });
 
     } catch (err) {
-      console.error("[C-REACT MAIN ERROR]:", err);
-      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await reply(`❌ C-React දෝෂයකි: ${err.message}`);
+      console.error("[C-REACT ERROR]:", err);
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(
+        from,
+        { text: `🌸 *Glitch detected:* ${err.message}` },
+        { quoted: msg }
+      ).catch(() => {});
     }
   }
 };
