@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
-// In-Memory Fast Lookup Maps (O(1) Memory Layout)
+// In-Memory Fast Lookup Maps (O(1))
 global.autoSendSessions = global.autoSendSessions || new Map();
 global.autoSendTimers = global.autoSendTimers || new Map();
 global.autoSendEngineRunning = global.autoSendEngineRunning || false;
@@ -44,7 +44,7 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
-// Time Interval Preset Map (Testing Options Included)
+// Time Interval Preset Map
 const INTERVAL_OPTIONS = Object.freeze({
   "0": { label: "Every 1 Minute ⚡ (Live Fast Test)", ms: 1 * 60 * 1000 },
   "00": { label: "Every 2 Minutes ⏱️ (Short Test)", ms: 2 * 60 * 1000 },
@@ -105,7 +105,29 @@ async function syncTaskToDB(task, isDelete = false) {
   } catch (_) {}
 })();
 
-// Precision Publishing Loop (Runs every 20 seconds)
+// Core Dispatch Function to Newsletter
+async function dispatchToChannel(sock, task) {
+  try {
+    if (task.imageBufferBase64) {
+      const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
+      await sock.sendMessage(task.channelJid, {
+        image: imgBuffer,
+        caption: task.caption || ""
+      });
+    } else {
+      await sock.sendMessage(task.channelJid, {
+        text: task.caption
+      });
+    }
+    console.log(`[AUTOSEND DISPATCHED]: Successfully sent to ${task.channelJid}`);
+    return true;
+  } catch (err) {
+    console.error(`[AUTOSEND DISPATCH ERROR]: ${err.message}`);
+    return false;
+  }
+}
+
+// Precision Publishing Loop (Runs every 10 seconds)
 export function startAutoSendEngine(defaultSock) {
   if (global.autoSendEngineRunning) return;
   global.autoSendEngineRunning = true;
@@ -116,15 +138,11 @@ export function startAutoSendEngine(defaultSock) {
     const now = Date.now();
 
     for (const [id, task] of global.autoSendTimers.entries()) {
-      // 1-minute test mode එකට jitter අවශ්‍ය නොවේ
-      const jitterVal = task.intervalMs <= 120000 ? 0 : (task.randomJitter || 0);
-      const targetThreshold = task.intervalMs + jitterVal;
-
-      if (now - task.lastSentTime >= targetThreshold) {
+      if (now - task.lastSentTime >= task.intervalMs) {
         task.lastSentTime = now;
-        task.randomJitter = task.intervalMs <= 120000 ? 0 : (((Math.random() * 60000) | 0) - 30000);
         syncTaskToDB(task);
 
+        // Find Exact Socket
         let targetSocket = null;
         const activeSockets = global.activeSockets || new Map();
 
@@ -136,31 +154,16 @@ export function startAutoSendEngine(defaultSock) {
           }
         }
 
-        if (!targetSocket && getBotPhone(defaultSock) === task.senderBotPhone) {
+        if (!targetSocket) {
           targetSocket = defaultSock;
         }
 
         if (targetSocket) {
-          try {
-            if (task.imageBufferBase64) {
-              const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
-              await targetSocket.sendMessage(task.channelJid, {
-                image: imgBuffer,
-                caption: task.caption || ""
-              });
-            } else {
-              await targetSocket.sendMessage(task.channelJid, {
-                text: task.caption
-              });
-            }
-            console.log(`[AUTOSEND DISPATCHED]: Sent to ${task.channelJid} successfully`);
-          } catch (err) {
-            console.error(`[AUTOSEND DISPATCH ERROR]:`, err.message);
-          }
+          await dispatchToChannel(targetSocket, task);
         }
       }
     }
-  }, 20000);
+  }, 10000);
 }
 
 // Interactive Choice Listener
@@ -205,12 +208,14 @@ export function hookAutoSendReplyEngine(sock) {
       imageBufferBase64: session.imageBufferBase64,
       intervalMs: chosen.ms,
       intervalLabel: chosen.label,
-      lastSentTime: Date.now(),
-      randomJitter: 0
+      lastSentTime: Date.now() // Timer initialized
     };
 
     global.autoSendTimers.set(taskId, newTask);
     await syncTaskToDB(newTask);
+
+    // ⚡ INSTANT DISPATCH: ක්ෂණිකව පළමු post එක දැන්ම channel එකට යවයි
+    await dispatchToChannel(sock, newTask);
 
     sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
 
@@ -220,11 +225,11 @@ export function hookAutoSendReplyEngine(sock) {
 
   📢 *Target Channel:* \`${session.channelJid}\`
   ⏳ *Selected Time:* ${chosen.label}
-  🎲 *Post Mode:* Smart Jitter Anti-Ban Engine
+  🚀 *Initial Post:* Dispatched Right Now! ✨
   🖼️ *Attachment:* ${session.imageBufferBase64 ? "🟢 Image + Text Post" : "📝 Text Only"}
 
 ━━━━━━━━━━━━━━━━━━━━━
-_This post will now be published automatically to your channel softly and recurringly! (˶˃ ᵕ ˂˶)_
+_The first post has been sent! Next posts will automatically repeat every ${chosen.label}! (˶˃ ᵕ ˂˶)_
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
@@ -247,9 +252,7 @@ export default {
     const cleanCmd = fullBody.slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
     const currentBotPhone = getBotPhone(sock);
 
-    // -------------------------------------------------------------
     // 1. LIST COMMAND: .listautosend
-    // -------------------------------------------------------------
     if (cleanCmd === "listautosend") {
       const myTasks = Array.from(global.autoSendTimers.values()).filter(
         (t) => t.senderBotPhone === currentBotPhone
@@ -281,9 +284,7 @@ export default {
       return await sock.sendMessage(from, { text: listText }, { quoted: msg });
     }
 
-    // -------------------------------------------------------------
     // 2. DELETE COMMAND: .delautosend <channel_link_or_jid>
-    // -------------------------------------------------------------
     if (cleanCmd === "delautosend") {
       const targetInput = args.join(" ").trim();
 
@@ -323,9 +324,7 @@ export default {
       }
     }
 
-    // -------------------------------------------------------------
-    // 3. MAIN COMMAND: .autosend <channel_link> (Reply to target post)
-    // -------------------------------------------------------------
+    // 3. MAIN COMMAND: .autosend <channel_link>
     const targetChannelLink = args[0]?.trim();
     if (!targetChannelLink) {
       sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
