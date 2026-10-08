@@ -1,13 +1,16 @@
 import fs from "fs";
 import path from "path";
+import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
-// In-Memory Fast Lookup Maps
-global.channelAutoTimers = global.channelAutoTimers || new Map();
-global.channelAutoEngineRunning = global.channelAutoEngineRunning || false;
+// In-Memory Fast Lookup Maps (O(1) Memory Layout)
+global.autoSendSessions = global.autoSendSessions || new Map();
+global.autoSendTimers = global.autoSendTimers || new Map();
+global.autoSendEngineRunning = global.autoSendEngineRunning || false;
+global.autoSendHookedSockets = global.autoSendHookedSockets || new WeakSet();
 
-const LOCAL_STORAGE_PATH = path.join(process.cwd(), "channel_auto_tasks.json");
+const LOCAL_STORAGE_PATH = path.join(process.cwd(), "autosend_tasks.json");
 
-// Phone number extractor
+// Sub-nanosecond Phone Cleaner
 function fastExtractPhone(jid = "") {
   const atIdx = jid.indexOf("@");
   const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
@@ -41,26 +44,18 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
-// Parse Interval String (e.g. 5m, 30m, 1h, 2h) to Milliseconds
-function parseIntervalToMs(intervalStr = "") {
-  const match = intervalStr.trim().toLowerCase().match(/^(\d+)(m|h)$/);
-  if (!match) return null;
+// Time Interval Preset Map (Testing Options Included)
+const INTERVAL_OPTIONS = Object.freeze({
+  "0": { label: "Every 1 Minute ⚡ (Live Fast Test)", ms: 1 * 60 * 1000 },
+  "00": { label: "Every 2 Minutes ⏱️ (Short Test)", ms: 2 * 60 * 1000 },
+  "1": { label: "Every 30 Minutes ⏳ (Half Hour)", ms: 30 * 60 * 1000 },
+  "2": { label: "Every 1 Hour ⏰", ms: 60 * 60 * 1000 },
+  "3": { label: "Every 2 Hours 🕒", ms: 2 * 60 * 60 * 1000 },
+  "4": { label: "Every 4 Hours 🌸", ms: 4 * 60 * 60 * 1000 },
+  "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
+});
 
-  const value = parseInt(match[1], 10);
-  const unit = match[2];
-
-  if (unit === "m") {
-    if (value < 1) return null; // අවම විනාඩි 1
-    return value * 60 * 1000;
-  }
-  if (unit === "h") {
-    if (value < 1) return null;
-    return value * 60 * 60 * 1000;
-  }
-  return null;
-}
-
-// Persistent Storage Handlers
+// Storage Handlers
 function loadTasksFromFile() {
   try {
     if (fs.existsSync(LOCAL_STORAGE_PATH)) {
@@ -68,7 +63,7 @@ function loadTasksFromFile() {
       const list = JSON.parse(raw);
       if (Array.isArray(list)) {
         list.forEach((t) => {
-          if (t.id) global.channelAutoTimers.set(t.id, t);
+          if (t.id) global.autoSendTimers.set(t.id, t);
         });
       }
     }
@@ -77,7 +72,7 @@ function loadTasksFromFile() {
 
 function saveTasksToFile() {
   try {
-    const list = Array.from(global.channelAutoTimers.values());
+    const list = Array.from(global.autoSendTimers.values());
     fs.writeFileSync(LOCAL_STORAGE_PATH, JSON.stringify(list, null, 2));
   } catch (_) {}
 }
@@ -87,7 +82,7 @@ async function syncTaskToDB(task, isDelete = false) {
     const client = global.mongoClient || global.sharedMongoClient;
     if (client) {
       const db = client.db("whatsapp_multi_bots");
-      const col = db.collection("channel_auto_broadcasts");
+      const col = db.collection("autosend_channel_posts");
       if (isDelete) {
         await col.deleteOne({ id: task.id });
       } else {
@@ -98,34 +93,38 @@ async function syncTaskToDB(task, isDelete = false) {
   saveTasksToFile();
 }
 
-(async function initChannelAutoStorage() {
+(async function initAutoSendStorage() {
   loadTasksFromFile();
   try {
     const client = global.mongoClient || global.sharedMongoClient;
     if (client) {
       const db = client.db("whatsapp_multi_bots");
-      const tasks = await db.collection("channel_auto_broadcasts").find({}).toArray();
-      tasks.forEach((t) => global.channelAutoTimers.set(t.id, t));
+      const tasks = await db.collection("autosend_channel_posts").find({}).toArray();
+      tasks.forEach((t) => global.autoSendTimers.set(t.id, t));
     }
   } catch (_) {}
 })();
 
-// ⏰ High-Precision Interval Runner (Checks every 30 seconds)
-export function startChannelIntervalEngine(defaultSock) {
-  if (global.channelAutoEngineRunning) return;
-  global.channelAutoEngineRunning = true;
+// Precision Publishing Loop (Runs every 20 seconds)
+export function startAutoSendEngine(defaultSock) {
+  if (global.autoSendEngineRunning) return;
+  global.autoSendEngineRunning = true;
 
   setInterval(async () => {
-    if (global.channelAutoTimers.size === 0) return;
+    if (global.autoSendTimers.size === 0) return;
 
     const now = Date.now();
 
-    for (const [id, task] of global.channelAutoTimers.entries()) {
-      if (now - task.lastSentTime >= task.intervalMs) {
+    for (const [id, task] of global.autoSendTimers.entries()) {
+      // 1-minute test mode එකට jitter අවශ්‍ය නොවේ
+      const jitterVal = task.intervalMs <= 120000 ? 0 : (task.randomJitter || 0);
+      const targetThreshold = task.intervalMs + jitterVal;
+
+      if (now - task.lastSentTime >= targetThreshold) {
         task.lastSentTime = now;
+        task.randomJitter = task.intervalMs <= 120000 ? 0 : (((Math.random() * 60000) | 0) - 30000);
         syncTaskToDB(task);
 
-        // කමාන්ඩ් එක දැමූ අදාළ බොට්ගෙන් පමණක් යැවීම
         let targetSocket = null;
         const activeSockets = global.activeSockets || new Map();
 
@@ -143,137 +142,204 @@ export function startChannelIntervalEngine(defaultSock) {
 
         if (targetSocket) {
           try {
-            await targetSocket.sendMessage(task.channelJid, {
-              text: task.message
-            });
-            console.log(`[CHANNEL AUTO POST]: Delivered to ${task.channelJid} every${task.intervalStr}`);
+            if (task.imageBufferBase64) {
+              const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
+              await targetSocket.sendMessage(task.channelJid, {
+                image: imgBuffer,
+                caption: task.caption || ""
+              });
+            } else {
+              await targetSocket.sendMessage(task.channelJid, {
+                text: task.caption
+              });
+            }
+            console.log(`[AUTOSEND DISPATCHED]: Sent to ${task.channelJid} successfully`);
           } catch (err) {
-            console.error(`[CHANNEL AUTO ERROR]:`, err.message);
+            console.error(`[AUTOSEND DISPATCH ERROR]:`, err.message);
           }
         }
       }
     }
-  }, 30000);
+  }, 20000);
+}
+
+// Interactive Choice Listener
+export function hookAutoSendReplyEngine(sock) {
+  if (!sock || global.autoSendHookedSockets.has(sock)) return;
+  global.autoSendHookedSockets.add(sock);
+
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return;
+    const m = messages[0];
+    if (!m?.message) return;
+
+    const from = m.key.remoteJid;
+    const rawMsg = m.message.ephemeralMessage?.message || m.message;
+    const quotedId = rawMsg?.extendedTextMessage?.contextInfo?.stanzaId;
+
+    if (!quotedId || !global.autoSendSessions.has(quotedId)) return;
+
+    const session = global.autoSendSessions.get(quotedId);
+    if (session.from !== from) return;
+
+    const choice = (
+      rawMsg.conversation ||
+      rawMsg.extendedTextMessage?.text ||
+      ""
+    ).trim();
+
+    if (!INTERVAL_OPTIONS[choice]) return;
+
+    // Session lock & removal
+    global.autoSendSessions.delete(quotedId);
+    const chosen = INTERVAL_OPTIONS[choice];
+
+    sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
+
+    const taskId = `${session.senderBotPhone}_${session.channelJid}`;
+    const newTask = {
+      id: taskId,
+      senderBotPhone: session.senderBotPhone,
+      channelJid: session.channelJid,
+      caption: session.caption,
+      imageBufferBase64: session.imageBufferBase64,
+      intervalMs: chosen.ms,
+      intervalLabel: chosen.label,
+      lastSentTime: Date.now(),
+      randomJitter: 0
+    };
+
+    global.autoSendTimers.set(taskId, newTask);
+    await syncTaskToDB(newTask);
+
+    sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
+
+    const successCard = 
+`🎀 ｡ﾟ•┈୨ *POST AUTO-SCHEDULER ACTIVATED* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
+
+  📢 *Target Channel:* \`${session.channelJid}\`
+  ⏳ *Selected Time:* ${chosen.label}
+  🎲 *Post Mode:* Smart Jitter Anti-Ban Engine
+  🖼️ *Attachment:* ${session.imageBufferBase64 ? "🟢 Image + Text Post" : "📝 Text Only"}
+
+━━━━━━━━━━━━━━━━━━━━━
+_This post will now be published automatically to your channel softly and recurringly! (˶˃ ᵕ ˂˶)_
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+    await sock.sendMessage(from, { text: successCard }, { quoted: m });
+  });
 }
 
 export default {
-  name: "autoch",
-  aliases: ["delautoch", "listautoch", "chmsg"],
+  name: "autosend",
+  aliases: ["delautosend", "listautosend"],
   category: "owner",
-  description: "Schedule recurring interval messages to WhatsApp Channels softly",
+  description: "Reply to any post or image and schedule recurring publishing to channels",
 
   async execute({ sock, msg, from, args, body, prefix, config }) {
-    startChannelIntervalEngine(sock);
+    startAutoSendEngine(sock);
+    hookAutoSendReplyEngine(sock);
+
     const pref = prefix || config?.PREFIX || ".";
     const fullBody = body.trim();
     const cleanCmd = fullBody.slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
     const currentBotPhone = getBotPhone(sock);
 
     // -------------------------------------------------------------
-    // 1. LIST COMMAND: .listautoch
+    // 1. LIST COMMAND: .listautosend
     // -------------------------------------------------------------
-    if (cleanCmd === "listautoch" || fullBody.toLowerCase().includes("listautoch")) {
-      const myTasks = Array.from(global.channelAutoTimers.values()).filter(
+    if (cleanCmd === "listautosend") {
+      const myTasks = Array.from(global.autoSendTimers.values()).filter(
         (t) => t.senderBotPhone === currentBotPhone
       );
 
       if (myTasks.length === 0) {
-        sock.sendMessage(from, { react: { text: "💤", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "🌸 *No active channel auto-posts found!* Set one softly using `.autoch` darling~" },
+          { text: "🌸 *No active scheduled posts found!* Reply to a post with `.autosend <link>` darling~" },
           { quoted: msg }
         );
       }
 
       let listText = 
-`🎀 ｡ﾟ•┈୨ *ACTIVE CHANNEL RECURRING POSTS* ୧┈•ﾟ｡ 🐾
-━━━━━━━━━━━━━━━━━━━━━
-🤖 *Sender Node:* \`+${currentBotPhone}\`\n\n`;
+`🎀 ｡ﾟ•┈୨ *YOUR ACTIVE AUTO-POSTS* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
       let index = 1;
       for (const t of myTasks) {
         listText += `  🌸 *${index}. Channel:* \`${t.channelJid}\`\n`;
-        listText += `     ⏳ *Interval:* Every \`${t.intervalStr}\`\n`;
-        listText += `     💬 *Post Body:* "${t.message}"\n\n`;
+        listText += `     ⏳ *Repeat:* ${t.intervalLabel}\n`;
+        listText += `     🖼️ *Media:* ${t.imageBufferBase64 ? "Image Attached" : "Text"}\n`;
+        listText += `     💬 *Caption Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
         index++;
       }
 
-      listText += `━━━━━━━━━━━━━━━━━━━━━\n_To cancel: \`${pref}delautoch <channel_link_or_jid>\`_\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+      listText += `━━━━━━━━━━━━━━━━━━━━━\n_To cancel: \`${pref}delautosend <channel_link>\`_\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      sock.sendMessage(from, { react: { text: "📋", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, { text: listText }, { quoted: msg });
     }
 
     // -------------------------------------------------------------
-    // 2. DELETE COMMAND: .delautoch <channel_link_or_jid>
+    // 2. DELETE COMMAND: .delautosend <channel_link_or_jid>
     // -------------------------------------------------------------
-    if (cleanCmd === "delautoch" || fullBody.toLowerCase().startsWith(`${pref}delautoch`)) {
+    if (cleanCmd === "delautosend") {
       const targetInput = args.join(" ").trim();
 
       if (!targetInput) {
         return await sock.sendMessage(
           from,
-          { text: `🌸 *Usage:* \`${pref}delautoch <channel_link_or_jid>\`\n*Example:* \`${pref}delautoch https://whatsapp.com/channel/xxxxxx\`` },
+          { text: `🌸 *Usage:* \`${pref}delautosend <channel_link_or_jid>\`\n*Example:* \`${pref}delautosend https://whatsapp.com/channel/xxxxxx\`` },
           { quoted: msg }
         );
       }
 
       const channelJid = await resolveChannelJid(sock, targetInput);
       const searchKey = channelJid || targetInput;
-      let removedCount = 0;
 
-      for (const [id, t] of global.channelAutoTimers.entries()) {
+      let removed = 0;
+      for (const [id, t] of global.autoSendTimers.entries()) {
         if ((t.channelJid === searchKey || id.includes(searchKey)) && t.senderBotPhone === currentBotPhone) {
-          global.channelAutoTimers.delete(id);
+          global.autoSendTimers.delete(id);
           await syncTaskToDB({ id }, true);
-          removedCount++;
+          removed++;
         }
       }
 
-      if (removedCount > 0) {
+      if (removed > 0) {
         sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: `🧹 *Removed:* Cleared *${removedCount}* auto-post task(s) for channel softly!` },
+          { text: `🧹 *Removed:* Successfully cancelled auto-publish for this channel softly!` },
           { quoted: msg }
         );
       } else {
         return await sock.sendMessage(
           from,
-          { text: "🌸 *No active recurring tasks found for this channel, darling!*" },
+          { text: "🌸 *No auto-post found for this channel!*" },
           { quoted: msg }
         );
       }
     }
 
     // -------------------------------------------------------------
-    // 3. SET COMMAND: .autoch <link>,<message>,<interval>
+    // 3. MAIN COMMAND: .autosend <channel_link> (Reply to target post)
     // -------------------------------------------------------------
-    const rawParams = fullBody.replace(new RegExp(`^\\${pref}(autoch|chmsg)`, "i"), "").trim();
-    const parts = rawParams.split(",");
-
-    if (parts.length < 3) {
+    const targetChannelLink = args[0]?.trim();
+    if (!targetChannelLink) {
       sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         {
           text: 
-`🌸 ｡ﾟ•┈୨ *CHANNEL AUTO-POST GUIDE* ୧┈•ﾟ｡ 🐾
+`🌸 ｡ﾟ•┈୨ *AUTOSEND POST GUIDE* ୧┈•ﾟ｡ 🐾
 
-  🍭 *Usage:*
-  \`${pref}autoch <channel_link>,<message>,<interval>\`
-
-  ✨ *Examples:*
-  • \`${pref}autoch https://whatsapp.com/channel/xxx,Join our WhatsApp Group 💖,30m\`
-  • \`${pref}autoch https://whatsapp.com/channel/xxx,New Daily Updates! 🌸,1h\`
-  • \`${pref}autoch https://whatsapp.com/channel/xxx,Active Status Reminder ✨,5m\`
-
-  ⏳ *Interval Units:*
-  • \`5m\`  ➔ Every 5 Minutes
-  • \`30m\` ➔ Every 30 Minutes (Half Hour)
-  • \`1h\`  ➔ Every 1 Hour
-  • \`2h\`  ➔ Every 2 Hours
+  🍭 *How to use:*
+  1. Forward or send your post (Image with caption, or long text).
+  2. Reply to that message with:
+     \`${pref}autosend <channel_link>\`
+  3. Choose the recurring interval from the sweet menu!
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
@@ -281,62 +347,92 @@ export default {
       );
     }
 
-    const channelInput = parts[0].trim();
-    const intervalInput = parts[parts.length - 1].trim();
-    const messagePart = parts.slice(1, parts.length - 1).join(",").trim();
+    const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+    const quotedMsg = contextInfo?.quotedMessage;
 
-    const intervalMs = parseIntervalToMs(intervalInput);
-    if (!intervalMs) {
+    if (!quotedMsg) {
       sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: "🌸 *Invalid interval!* Please use formats like `5m`, `30m`, `1h`, `2h` darling~" },
+        { text: "🌸 *Oopsie!* Please reply to the post/image you want to auto-schedule honey~" },
         { quoted: msg }
       );
     }
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    const targetChannelJid = await resolveChannelJid(sock, channelInput);
+    const targetChannelJid = await resolveChannelJid(sock, targetChannelLink);
     if (!targetChannelJid) {
       sock.sendMessage(from, { react: { text: "💔", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: "🌸 *Could not resolve channel!* Make sure the link or JID is valid, sweetie~" },
+        { text: "🌸 *Could not resolve channel!* Make sure the invite link is valid, sweetie~" },
         { quoted: msg }
       );
     }
 
-    const taskId = `${currentBotPhone}_${targetChannelJid}_${intervalInput}`;
-    const newTask = {
-      id: taskId,
-      senderBotPhone: currentBotPhone,
-      channelJid: targetChannelJid,
-      message: messagePart,
-      intervalStr: intervalInput,
-      intervalMs,
-      lastSentTime: Date.now() // Set to now so it triggers after the interval
-    };
+    let captionText = 
+      quotedMsg.conversation ||
+      quotedMsg.extendedTextMessage?.text ||
+      quotedMsg.imageMessage?.caption ||
+      quotedMsg.videoMessage?.caption ||
+      "";
 
-    global.channelAutoTimers.set(taskId, newTask);
-    await syncTaskToDB(newTask);
+    let imageBase64 = null;
+    if (quotedMsg.imageMessage) {
+      try {
+        const imgBuffer = await downloadMediaMessage(
+          { key: { id: contextInfo.stanzaId, remoteJid: from }, message: quotedMsg },
+          "buffer",
+          {}
+        );
+        if (imgBuffer && imgBuffer.length > 0) {
+          imageBase64 = imgBuffer.toString("base64");
+        }
+      } catch (e) {
+        console.error("[IMAGE DOWNLOAD ERR]:", e.message);
+      }
+    }
 
-    sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
-
-    const successCard = 
-`🎀 ｡ﾟ•┈୨ *CHANNEL AUTO-POST SCHEDULED* ୧┈•ﾟ｡ 🐾
+    const menuCard = 
+`🎀 ｡ﾟ•┈୨ *CHOOSE AUTO-POST INTERVAL* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
-  🤖 *Posting Node:* \`+${currentBotPhone}\` (Your Instance)
-  📢 *Channel JID:* \`${targetChannelJid}\`
-  ⏳ *Repeat Interval:* Every \`${intervalInput}\`
-  💌 *Message Body:* "${messagePart}"
+  📢 *Target Channel:* \`${targetChannelJid}\`
+  🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Text Only 📝"}
+  💬 *Post Preview:* "${captionText.slice(0, 45)}..."
 
 ━━━━━━━━━━━━━━━━━━━━━
-_This post will softly & automatically be published to your channel every ${intervalInput}! (˶˃ ᵕ ˂˶)_
+🍬 *Reply with your preferred time interval:*
 
+  ⚡ *0*  ➔ Every 1 Minute (Live Fast Test) 🚀
+  ⏱️ *00* ➔ Every 2 Minutes (Short Test)
+  🌸 *1*  ➔ Every 30 Minutes (Half Hour)
+  ⏰ *2*  ➔ Every 1 Hour (60 Minutes)
+  🕒 *3*  ➔ Every 2 Hours
+  🌟 *4*  ➔ Every 4 Hours
+  🌙 *5*  ➔ Every 12 Hours (Twice Daily)
+
+━━━━━━━━━━━━━━━━━━━━━
+_Reply with 0, 00, 1, 2, 3, 4 or 5 to start publishing softly~ (˶˃ ᵕ ˂˶)_
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-    return await sock.sendMessage(from, { text: successCard }, { quoted: msg });
+    const sentMsg = await sock.sendMessage(from, { text: menuCard }, { quoted: msg });
+
+    if (sentMsg?.key?.id) {
+      global.autoSendSessions.set(sentMsg.key.id, {
+        from,
+        senderBotPhone: currentBotPhone,
+        channelJid: targetChannelJid,
+        caption: captionText,
+        imageBufferBase64: imageBase64
+      });
+
+      setTimeout(() => {
+        global.autoSendSessions.delete(sentMsg.key.id);
+      }, 300000);
+    }
+
+    sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
   }
 };
