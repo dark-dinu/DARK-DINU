@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import axios from "axios";
 
-// Local Logo Loader (root folder එකේ logo.jpg හෝ logo.png කියවයි)
+// Local Logo Loader
 function getLocalLogo() {
   const possiblePaths = [
     path.join(process.cwd(), "logo.jpg"),
@@ -23,28 +23,32 @@ export default {
   name: "alive",
   aliases: ["bot", "live", "status"],
   category: "general",
-  description: "Play voice note and send clean single-line alive card",
+  description: "Play voice note with profile view and send clean alive card",
 
   async execute({ sock, msg, from }) {
-    sock.sendMessage(from, { react: { text: "🥰", key: msg.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: "🍓", key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Voice Note Buffer Fetch & Send (WhatsApp 100% Playable)
+      // 1. Playable Audio with Voice Profile Display
       try {
         const audioRes = await axios.get("https://files.catbox.moe/37unrg.ogg", {
           responseType: "arraybuffer",
           headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
           },
           timeout: 20000
         });
+
+        // Dummy waveform bytes so WhatsApp renders audio bars and profile head correctly
+        const dummyWaveform = new Uint8Array([0, 99, 0, 99, 0, 99, 0, 99, 0, 99, 0, 99, 0, 99, 0, 99]);
 
         await sock.sendMessage(
           from,
           {
             audio: Buffer.from(audioRes.data),
             mimetype: "audio/ogg; codecs=opus",
-            ptt: true
+            ptt: true,
+            waveform: dummyWaveform
           },
           { quoted: msg }
         );
@@ -55,7 +59,7 @@ export default {
       // 2. Load Local Image Buffer
       const imageBuffer = getLocalLogo();
 
-      // Runtime Calculation (Compact)
+      // Runtime Calculation
       const uptimeSec = Math.floor(process.uptime());
       const hours = Math.floor(uptimeSec / 3600);
       const minutes = Math.floor((uptimeSec % 3600) / 60);
@@ -65,7 +69,7 @@ export default {
       const botName = "DARK-DINU";
       const fixedFooterLink = "https://heshan.devofc.top/";
 
-      // Clean Single-Line Quality Layout (No Boxes)
+      // Clean Single-Line Quality Layout
       const aliveCard = 
 `🍓 ༆⃝⃤ *Purring Online, Sweetie~* 🎀 🐾
 ━━━━━━━━━━━━━━━━━━━━
@@ -75,7 +79,7 @@ export default {
 ┊◈ 💬 *ᴍꜱɢ :* _Ready for your sweet commands~ ✨_
 
 ────────────────────
-🍰 *© ${botName} 𝐎ꜰᴄ* 🤍 | ➥ ${fixedFooterLink}`;
+🍰 *© ${botName} 𝐎ꜰᴄ* 🤍 | 📍 ${fixedFooterLink}`;
 
       // 3. Send Image with Caption
       await sock.sendMessage(
