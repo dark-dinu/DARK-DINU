@@ -2,7 +2,7 @@ import axios from "axios";
 import FormData from "form-data";
 import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 
-// Stream to Buffer helper function
+// Stream to Buffer Helper
 async function streamToBuffer(stream) {
   const chunks = [];
   for await (const chunk of stream) {
@@ -11,39 +11,86 @@ async function streamToBuffer(stream) {
   return Buffer.concat(chunks);
 }
 
-// 100% Dedicated Catbox Moe Uploader
-async function uploadToCatbox(buffer, filename, mimeType) {
-  const form = new FormData();
-  form.append("reqtype", "fileupload");
-  form.append("fileToUpload", buffer, {
-    filename,
-    contentType: mimeType
-  });
+// 100% Reliable Multi-Engine Direct Uploader
+async function uploadMedia(buffer, filename, mimeType) {
+  // Method 1: Catbox Moe (with Full Spoof Headers)
+  try {
+    const form = new FormData();
+    form.append("reqtype", "fileupload");
+    form.append("fileToUpload", buffer, {
+      filename: filename,
+      contentType: mimeType
+    });
 
-  const response = await axios.post("https://catbox.moe/user/api.php", form, {
-    headers: {
-      ...form.getHeaders(),
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    },
-    timeout: 60000,
-    maxBodyLength: Infinity,
-    maxContentLength: Infinity
-  });
+    const res = await axios.post("https://catbox.moe/user/api.php", form, {
+      headers: {
+        ...form.getHeaders(),
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "*/*"
+      },
+      timeout: 25000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity
+    });
 
-  const mediaUrl = typeof response.data === "string" ? response.data.trim() : null;
-
-  if (!mediaUrl || !mediaUrl.startsWith("http")) {
-    throw new Error(response.data || "Catbox upload failed.");
+    if (typeof res.data === "string" && res.data.startsWith("http")) {
+      return res.data.trim();
+    }
+  } catch (_) {
+    // Catbox cloudflare block වුණොත් පහත Fallback එකට මාරු වේ
   }
 
-  return mediaUrl;
+  // Method 2: Quax / File.io Cloud Mirror (No IP Blocks)
+  try {
+    const form2 = new FormData();
+    form2.append("files[]", buffer, {
+      filename: filename,
+      contentType: mimeType
+    });
+
+    const res2 = await axios.post("https://qu.ax/upload.php", form2, {
+      headers: form2.getHeaders(),
+      timeout: 25000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity
+    });
+
+    if (res2.data?.success && res2.data.files?.[0]?.url) {
+      return res2.data.files[0].url;
+    }
+  } catch (_) {}
+
+  // Method 3: Tmpfiles fallback (Direct Stream)
+  try {
+    const form3 = new FormData();
+    form3.append("file", buffer, {
+      filename: filename,
+      contentType: mimeType
+    });
+
+    const res3 = await axios.post("https://tmpfiles.org/api/v1/upload", form3, {
+      headers: form3.getHeaders(),
+      timeout: 25000,
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity
+    });
+
+    const url = res3.data?.data?.url;
+    if (url) {
+      return url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
+    }
+  } catch (err) {
+    throw new Error("Cloud upload servers are currently unreachable. Please retry.");
+  }
+
+  throw new Error("Unable to parse uploaded URL.");
 }
 
 export default {
   name: "url",
   aliases: ["tourl", "geturl", "upload", "catbox"],
   category: "utility",
-  description: "Convert Image, Video, Audio, Voice note, Sticker, or Document into a permanent Catbox URL",
+  description: "Convert Image, Video, Audio, Voice note, Sticker, or Document into direct URL",
 
   async execute({ sock, msg, from }) {
     try {
@@ -108,7 +155,7 @@ export default {
 
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Direct Stream Download
+      // Download buffer
       const stream = await downloadContentFromMessage(mediaNode, mediaType);
       const buffer = await streamToBuffer(stream);
 
@@ -122,7 +169,7 @@ export default {
       }
 
       const filename = `dark_dinu_${Date.now()}${fileExt}`;
-      const mediaUrl = await uploadToCatbox(buffer, filename, mimeType);
+      const mediaUrl = await uploadMedia(buffer, filename, mimeType);
       const sizeMB = (buffer.length / (1024 * 1024)).toFixed(2);
 
       const resultText = 
@@ -130,7 +177,7 @@ export default {
    🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
 ╚══════════════════════╝
 
-┌─〔 🐱 *CATBOX URL ENGINE* 〕
+┌─〔 🔗 *DIRECT URL ENGINE* 〕
 ├─▸ 📁 *Type* : ${mediaLabel}
 ├─▸ 📦 *Size* : ${sizeMB} MB
 ├─▸ 🌐 *Link* :
@@ -146,7 +193,7 @@ export default {
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `❌ Catbox URL එක සෑදීම අසාර්ථක විය: ${err.message}` },
+        { text: `❌ URL එක සෑදීම අසාර්ථක විය: ${err.message}` },
         { quoted: msg }
       );
     }
