@@ -50,7 +50,7 @@ function convertToOpusVoice(inputBuffer) {
   });
 }
 
-// Fast Waveform Vector (Zero dynamic array overhead)
+// Fast Waveform Vector
 function getFastWaveform() {
   const bars = new Uint8Array(64);
   for (let i = 0; i < 64; i++) {
@@ -59,14 +59,14 @@ function getFastWaveform() {
   return bars;
 }
 
-// Direct High-Speed Stream Downloader
+// Direct High-Speed Stream Downloader with Multi-Engine Fallback
 async function getPlayableAudio(videoUrl) {
-  const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
-
+  // Engine 1: Chamindu Site API
   try {
+    const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
     const res = await axios.get(
       `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(videoUrl)}&quality=128kbps&format=mp3&api_key=${apiKey}`,
-      { timeout: 12000 }
+      { timeout: 15000 }
     );
     const dl = res.data?.data?.direct_url || res.data?.data?.download_url || res.data?.direct_url;
     if (dl) {
@@ -79,20 +79,35 @@ async function getPlayableAudio(videoUrl) {
     }
   } catch (_) {}
 
-  // Fallback Mirror
+  // Engine 2: BK9 Relay
   try {
-    const res2 = await axios.get(`https://bk9.fun/download/youtube?url=${encodeURIComponent(videoUrl)}`, { timeout: 10000 });
-    const dl2 = res2.data?.BK9?.BK8;
+    const res2 = await axios.get(`https://bk9.fun/download/youtube?url=${encodeURIComponent(videoUrl)}`, { timeout: 12000 });
+    const dl2 = res2.data?.BK9?.BK8 || res2.data?.BK9?.BK7;
     if (dl2) {
       const stream2 = await axios.get(dl2, { responseType: "arraybuffer", timeout: 30000 });
       return Buffer.from(stream2.data);
     }
   } catch (_) {}
 
+  // Engine 3: David Cyril Engine
+  try {
+    const res3 = await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`, { timeout: 12000 });
+    const dl3 = res3.data?.result?.download_url || res3.data?.result?.url;
+    if (dl3) {
+      const stream3 = await axios.get(dl3, { responseType: "arraybuffer", timeout: 30000 });
+      return Buffer.from(stream3.data);
+    }
+  } catch (_) {}
+
   return null;
 }
 
-// Non-blocking Fast Reply Listener
+// Normalized Chat JID Helper
+function cleanJid(jid = "") {
+  return jid.split("@")[0].split(":")[0];
+}
+
+// Non-blocking Fast Reply Listener for All Users
 export function attachSongReplyEngine(sock) {
   if (!sock || global.songHookedSockets.has(sock)) return;
   global.songHookedSockets.add(sock);
@@ -100,12 +115,13 @@ export function attachSongReplyEngine(sock) {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const m = messages[0];
-    if (!m?.message || m.key.fromMe) return;
+    if (!m?.message) return;
 
     const from = m.key.remoteJid;
     if (!from || from === "status@broadcast") return;
 
-    const rawMsg = m.message.ephemeralMessage?.message || m.message;
+    // Unpack Ephemeral / ViewOnce Wrappers
+    const rawMsg = m.message.ephemeralMessage?.message || m.message.viewOnceMessage?.message || m.message;
     const contextInfo =
       rawMsg?.extendedTextMessage?.contextInfo ||
       rawMsg?.imageMessage?.contextInfo ||
@@ -115,7 +131,9 @@ export function attachSongReplyEngine(sock) {
     if (!quotedId || !global.songSessions.has(quotedId)) return;
 
     const session = global.songSessions.get(quotedId);
-    if (session.from !== from) return;
+
+    // Loose JID Check (Prevents dropping messages due to device/LID differences)
+    if (cleanJid(session.from) !== cleanJid(from)) return;
 
     const choice = (
       rawMsg.conversation ||
@@ -125,7 +143,7 @@ export function attachSongReplyEngine(sock) {
 
     if (choice !== "1" && choice !== "2" && choice !== "3") return;
 
-    // Instant Microsecond Reaction
+    // Instant Reaction
     sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
 
     try {
@@ -133,21 +151,18 @@ export function attachSongReplyEngine(sock) {
       if (!audioBuffer) throw new Error("Audio stream unavailable at the moment");
 
       if (choice === "1") {
-        // Native WhatsApp Playable Audio
         await sock.sendMessage(from, {
           audio: audioBuffer,
           mimetype: "audio/mpeg",
           fileName: `${session.title}.mp3`
         }, { quoted: m });
       } else if (choice === "2") {
-        // Document File
         await sock.sendMessage(from, {
           document: audioBuffer,
           mimetype: "audio/mpeg",
           fileName: `${session.title}.mp3`
         }, { quoted: m });
       } else if (choice === "3") {
-        // High-Quality Opus Voice Note with Waveform
         const voiceBuffer = await convertToOpusVoice(audioBuffer);
         await sock.sendMessage(from, {
           audio: voiceBuffer,
@@ -162,7 +177,7 @@ export function attachSongReplyEngine(sock) {
 
     } catch (err) {
       console.error("[SONG SEND ERROR]:", err.message);
-      sock.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg?.key || m.key } }).catch(() => {});
       sock.sendMessage(
         from,
         { text: `🌸 *Glitch detected:* ${err.message || "Could not deliver audio softly"}` },
@@ -230,7 +245,6 @@ export default {
         duration = video.timestamp || "3:30";
       }
 
-      // Cute Interactive Card UI
       const songCard = 
 `🎀 ｡ﾟ•┈୨ *AUDIO DOWNLOADER* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
@@ -267,7 +281,6 @@ _Reply with 1, 2 or 3 to download softly~ (˶˃ ᵕ ˂˶)_
           from
         });
 
-        // 5-Minute TTL Memory Prune
         setTimeout(() => {
           global.songSessions.delete(sentMsg.key.id);
         }, 300000);
@@ -283,6 +296,53 @@ _Reply with 1, 2 or 3 to download softly~ (˶˃ ᵕ ˂˶)_
         { text: `🌸 *Glitch detected:* ${err.message || "Failed to process audio softly"}` },
         { quoted: msg }
       );
+    }
+  },
+
+  // Direct index.js onReply fallback hook
+  async onReply({ sock, msg, from, body, quotedStanzaId }) {
+    if (!global.songSessions.has(quotedStanzaId)) return false;
+
+    const session = global.songSessions.get(quotedStanzaId);
+    if (cleanJid(session.from) !== cleanJid(from)) return false;
+
+    const choice = body.trim();
+    if (choice !== "1" && choice !== "2" && choice !== "3") return false;
+
+    sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
+
+    try {
+      const audioBuffer = await getPlayableAudio(session.videoUrl);
+      if (!audioBuffer) throw new Error("Audio stream unavailable");
+
+      if (choice === "1") {
+        await sock.sendMessage(from, {
+          audio: audioBuffer,
+          mimetype: "audio/mpeg",
+          fileName: `${session.title}.mp3`
+        }, { quoted: msg });
+      } else if (choice === "2") {
+        await sock.sendMessage(from, {
+          document: audioBuffer,
+          mimetype: "audio/mpeg",
+          fileName: `${session.title}.mp3`
+        }, { quoted: msg });
+      } else if (choice === "3") {
+        const voiceBuffer = await convertToOpusVoice(audioBuffer);
+        await sock.sendMessage(from, {
+          audio: voiceBuffer,
+          mimetype: "audio/ogg; codecs=opus",
+          ptt: true,
+          waveform: getFastWaveform()
+        }, { quoted: msg });
+      }
+
+      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
+      global.songSessions.delete(quotedStanzaId);
+      return true;
+    } catch (err) {
+      console.error("[ONREPLY SONG ERROR]:", err.message);
+      return false;
     }
   }
 };
