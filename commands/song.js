@@ -107,7 +107,64 @@ function cleanJid(jid = "") {
   return jid.split("@")[0].split(":")[0];
 }
 
-// Non-blocking Fast Reply Listener for All Users
+// 🔒 ATOMIC HANDLER (Ensures exactly ONE audio message is sent per reply)
+async function handleAudioDispatch(sock, m, from, quotedId, choice) {
+  if (!global.songSessions.has(quotedId)) return false;
+
+  const session = global.songSessions.get(quotedId);
+
+  // Anti-Duplicate Atomic Lock
+  if (session.isProcessing) return false;
+  session.isProcessing = true;
+
+  // Immediate delete from session store so no secondary thread can process it
+  global.songSessions.delete(quotedId);
+
+  // Microsecond React
+  sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
+
+  try {
+    const audioBuffer = await getPlayableAudio(session.videoUrl);
+    if (!audioBuffer) throw new Error("Audio stream unavailable at the moment");
+
+    if (choice === "1") {
+      await sock.sendMessage(from, {
+        audio: audioBuffer,
+        mimetype: "audio/mpeg",
+        fileName: `${session.title}.mp3`
+      }, { quoted: m });
+    } else if (choice === "2") {
+      await sock.sendMessage(from, {
+        document: audioBuffer,
+        mimetype: "audio/mpeg",
+        fileName: `${session.title}.mp3`
+      }, { quoted: m });
+    } else if (choice === "3") {
+      const voiceBuffer = await convertToOpusVoice(audioBuffer);
+      await sock.sendMessage(from, {
+        audio: voiceBuffer,
+        mimetype: "audio/ogg; codecs=opus",
+        ptt: true,
+        waveform: getFastWaveform()
+      }, { quoted: m });
+    }
+
+    sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
+    return true;
+
+  } catch (err) {
+    console.error("[SONG SEND ERROR]:", err.message);
+    sock.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+    sock.sendMessage(
+      from,
+      { text: `🌸 *Glitch detected:* ${err.message || "Could not deliver audio softly"}` },
+      { quoted: m }
+    ).catch(() => {});
+    return false;
+  }
+}
+
+// Fast Background Listener
 export function attachSongReplyEngine(sock) {
   if (!sock || global.songHookedSockets.has(sock)) return;
   global.songHookedSockets.add(sock);
@@ -120,7 +177,6 @@ export function attachSongReplyEngine(sock) {
     const from = m.key.remoteJid;
     if (!from || from === "status@broadcast") return;
 
-    // Unpack Ephemeral / ViewOnce Wrappers
     const rawMsg = m.message.ephemeralMessage?.message || m.message.viewOnceMessage?.message || m.message;
     const contextInfo =
       rawMsg?.extendedTextMessage?.contextInfo ||
@@ -131,8 +187,6 @@ export function attachSongReplyEngine(sock) {
     if (!quotedId || !global.songSessions.has(quotedId)) return;
 
     const session = global.songSessions.get(quotedId);
-
-    // Loose JID Check (Prevents dropping messages due to device/LID differences)
     if (cleanJid(session.from) !== cleanJid(from)) return;
 
     const choice = (
@@ -143,47 +197,7 @@ export function attachSongReplyEngine(sock) {
 
     if (choice !== "1" && choice !== "2" && choice !== "3") return;
 
-    // Instant Reaction
-    sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
-
-    try {
-      const audioBuffer = await getPlayableAudio(session.videoUrl);
-      if (!audioBuffer) throw new Error("Audio stream unavailable at the moment");
-
-      if (choice === "1") {
-        await sock.sendMessage(from, {
-          audio: audioBuffer,
-          mimetype: "audio/mpeg",
-          fileName: `${session.title}.mp3`
-        }, { quoted: m });
-      } else if (choice === "2") {
-        await sock.sendMessage(from, {
-          document: audioBuffer,
-          mimetype: "audio/mpeg",
-          fileName: `${session.title}.mp3`
-        }, { quoted: m });
-      } else if (choice === "3") {
-        const voiceBuffer = await convertToOpusVoice(audioBuffer);
-        await sock.sendMessage(from, {
-          audio: voiceBuffer,
-          mimetype: "audio/ogg; codecs=opus",
-          ptt: true,
-          waveform: getFastWaveform()
-        }, { quoted: m });
-      }
-
-      sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
-      global.songSessions.delete(quotedId);
-
-    } catch (err) {
-      console.error("[SONG SEND ERROR]:", err.message);
-      sock.sendMessage(from, { react: { text: "⚠️", key: msg?.key || m.key } }).catch(() => {});
-      sock.sendMessage(
-        from,
-        { text: `🌸 *Glitch detected:* ${err.message || "Could not deliver audio softly"}` },
-        { quoted: m }
-      ).catch(() => {});
-    }
+    await handleAudioDispatch(sock, m, from, quotedId, choice);
   });
 }
 
@@ -278,7 +292,8 @@ _Reply with 1, 2 or 3 to download softly~ (˶˃ ᵕ ˂˶)_
         global.songSessions.set(sentMsg.key.id, {
           title,
           videoUrl,
-          from
+          from,
+          isProcessing: false
         });
 
         setTimeout(() => {
@@ -299,50 +314,10 @@ _Reply with 1, 2 or 3 to download softly~ (˶˃ ᵕ ˂˶)_
     }
   },
 
-  // Direct index.js onReply fallback hook
+  // Fallback handler if index.js calls onReply directly
   async onReply({ sock, msg, from, body, quotedStanzaId }) {
-    if (!global.songSessions.has(quotedStanzaId)) return false;
-
-    const session = global.songSessions.get(quotedStanzaId);
-    if (cleanJid(session.from) !== cleanJid(from)) return false;
-
     const choice = body.trim();
     if (choice !== "1" && choice !== "2" && choice !== "3") return false;
-
-    sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
-
-    try {
-      const audioBuffer = await getPlayableAudio(session.videoUrl);
-      if (!audioBuffer) throw new Error("Audio stream unavailable");
-
-      if (choice === "1") {
-        await sock.sendMessage(from, {
-          audio: audioBuffer,
-          mimetype: "audio/mpeg",
-          fileName: `${session.title}.mp3`
-        }, { quoted: msg });
-      } else if (choice === "2") {
-        await sock.sendMessage(from, {
-          document: audioBuffer,
-          mimetype: "audio/mpeg",
-          fileName: `${session.title}.mp3`
-        }, { quoted: msg });
-      } else if (choice === "3") {
-        const voiceBuffer = await convertToOpusVoice(audioBuffer);
-        await sock.sendMessage(from, {
-          audio: voiceBuffer,
-          mimetype: "audio/ogg; codecs=opus",
-          ptt: true,
-          waveform: getFastWaveform()
-        }, { quoted: msg });
-      }
-
-      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
-      global.songSessions.delete(quotedStanzaId);
-      return true;
-    } catch (err) {
-      console.error("[ONREPLY SONG ERROR]:", err.message);
-      return false;
-    }
+    return await handleAudioDispatch(sock, msg, from, quotedStanzaId, choice);
   }
 };
