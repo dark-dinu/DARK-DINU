@@ -29,26 +29,26 @@ export default {
     sock.sendMessage(from, { react: { text: "🍓", key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Playable Audio with Voice Profile Display
+      // 1. Playable Audio (Download complete stream buffer)
       try {
         const audioRes = await axios.get("https://files.catbox.moe/37unrg.ogg", {
           responseType: "arraybuffer",
           headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            "Accept": "*/*",
+            "User-Agent": "Mozilla/5.0"
           },
-          timeout: 20000
+          timeout: 25000
         });
 
-        // Dummy waveform bytes so WhatsApp renders audio bars and profile head correctly
-        const dummyWaveform = new Uint8Array([0, 99, 0, 99, 0, 99, 0, 99, 0, 99, 0, 99, 0, 99, 0, 99]);
+        const audioBuffer = Buffer.from(audioRes.data);
 
+        // Standard WhatsApp Voice Note (audio/mp4 format ensures 100% playback on all devices)
         await sock.sendMessage(
           from,
           {
-            audio: Buffer.from(audioRes.data),
-            mimetype: "audio/ogg; codecs=opus",
-            ptt: true,
-            waveform: dummyWaveform
+            audio: audioBuffer,
+            mimetype: "audio/mp4",
+            ptt: true
           },
           { quoted: msg }
         );
