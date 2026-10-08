@@ -23,7 +23,7 @@ const PORT = Number(CONFIG.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Ultra-fast lightweight in-memory cache
+// Ultra-fast lightweight in-memory cache for message retries
 const msgRetryCounterCache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
 
 // Active Bot Sockets Global Store
@@ -47,10 +47,12 @@ async function loadCommands() {
   for (const file of files) {
     try {
       const mod = await import(`${pathToFileURL(path.join(dir, file)).href}?t=${Date.now()}`);
-      const cmd = mod.default;
+      const cmd = mod.default || mod;
       if (cmd?.name) {
         commands.set(cmd.name.toLowerCase(), cmd);
-        cmd.aliases?.forEach((a) => commands.set(a.toLowerCase(), cmd));
+        if (Array.isArray(cmd.aliases)) {
+          cmd.aliases.forEach((a) => commands.set(a.toLowerCase(), cmd));
+        }
 
         if (typeof cmd.onReply === "function") {
           replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
@@ -60,7 +62,23 @@ async function loadCommands() {
       console.error(`[!] Failed loading ${file}:`, e.message);
     }
   }
-  console.log(`[+] Auto-loaded ${commands.size} commands/aliases into memory.`);
+  console.log(`✨ Successfully loaded ${commands.size} commands & aliases into fast-memory!`);
+}
+
+// Helper: Extract text from any Baileys message type cleanly
+function extractMessageBody(m) {
+  if (!m) return "";
+  const msg = m.ephemeralMessage?.message || m.viewOnceMessageV2?.message || m.viewOnceMessage?.message || m;
+  return (
+    msg.conversation ||
+    msg.extendedTextMessage?.text ||
+    msg.imageMessage?.caption ||
+    msg.videoMessage?.caption ||
+    msg.templateButtonReplyMessage?.selectedId ||
+    msg.buttonsResponseMessage?.selectedButtonId ||
+    msg.listResponseMessage?.singleSelectReply?.selectedRowId ||
+    ""
+  );
 }
 
 // 2. Next-Gen Cyber Glassmorphism Web Portal (Untouched)
@@ -432,7 +450,7 @@ app.get("/", (req, res) => {
 </html>`);
 });
 
-// 3. Central Socket Launcher & Universal Handler (Zero Bottleneck)
+// 3. Central Socket Launcher & Universal Handler
 async function startBotSocket(sessionId, authCollection) {
   try {
     const { state, saveCreds } = await useMongoDBAuthState(authCollection);
@@ -441,11 +459,11 @@ async function startBotSocket(sessionId, authCollection) {
     const sock = makeWASocket({
       version,
       auth: state,
-      logger: pino({ level: "fatal" }), // Completely silences I/O logging overhead
+      logger: pino({ level: "fatal" }),
       printQRInTerminal: false,
       msgRetryCounterCache,
       browser: Browsers.ubuntu("Chrome"),
-      connectTimeoutMs: 20000,
+      connectTimeoutMs: 30000,
       defaultQueryTimeoutMs: 0,
       keepAliveIntervalMs: 15000,
       emitOwnEvents: false,
@@ -459,17 +477,17 @@ async function startBotSocket(sessionId, authCollection) {
 
     sock.ev.on("connection.update", async ({ connection, lastDisconnect }) => {
       if (connection === "open") {
-        console.log(`[+] Bot connected: ${sessionId}`);
+        console.log(`🌸 Bot connected successfully: ${sessionId}`);
         activeSockets.set(sessionId, sock);
       }
       if (connection === "close") {
         activeSockets.delete(sessionId);
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         if (statusCode !== DisconnectReason.loggedOut) {
-          console.log(`[*] Reconnecting: ${sessionId}`);
+          console.log(`🔄 Session reconnecting: ${sessionId}`);
           setTimeout(() => startBotSocket(sessionId, authCollection), 3000);
         } else {
-          console.log(`[-] Logged out: ${sessionId}`);
+          console.log(`❌ Session logged out: ${sessionId}`);
           await authCollection.drop().catch(() => {});
         }
       }
@@ -481,21 +499,16 @@ async function startBotSocket(sessionId, authCollection) {
       if (!msg?.message) return;
 
       const from = msg.key.remoteJid;
-      // Drop status broadcast messages instantly to save CPU cycles
       if (!from || from === "status@broadcast") return;
 
-      const body =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        msg.message.imageMessage?.caption ||
-        msg.message.videoMessage?.caption ||
-        "";
+      const body = extractMessageBody(msg.message).trim();
 
       const quotedStanzaId =
         msg.message?.extendedTextMessage?.contextInfo?.stanzaId ||
-        msg.message?.imageMessage?.contextInfo?.stanzaId;
+        msg.message?.imageMessage?.contextInfo?.stanzaId ||
+        msg.message?.videoMessage?.contextInfo?.stanzaId;
 
-      // Handle interactive replies asynchronously
+      // Handle reply listeners asynchronously
       if (quotedStanzaId) {
         setImmediate(async () => {
           for (const [, handler] of replyHandlers) {
@@ -509,7 +522,7 @@ async function startBotSocket(sessionId, authCollection) {
         });
       }
 
-      // Early drop if message does not start with Prefix
+      // Prefix check
       const prefix = CONFIG.PREFIX || ".";
       if (!body.startsWith(prefix)) return;
 
@@ -519,11 +532,12 @@ async function startBotSocket(sessionId, authCollection) {
         : (msg.key.fromMe ? (sock.user?.id || from) : from);
 
       const args = body.slice(prefix.length).trim().split(/ +/);
-      const cmdName = args.shift().toLowerCase();
+      const cmdName = args.shift()?.toLowerCase();
+      if (!cmdName) return;
+
       const command = commands.get(cmdName);
 
       if (command) {
-        // Non-blocking async queue dispatch for instant response execution
         setImmediate(async () => {
           try {
             await command.execute({
@@ -539,8 +553,12 @@ async function startBotSocket(sessionId, authCollection) {
               commands
             });
           } catch (err) {
-            console.error(`[!] Command error [${cmdName}]:`, err.message);
-            await sock.sendMessage(from, { text: "❌ Command execution error!" }, { quoted: msg }).catch(() => {});
+            console.error(`[Command Error - ${cmdName}]:`, err.message);
+            await sock.sendMessage(
+              from,
+              { text: `✨ *Oopsie!* Something went wrong while running this command.\n_Error: ${err.message || "Unknown glitch"}_ 🐾` },
+              { quoted: msg }
+            ).catch(() => {});
           }
         });
       }
@@ -553,7 +571,7 @@ async function startBotSocket(sessionId, authCollection) {
   }
 }
 
-// 4. Pairing Endpoint (Untouched)
+// 4. Pairing Endpoint
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone?.replace(/[^0-9]/g, "");
   if (!phone) return res.status(400).json({ error: "Phone number required" });
@@ -584,26 +602,25 @@ app.get("/health", (req, res) => {
 
 // 5. Server Run with Staggered Multi-Bot Initializer
 app.listen(PORT, "0.0.0.0", async () => {
-  console.log(`[+] Web server listening on port ${PORT}`);
+  console.log(`🚀 Dark-Dinu Cloud Engine running on port ${PORT}`);
 
   try {
     await loadCommands();
     mongoClient = new MongoClient(CONFIG.MONGODB_URI);
     await mongoClient.connect();
     db = mongoClient.db(CONFIG.DB_NAME);
-    console.log("[+] MongoDB Connected Successfully!");
+    console.log("🍃 MongoDB database connected successfully!");
 
     const collections = await db.listCollections().toArray();
     for (const col of collections) {
       if (col.name.startsWith("bot_")) {
-        console.log(`[*] Auto-starting session: ${col.name}`);
+        console.log(`⚡ Waking up session: ${col.name}`);
         startBotSocket(col.name, db.collection(col.name));
-        // Stagger session initialization to prevent RAM and CPU spikes
         await delay(2500);
       }
     }
   } catch (err) {
-    console.error("[!] Database Startup Error:", err.message);
+    console.error("❌ Database Startup Error:", err.message);
   }
 });
 
@@ -617,7 +634,7 @@ setInterval(async () => {
 
 // Graceful Termination
 process.on("SIGTERM", async () => {
-  console.log("[*] SIGTERM received. Closing active sessions...");
+  console.log("🌸 SIGTERM received. Gracefully terminating sessions...");
   if (mongoClient) await mongoClient.close();
   process.exit(0);
 });
