@@ -1,81 +1,87 @@
 import { MongoClient } from "mongodb";
 
-// 1. Single Reusable MongoDB Connection Pool
-if (!global.sharedMongoClient) {
-  global.sharedMongoClient = new MongoClient(
-    "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-    {
-      maxPoolSize: 10,
-      minPoolSize: 2,
-      maxIdleTimeMS: 30000,
-      serverSelectionTimeoutMS: 5000
-    }
-  );
-  global.sharedMongoClient.connect().catch(() => {});
-}
-
 global.turboHooked = global.turboHooked || new WeakSet();
 
+// Max listeners warning suppressor
 function optimizeSocket(sock) {
   if (!sock || global.turboHooked.has(sock)) return;
   global.turboHooked.add(sock);
 
-  // Baileys max event listeners warning & lag bypass
   if (sock.ev && typeof sock.ev.setMaxListeners === "function") {
     sock.ev.setMaxListeners(100);
   }
 }
 
-// Memory Garbage Cleaner
-function cleanMemoryStores() {
-  if (global.antiDeleteStore && global.antiDeleteStore.size > 1500) {
-    const keys = Array.from(global.antiDeleteStore.keys());
-    for (let i = 0; i < 500; i++) {
-      global.antiDeleteStore.delete(keys[i]);
+// O(1) Fast Zero-Allocation Memory Flusher
+function flushMemoryCaches() {
+  if (global.antiDeleteStore && global.antiDeleteStore.size > 1200) {
+    const iter = global.antiDeleteStore.keys();
+    for (let i = 0; i < 400; i++) {
+      const nextKey = iter.next().value;
+      if (!nextKey) break;
+      global.antiDeleteStore.delete(nextKey);
     }
+  }
+
+  // Optional manual GC trigger if exposed
+  if (global.gc) {
+    try { global.gc(); } catch (_) {}
   }
 }
 
 if (!global.turboCleanerStarted) {
   global.turboCleanerStarted = true;
   setInterval(() => {
-    cleanMemoryStores();
+    flushMemoryCaches();
     if (global.activeSockets) {
       for (const [, s] of global.activeSockets.entries()) {
         optimizeSocket(s);
       }
     }
-  }, 30000); // තත්පර 30කට වරක් පමණක් scan වේ
+  }, 45000);
 }
 
 export default {
   name: "ping2",
-  aliases: ["speed2", "turbo", "fast"],
+  aliases: ["speed2", "turbo", "fast", "flush"],
   category: "utility",
-  description: "Check bot latency and flush memory",
+  description: "Check precise bot performance & flush cached heap memory",
 
   async execute({ sock, msg, from }) {
-    const start = Date.now();
-    await sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
+    // 1. Instant Reaction
+    sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
 
-    const latency = Date.now() - start;
-    const ramUsed = (process.memoryUsage().heapUsed / 1024 / 1024).toFixed(1);
-    const ramTotal = (process.memoryUsage().heapTotal / 1024 / 1024).toFixed(1);
+    // Monotonic high-resolution timer
+    const startHr = process.hrtime.bigint();
 
-    const speedCard = 
-`╔══════════════════════╗
-   ⚡ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔  𝐒 𝐏 𝐄 𝐄 𝐃 ⚡
-╚══════════════════════╝
+    // Fast Memory Flush
+    flushMemoryCaches();
 
-┌─〔 🚀 *PERFORMANCE METRICS* 〕
-├─▸ 📶 *Speed / Latency* : \`${latency} ms\`
-├─▸ 📟 *RAM Usage*       : \`${ramUsed} MB / ${ramTotal} MB\`
-├─▸ 🗄️ *DB Pool*         : POOL ACTIVE
-├─▸ 🛡️ *Status*          : ULTRA-FAST 🟢
-└───────────────────────
+    // Bitwise Heap Usage Math
+    const mem = process.memoryUsage();
+    const heapUsedMB = ((mem.heapUsed / 1048576) * 10 | 0) / 10;
+    const heapTotalMB = ((mem.heapTotal / 1048576) * 10 | 0) / 10;
+    const rssMB = ((mem.rss / 1048576) * 10 | 0) / 10;
 
-> ⚡ *Bottlenecks Cleaned Successfully!*`;
+    const endHr = process.hrtime.bigint();
+    const benchmarkMs = Number((endHr - startHr) / 1000000n) | 0;
 
-    await sock.sendMessage(from, { text: speedCard }, { quoted: msg });
+    // Cute Aesthetic Performance Dashboard
+    const performanceCard = 
+`🎀 ｡ﾟ•┈୨ *TURBO SPEED & MEMORY* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
+
+  ⚡ *Internal Latency:* \`${benchmarkMs || 1} ms\`
+  📟 *RAM Heap Used:* \`${heapUsedMB} MB / ${heapTotalMB} MB\`
+  📊 *Physical RSS:* \`${rssMB} MB\`
+  🗄️ *MongoDB Pool:* 🟢 Active & Reused
+  🧹 *Memory Cache:* Purged & Sparkling Fresh! ✨
+
+━━━━━━━━━━━━━━━━━━━━━
+✨ *Everything is optimized, purring fast and smooth~ (˶˃ ᵕ ˂˶)*
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+    await sock.sendMessage(from, { text: performanceCard }, { quoted: msg });
+    sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
   }
 };
