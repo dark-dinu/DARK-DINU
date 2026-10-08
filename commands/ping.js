@@ -29,6 +29,6 @@ export default {
     }
 
     // Reaction in background
-    sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: "🚀", key: msg.key } }).catch(() => {});
   }
 };
