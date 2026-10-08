@@ -8,137 +8,118 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 const execPromise = promisify(exec);
 const ffmpegPath = ffmpegInstaller.path;
 
-// Global In-Memory Cache for converted PTT Audio (Zero delay on repeated calls)
-let cachedPttBuffer = null;
-let isCachingAudio = false;
+// Global Fast RAM Buffers
+let preloadedVoice = null;
+let preloadedLogo = null;
 
-// Safe file remover helper
+// Safe file remover
 function safeUnlink(filePath) {
   try {
     if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
   } catch (_) {}
 }
 
-// Local / Remote Logo Loader
-function getLocalLogo() {
-  const possiblePaths = [
-    path.join(process.cwd(), "logo.jpg"),
-    path.join(process.cwd(), "logo.png"),
-    path.join(process.cwd(), "assets", "logo.jpg"),
-    path.join(process.cwd(), "assets", "logo.png")
-  ];
-
-  for (const p of possiblePaths) {
-    if (fs.existsSync(p)) return fs.readFileSync(p);
-  }
-  return { url: "https://files.catbox.moe/k315x4.jpg" };
-}
-
-// Fetch & Cache Audio in WhatsApp Mono Opus format
-async function getVoiceNoteBuffer() {
-  if (cachedPttBuffer) return cachedPttBuffer;
-  if (isCachingAudio) return null;
-
-  isCachingAudio = true;
-  const tempInput = path.join(process.cwd(), `temp_${Date.now()}.ogg`);
-  const tempOutput = path.join(process.cwd(), `voice_${Date.now()}.opus`);
-
+// 1. Instant Memory Preloader (Bot එක ඔන් වෙද්දිම background එකේ බඩු ලෑස්ති කරගන්නවා)
+(async function initAssets() {
   try {
-    const audioRes = await axios.get("https://files.catbox.moe/37unrg.ogg", {
+    // Preload Logo into RAM
+    const possiblePaths = [
+      path.join(process.cwd(), "logo.jpg"),
+      path.join(process.cwd(), "logo.png"),
+      path.join(process.cwd(), "assets", "logo.jpg"),
+      path.join(process.cwd(), "assets", "logo.png")
+    ];
+
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        preloadedLogo = fs.readFileSync(p);
+        break;
+      }
+    }
+    if (!preloadedLogo) preloadedLogo = { url: "https://files.catbox.moe/k315x4.jpg" };
+
+    // Preload & Pre-encode Voice Note once into RAM
+    const tempIn = path.join(process.cwd(), `init_${Date.now()}.ogg`);
+    const tempOut = path.join(process.cwd(), `init_${Date.now()}.opus`);
+
+    const res = await axios.get("https://files.catbox.moe/37unrg.ogg", {
       responseType: "arraybuffer",
-      timeout: 15000
+      timeout: 10000
     });
 
-    fs.writeFileSync(tempInput, Buffer.from(audioRes.data));
+    fs.writeFileSync(tempIn, Buffer.from(res.data));
+    await execPromise(`"${ffmpegPath}" -y -i "${tempIn}" -c:a libopus -b:a 32k -vbr on -ar 48000 -ac 1 "${tempOut}"`);
 
-    // Convert to optimal WhatsApp Opus format
-    await execPromise(
-      `"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 32k -vbr on -ar 48000 -ac 1 "${tempOutput}"`
-    );
-
-    if (fs.existsSync(tempOutput)) {
-      cachedPttBuffer = fs.readFileSync(tempOutput);
-      return cachedPttBuffer;
+    if (fs.existsSync(tempOut)) {
+      preloadedVoice = fs.readFileSync(tempOut);
     }
-  } catch (err) {
-    console.error("[VOICE ENCODE ERROR]:", err.message);
-    return null;
-  } finally {
-    safeUnlink(tempInput);
-    safeUnlink(tempOutput);
-    isCachingAudio = false;
+    safeUnlink(tempIn);
+    safeUnlink(tempOut);
+  } catch (e) {
+    console.error("[Alive Preload Warning]:", e.message);
   }
-  return null;
-}
+})();
 
 export default {
   name: "alive",
   aliases: ["bot", "live", "status"],
   category: "general",
-  description: "Check bot status with a cute voice note & card",
+  description: "Instant status check with cute voice and banner",
 
   async execute({ sock, msg, from, config }) {
-    // Soft cute reaction
+    // ⚡ ZERO-DELAY INSTANT REACTION (Not waiting for anything!)
     sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
-    try {
-      // 1. Calculate Uptime
-      const uptimeSec = Math.floor(process.uptime());
-      const hours = Math.floor(uptimeSec / 3600);
-      const minutes = Math.floor((uptimeSec % 3600) / 60);
-      const seconds = uptimeSec % 60;
-      const runtimeStr = `${hours ? `${hours}h ` : ""}${minutes}m ${seconds}s`;
+    // Uptime String Calculation (Ultra-fast bitwise math)
+    const uptimeSec = process.uptime() | 0;
+    const hours = (uptimeSec / 3600) | 0;
+    const minutes = ((uptimeSec % 3600) / 60) | 0;
+    const seconds = (uptimeSec % 60) | 0;
+    const runtimeStr = `${hours ? `${hours}h ` : ""}${minutes}m ${seconds}s`;
 
-      const botName = config?.BOT_NAME || "DARK-DINU MD";
-      const siteLink = "https://heshan.devofc.top/";
+    const botName = config?.BOT_NAME || "DARK-DINU MD";
+    const siteLink = "https://heshan.devofc.top/";
 
-      // 2. Ultra-Cute Layout
-      const aliveCard = 
-`🎀 ｡ﾟ•┈୨ *ONLINE & PURRING* ୧┈•ﾟ｡ 🐾
-*━━━━━━━━━━━━━━━━━━━━━━*
+    const aliveCard = 
+`🎀 ｡ﾟ•┈୨ *ONLINE & READY* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
 
-  ✗🌸 *Status:* Feeling sweet & ready for you! (˶˃ ᵕ ˂˶)
-  ✗⏱️ *Uptime:* \`${runtimeStr}\`
-  ✗⚡ *Speed:* Lightning Fast Cloud
-  ✗🍰 *Mood:* 100% Cotton Candy & Sunshine ✨
+  🌸 *Status:* Active & Super Speedy! (˶˃ ᵕ ˂˶)
+  ⏱️ *Uptime:* \`${runtimeStr}\`
+  ⚡ *Response:* Instant Flash 
+  🍰 *Mood:* 100% Cuteness & Care ✨
 
-*━━━━━━━━━━━━━━━━━━━━━━*
-🐾 *Need help?* Type \`${config?.PREFIX || "."}menu\` anytime sweetheart!
+━━━━━━━━━━━━━━━━━━━━━━
+🐾 *Commands:* Type \`${config?.PREFIX || "."}menu\` darling!
 🤍 *© ${botName}* • ${siteLink}`;
 
-      // 3. Send Image Status Card
-      await sock.sendMessage(
+    // Parallel Dispatch: Card එකයි Voice එකයි එකවරම යැවීම
+    const tasks = [
+      sock.sendMessage(
         from,
         {
-          image: getLocalLogo(),
+          image: preloadedLogo || { url: "https://files.catbox.moe/k315x4.jpg" },
           caption: aliveCard
         },
         { quoted: msg }
-      );
+      )
+    ];
 
-      // 4. Send Instant PTT Audio
-      const voiceBuffer = await getVoiceNoteBuffer();
-      if (voiceBuffer) {
-        await sock.sendMessage(
+    if (preloadedVoice) {
+      tasks.push(
+        sock.sendMessage(
           from,
           {
-            audio: voiceBuffer,
+            audio: preloadedVoice,
             mimetype: "audio/ogg; codecs=opus",
             ptt: true
           },
           { quoted: msg }
-        );
-      }
-
-    } catch (err) {
-      console.error("[ALIVE COMMAND ERROR]:", err.message);
-      await sock.sendMessage(
-        from,
-        {
-          text: `🌸 *Yay! I am awake and healthy, darling!* ✨\n\n🔗 *Website:* https://heshan.devofc.top/`
-        },
-        { quoted: msg }
-      ).catch(() => {});
+        )
+      );
     }
+
+    // Execute both concurrently for lightning speed
+    Promise.allSettled(tasks).catch(() => {});
   }
 };
