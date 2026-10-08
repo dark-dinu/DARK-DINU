@@ -1,259 +1,250 @@
 import fs from "fs";
 import path from "path";
-import { MongoClient } from "mongodb";
-import CONFIG from "../config.js";
 
-// Active Sessions Store
+// Active Menu Reply Sessions (O(1) Hash Map)
 global.menuTracker = global.menuTracker || new Map();
+global.menuHookedSockets = global.menuHookedSockets || new WeakSet();
 
-// MongoDB Singleton Connection
-let mongoClient = null;
-let db = null;
+// 🔒 PERMANENT LOCKED OFFICIAL LOGO (Cannot be altered or overridden)
+let lockedLogoBuffer = null;
 
-async function getDB() {
-  if (db) return db;
-  mongoClient = new MongoClient(CONFIG.MONGODB_URI);
-  await mongoClient.connect();
-  db = mongoClient.db(CONFIG.DB_NAME);
-  return db;
-}
+(function initLockedLogo() {
+  const localCandidates = [
+    path.join(process.cwd(), "logo.jpg"),
+    path.join(process.cwd(), "logo.png"),
+    path.join(process.cwd(), "assets", "logo.jpg"),
+    path.join(process.cwd(), "assets", "logo.png")
+  ];
 
-// Banner Image Resolver (MongoDB Custom Logo -> Local File -> Default URL)
-async function getMenuBanner(botNumber) {
-  try {
-    const database = await getDB();
-    const custom = await database.collection("bot_custom_settings").findOne({ botNumber });
-    if (custom?.botLogo && custom.botLogo.startsWith("http")) {
-      return { url: custom.botLogo };
+  for (const p of localCandidates) {
+    if (fs.existsSync(p)) {
+      lockedLogoBuffer = fs.readFileSync(p);
+      return;
     }
-  } catch (_) {}
+  }
 
-  try {
-    const rootPath = path.join(process.cwd(), "logo.jpg");
-    if (fs.existsSync(rootPath)) return fs.readFileSync(rootPath);
+  // Immutable Official Default URL
+  lockedLogoBuffer = { url: "https://files.catbox.moe/k315x4.jpg" };
+})();
 
-    const assetPath = path.join(process.cwd(), "assets", "logo.jpg");
-    if (fs.existsSync(assetPath)) return fs.readFileSync(assetPath);
-  } catch (_) {}
+// Fast Listener Hook (Zero Leak, Zero CPU Overhead)
+function attachMenuReplyEngine(sock) {
+  if (!sock || global.menuHookedSockets.has(sock)) return;
+  global.menuHookedSockets.add(sock);
 
-  return { url: CONFIG.BOT_LOGO || "https://files.catbox.moe/k315x4.jpg" };
+  sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    if (type !== "notify") return;
+    const m = messages[0];
+    if (!m?.message || m.key.fromMe) return;
+
+    const from = m.key.remoteJid;
+    if (!from || from === "status@broadcast") return;
+
+    const rawMsg = m.message.ephemeralMessage?.message || m.message;
+    const contextInfo =
+      rawMsg.extendedTextMessage?.contextInfo ||
+      rawMsg.imageMessage?.contextInfo ||
+      rawMsg.videoMessage?.contextInfo;
+
+    const quotedId = contextInfo?.stanzaId;
+    if (!quotedId || !global.menuTracker.has(quotedId)) return;
+
+    const session = global.menuTracker.get(quotedId);
+    if (session.chat !== from) return;
+
+    const choice = (
+      rawMsg.conversation ||
+      rawMsg.extendedTextMessage?.text ||
+      ""
+    ).trim();
+
+    const p = session.pref;
+    const bName = session.botName;
+    const link = session.fixedLink;
+
+    let subText = "";
+    let reactIcon = "";
+
+    switch (choice) {
+      case "1":
+        reactIcon = "🌸";
+        subText = 
+`🎀 ｡ﾟ•┈୨ *GENERAL & INFO* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
+
+  🌸 *${p}ping*    ➔ Check bot latency & response ✨
+  🍰 *${p}menu*    ➔ Display aesthetic dashboard 📜
+  💖 *${p}alive*   ➔ Server heartbeat & cute card 🐾
+  🍬 *${p}status*  ➔ Cluster nodes & live metrics ⚡
+
+━━━━━━━━━━━━━━━━━━━━━━
+🐾 *${bName}* • ${link}`;
+        break;
+
+      case "2":
+        reactIcon = "📥";
+        subText = 
+`🎀 ｡ﾟ•┈୨ *MEDIA DOWNLOADER* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
+
+  🎵 *${p}song*    ➔ High quality MP3 & Voice notes 🎧
+  🎬 *${p}video*   ➔ Crisp YouTube video downloader 📺
+  🍿 *${p}fb*      ➔ Facebook reels & videos in HD/SD 💌
+  🍭 *${p}tiktok*  ➔ TikTok watermark-free videos 🫧
+  📸 *${p}insta*   ➔ Instagram reels & carousel posts 🌷
+  👁️ *${p}vv*      ➔ Decrypt secret ViewOnce media 🔓
+
+━━━━━━━━━━━━━━━━━━━━━━
+🐾 *${bName}* • ${link}`;
+        break;
+
+      case "3":
+        reactIcon = "🛡️";
+        subText = 
+`🎀 ｡ﾟ•┈୨ *STEALTH & UTILITY* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
+
+  🖼️ *${p}getdp*   ➔ Download user/group profile picture 📸
+  🛡️ *${p}antidel* ➔ Recover deleted chat messages 🌸
+  🍭 *${p}areact*  ➔ Automated sweet message reactions ✨
+  💌 *${p}reply*   ➔ Interactive custom auto-replies 💬
+  🏷️ *${p}jid*     ➔ Extract instant user/group JID 🍬
+
+━━━━━━━━━━━━━━━━━━━━━━
+🐾 *${bName}* • ${link}`;
+        break;
+
+      case "4":
+        reactIcon = "👑";
+        subText = 
+`🎀 ｡ﾟ•┈୨ *SYSTEM & CLUSTER* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
+
+  🤖 *${p}bots*    ➔ View active nodes & RAM metrics 📊
+  📢 *${p}channel* ➔ Auto follow & newsletter reactions 🐦‍🔥
+  ⚡ *${p}creact*  ➔ Turbo channel post multi-reactor 🚀
+  🎶 *${p}csong*   ➔ Post audio notes directly to channel 🎙️
+  🔄 *${p}restart* ➔ Gracefully reboot bot session 💤
+
+━━━━━━━━━━━━━━━━━━━━━━
+🐾 *${bName}* • ${link}`;
+        break;
+
+      case "5":
+        reactIcon = "📜";
+        subText = 
+`🎀 ｡ﾟ•┈୨ *COMPLETE INDEX* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
+
+  🌸 *${p}ping • ${p}menu • ${p}alive • ${p}status*
+  📥 *${p}song • ${p}video • ${p}fb • ${p}tiktok • ${p}getdp*
+  🛡️ *${p}antidelete • ${p}autoreact • ${p}autoreply*
+  👑 *${p}bots • ${p}channel • ${p}creact • ${p}csong*
+
+━━━━━━━━━━━━━━━━━━━━━━
+🐾 *${bName}* • ${link}`;
+        break;
+
+      default:
+        return;
+    }
+
+    if (subText) {
+      sock.sendMessage(from, { react: { text: reactIcon, key: m.key } }).catch(() => {});
+      await sock.sendMessage(
+        from,
+        {
+          image: lockedLogoBuffer,
+          caption: subText
+        },
+        { quoted: m }
+      );
+    }
+  });
 }
 
 export default {
   name: "menu",
   aliases: ["help", "list", "panel", "m"],
   category: "general",
-  description: "Cyber Card Themed Interactive Category Menu",
+  description: "Aesthetic Interactive Category Menu with Locked Logo",
 
   async execute({ sock, msg, from, config, activeBotsCount, commands }) {
+    attachMenuReplyEngine(sock);
+
+    // Instant Microsecond Reaction
+    sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
+
     try {
-      sock.sendMessage(from, { react: { text: "📜", key: msg.key } }).catch(() => {});
-
-      const rawUser = sock.user?.id || "";
-      const botNum = rawUser.split(":")[0]?.replace(/[^0-9]/g, "");
-
-      // Retrieve Custom Bot Name
-      let botDisplayName = config?.BOT_NAME || "DARK-DINU MD";
-      try {
-        const database = await getDB();
-        const custom = await database.collection("bot_custom_settings").findOne({ botNumber: botNum });
-        if (custom?.botName) botDisplayName = custom.botName;
-      } catch (_) {}
-
-      const uptimeSec = process.uptime();
-      const hours = Math.floor(uptimeSec / 3600);
-      const mins = Math.floor((uptimeSec % 3600) / 60);
-      const secs = Math.floor(uptimeSec % 60);
+      // Bitwise Sub-Nanosecond Uptime Math
+      const uptimeSec = process.uptime() | 0;
+      const hours = (uptimeSec / 3600) | 0;
+      const mins = ((uptimeSec % 3600) / 60) | 0;
+      const secs = (uptimeSec % 60) | 0;
 
       const pref = config?.PREFIX || ".";
-      const ownerName = "DINIDU HESHAN";
+      const botDisplayName = config?.BOT_NAME || "DARK-DINU MD";
+      const ownerName = "Dinidu Heshan";
       const fixedLink = "https://heshan.devofc.top/";
       const totalCmds = commands?.size || 0;
 
-      // Ultra-White Bold Highlighted Main Menu UI
-      const mainText = 
-`┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃  🕷️ *${botDisplayName.toUpperCase()}* 🕷️
-┗━━━━━━━━━━━━━━━━━━━━━━┛
+      // Cute Aesthetic Pastel Main Menu UI
+      const mainCard = 
+`🎀 ｡ﾟ•┈୨ *${botDisplayName.toUpperCase()}* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━
 
-┌──『 *SYSTEM STATUS* 』
-├─▸ 👤 *Dev*     : *${ownerName}*
-├─▸ ⚡ *Prefix*  : *[ ${pref} ]*
-├─▸ 🌐 *Nodes*   : *${activeBotsCount || 1} Online*
-├─▸ ⏳ *Uptime*  : *${hours}h ${mins}m ${secs}s*
-├─▸ 📦 *Modules* : *${totalCmds} Loaded*
-└───────────────────────
+  👑 *Creator:* ${ownerName}
+  ⚡ *Prefix:* \`[ ${pref} ]\`
+  🌐 *Cloud Nodes:* \`${activeBotsCount || 1} Instances Online\`
+  ⏱️ *Uptime:* \`${hours}h ${mins}m${secs}s\`
+  📦 *Commands Loaded:* \`${totalCmds} Modules\`
 
-┌──『 *COMMAND PANELS* 』
-├─▸ *[ 𝟏 ]* ❯ *ɢᴇɴᴇʀᴀʟ & ɪɴғᴏ*
-├─▸ *[ 𝟐 ]* ❯ *ᴍᴇᴅɪᴀ ᴅᴏᴡɴʟᴏᴀᴅ*
-├─▸ *[ 𝟑 ]* ❯ *sᴛᴇᴀʟᴛʜ & ᴜᴛɪʟɪᴛʏ*
-├─▸ *[ 𝟒 ]* ❯ *sʏsᴛᴇᴍ & ᴏᴡɴᴇʀ*
-├─▸ *[ 𝟓 ]* ❯ *ғᴜʟʟ ᴄᴏᴍᴍᴀɴᴅ ʟɪsᴛ*
-└───────────────────────
+━━━━━━━━━━━━━━━━━━━━━━
+🌸 *CHOOSE A CATEGORY* 🌸
 
-> 💬 *Reply with number (1-5) to access*
+  🌸 *[ 1 ]* ➔ General & Info
+  📥 *[ 2 ]* ➔ Media Downloader
+  🛡️ *[ 3 ]* ➔ Stealth & Utility
+  👑 *[ 4 ]* ➔ System & Cluster
+  📜 *[ 5 ]* ➔ Full Command Index
 
-📍 *${fixedLink}*`;
+━━━━━━━━━━━━━━━━━━━━━━
+🍬 _Reply with *1 - 5* to view commands softly~ (˶˃ ᵕ ˂˶)_
+💖 *Official Core* • ${fixedLink}`;
 
-      const bannerData = await getMenuBanner(botNum);
+      const sentMsg = await sock.sendMessage(
+        from,
+        {
+          image: lockedLogoBuffer,
+          caption: mainCard
+        },
+        { quoted: msg }
+      );
 
-      const sentMsg = await sock.sendMessage(from, {
-        image: bannerData,
-        caption: mainText
-      }, { quoted: msg });
-
-      // Session Tracking (5 Minutes Validity)
+      // Session Tracking (5-Minute O(1) Auto Prune)
       const menuId = sentMsg?.key?.id;
       if (menuId) {
         global.menuTracker.set(menuId, {
           chat: from,
-          pref: pref,
+          pref,
           botName: botDisplayName,
-          banner: bannerData,
-          fixedLink: fixedLink,
+          fixedLink,
           time: Date.now()
         });
 
         setTimeout(() => {
-          if (global.menuTracker) global.menuTracker.delete(menuId);
-        }, 5 * 60 * 1000);
+          global.menuTracker.delete(menuId);
+        }, 300000);
       }
 
-      // Socket-specific One-time Listener Hook
-      if (!sock.isMenuHooked) {
-        sock.isMenuHooked = true;
-
-        sock.ev.on("messages.upsert", async (mUpdate) => {
-          try {
-            if (!mUpdate.messages || mUpdate.type !== "notify") return;
-
-            for (const inMsg of mUpdate.messages) {
-              if (!inMsg.message) continue;
-
-              const targetQuotedId = inMsg.message?.extendedTextMessage?.contextInfo?.stanzaId;
-              if (!targetQuotedId || !global.menuTracker.has(targetQuotedId)) continue;
-
-              const currentChat = inMsg.key.remoteJid;
-              const sessionData = global.menuTracker.get(targetQuotedId);
-
-              if (sessionData.chat !== currentChat) continue;
-
-              const replyChoice = (
-                inMsg.message?.conversation ||
-                inMsg.message?.extendedTextMessage?.text ||
-                ""
-              ).trim();
-
-              const p = sessionData.pref;
-              const bName = sessionData.botName;
-              const link = sessionData.fixedLink;
-              let subText = "";
-              let reactIcon = "";
-
-              if (replyChoice === "1") {
-                reactIcon = "⚡";
-                subText = 
-`┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃  ⚡ *ɢᴇɴᴇʀᴀʟ & ɪɴғᴏ* ⚡
-┗━━━━━━━━━━━━━━━━━━━━━━┛
-
-┌──『 *MODULE LIST* 』
-├─▸ 📌 *${p}ping*    : *Check bot latency & response*
-├─▸ 📌 *${p}menu*    : *Display system dashboard*
-├─▸ 📌 *${p}alive*   : *Server & connection health*
-├─▸ 📌 *${p}status*  : *Cluster nodes & uptime metrics*
-└───────────────────────
-
-> *${bName} ✨*
-📍 *${link}*`;
-              } else if (replyChoice === "2") {
-                reactIcon = "📥";
-                subText = 
-`┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃  📥 *ᴍᴇᴅɪᴀ ᴅᴏᴡɴʟᴏᴀᴅ* 📥
-┗━━━━━━━━━━━━━━━━━━━━━━┛
-
-┌──『 *MODULE LIST* 』
-├─▸ 📌 *${p}song*    : *YouTube MP3 / Document / Voice*
-├─▸ 📌 *${p}video*   : *YouTube Multi-Quality MP4*
-├─▸ 📌 *${p}fb*      : *Facebook HD / SD / MP3*
-├─▸ 📌 *${p}tiktok*  : *TikTok HD / SD / Audio*
-├─▸ 📌 *${p}insta*   : *Instagram Reels & Photos*
-├─▸ 📌 *${p}vv*      : *Unlock ViewOnce media*
-└───────────────────────
-
-> *${bName} ✨*
-📍 *${link}*`;
-              } else if (replyChoice === "3") {
-                reactIcon = "👁️";
-                subText = 
-`┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃  👁️ *sᴛᴇᴀʟᴛʜ & ᴜᴛɪʟɪᴛʏ* 👁️
-┗━━━━━━━━━━━━━━━━━━━━━━┛
-
-┌──『 *MODULE LIST* 』
-├─▸ 📌 *${p}vv*      : *Decrypt ViewOnce photos & videos*
-├─▸ 📌 *${p}jid*     : *Retrieve user & chat JID*
-├─▸ 📌 *${p}url*     : *Convert media into cloud link*
-├─▸ 📌 *${p}tourl*   : *Upload media to direct URL*
-├─▸ 📌 *${p}dreact*  : *Developer auto-reaction toggle*
-└───────────────────────
-
-> *${bName} ✨*
-📍 *${link}*`;
-              } else if (replyChoice === "4") {
-                reactIcon = "💻";
-                subText = 
-`┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃  💻 *sʏsᴛᴇᴍ & ᴏᴡɴᴇʀ* 💻
-┗━━━━━━━━━━━━━━━━━━━━━━┛
-
-┌──『 *MODULE LIST* 』
-├─▸ 📌 *${p}set*     : *Configure custom bot name/logo/alive*
-├─▸ 📌 *${p}system*  : *Host RAM, CPU & instance health*
-├─▸ 📌 *${p}bots*    : *Connected active bot nodes count*
-├─▸ 📌 *${p}channel* : *Channel auto follow & multi-react*
-├─▸ 📌 *${p}restart* : *Reboot current session container*
-└───────────────────────
-
-> *${bName} ✨*
-📍 *${link}*`;
-              } else if (replyChoice === "5") {
-                reactIcon = "📜";
-                subText = 
-`┏━━━━━━━━━━━━━━━━━━━━━━┓
-┃  📜 *ғᴜʟʟ ᴄᴏᴍᴍᴀɴᴅ ʟɪsᴛ* 📜
-┗━━━━━━━━━━━━━━━━━━━━━━┛
-
-┌──『 *INDEX LIST* 』
-├─▸ *${p}ping • ${p}menu • ${p}alive • ${p}status*
-├─▸ *${p}song • ${p}video • ${p}fb • ${p}tiktok • ${p}insta*
-├─▸ *${p}vv • ${p}jid • ${p}url • ${p}tourl • ${p}dreact*
-├─▸ *${p}set • ${p}system • ${p}bots • ${p}channel • ${p}restart*
-└───────────────────────
-
-> *${bName} ✨*
-📍 *${link}*`;
-              }
-
-              if (subText) {
-                sock.sendMessage(currentChat, { react: { text: reactIcon, key: inMsg.key } }).catch(() => {});
-                await sock.sendMessage(currentChat, {
-                  image: sessionData.banner,
-                  caption: subText
-                }, { quoted: inMsg });
-              }
-            }
-          } catch (listenerError) {
-            console.error("[MENU LISTENER ERROR]:", listenerError.message);
-          }
-        });
-      }
     } catch (err) {
-      console.error("[MENU EXECUTION ERROR]:", err);
-      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await sock.sendMessage(from, { text: `❌ Menu Error: ${err.message}` }, { quoted: msg });
+      console.error("[MENU ERROR]:", err);
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(
+        from,
+        { text: `🌸 *Glitch detected:* ${err.message || "Failed to render menu softly"}` },
+        { quoted: msg }
+      ).catch(() => {});
     }
   }
 };
