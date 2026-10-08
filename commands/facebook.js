@@ -1,11 +1,11 @@
 import axios from "axios";
 
-// Active download sessions store
+// Static High-Speed In-Memory Hash Map (O(1) Access)
 global.fbSessions = global.fbSessions || new Map();
 global.fbHookedSockets = global.fbHookedSockets || new WeakSet();
 
-// Fast Reply Interceptor (Index.js වෙනස් නොකර 1, 2, 3 අල්ලා ගනී)
-function attachFbReplyEngine(sock) {
+// Non-blocking fast reply listener
+export function attachFbReplyEngine(sock) {
   if (!sock || global.fbHookedSockets.has(sock)) return;
   global.fbHookedSockets.add(sock);
 
@@ -15,10 +15,13 @@ function attachFbReplyEngine(sock) {
     if (!m?.message || m.key.fromMe) return;
 
     const from = m.key.remoteJid;
-    const contextInfo = 
-      m.message.extendedTextMessage?.contextInfo ||
-      m.message.imageMessage?.contextInfo ||
-      m.message.videoMessage?.contextInfo;
+    if (!from || from === "status@broadcast") return;
+
+    const rawMsg = m.message.ephemeralMessage?.message || m.message;
+    const contextInfo =
+      rawMsg.extendedTextMessage?.contextInfo ||
+      rawMsg.imageMessage?.contextInfo ||
+      rawMsg.videoMessage?.contextInfo;
 
     const quotedId = contextInfo?.stanzaId;
     if (!quotedId || !global.fbSessions.has(quotedId)) return;
@@ -27,44 +30,44 @@ function attachFbReplyEngine(sock) {
     if (session.from !== from) return;
 
     const choice = (
-      m.message.conversation ||
-      m.message.extendedTextMessage?.text ||
+      rawMsg.conversation ||
+      rawMsg.extendedTextMessage?.text ||
       ""
     ).trim();
 
-    if (!["1", "2", "3"].includes(choice)) return;
+    if (choice !== "1" && choice !== "2" && choice !== "3") return;
 
-    // React non-blocking
+    // Instant cute reaction
     sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
 
     try {
       if (choice === "1") {
         const targetUrl = session.hd || session.sd;
-        if (!targetUrl) throw new Error("HD Video නොමැත.");
+        if (!targetUrl) throw new Error("HD video stream unavailable");
 
         await sock.sendMessage(
           from,
           {
             video: { url: targetUrl },
-            caption: `🎬 *${session.title}* [HD]\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐁𝐎𝐓 ✨*`
+            caption: `🎬 *${session.title}* [HD]\n\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`
           },
           { quoted: m }
         );
       } else if (choice === "2") {
         const targetUrl = session.sd || session.hd;
-        if (!targetUrl) throw new Error("SD Video නොමැත.");
+        if (!targetUrl) throw new Error("SD video stream unavailable");
 
         await sock.sendMessage(
           from,
           {
             video: { url: targetUrl },
-            caption: `🎬 *${session.title}* [SD]\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐁𝐎𝐓 ✨*`
+            caption: `🎬 *${session.title}* [SD]\n\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`
           },
           { quoted: m }
         );
       } else if (choice === "3") {
         const targetUrl = session.audio || session.sd || session.hd;
-        if (!targetUrl) throw new Error("Audio stream නොමැත.");
+        if (!targetUrl) throw new Error("Audio stream unavailable");
 
         await sock.sendMessage(
           from,
@@ -77,32 +80,24 @@ function attachFbReplyEngine(sock) {
         );
       }
 
-      sock.sendMessage(from, { react: { text: "✅", key: m.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
       global.fbSessions.delete(quotedId);
     } catch (err) {
-      sock.sendMessage(from, { react: { text: "❌", key: m.key } }).catch(() => {});
-      sock.sendMessage(from, { text: `❌ බාගත කිරීම අසාර්ථක විය: ${err.message}` }, { quoted: m }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+      sock.sendMessage(
+        from,
+        { text: `🌸 *Oopsie!* Failed to deliver file: ${err.message || "Network glitch"}` },
+        { quoted: m }
+      ).catch(() => {});
     }
   });
-}
-
-// Cluster Watcher (Zero overhead)
-if (!global.fbWatcherStarted) {
-  global.fbWatcherStarted = true;
-  setInterval(() => {
-    if (global.activeSockets) {
-      for (const [, s] of global.activeSockets.entries()) {
-        attachFbReplyEngine(s);
-      }
-    }
-  }, 20000);
 }
 
 export default {
   name: "facebook",
   aliases: ["fb", "fbdl"],
   category: "download",
-  description: "Download Facebook videos in HD, SD or Audio",
+  description: "Download Facebook reels & videos in HD, SD or Audio",
 
   async execute({ sock, msg, from, args, config }) {
     attachFbReplyEngine(sock);
@@ -112,16 +107,26 @@ export default {
       const rawUrl = args.find((arg) => arg.startsWith("http://") || arg.startsWith("https://"));
 
       if (!rawUrl || (!rawUrl.includes("facebook.com") && !rawUrl.includes("fb.watch"))) {
+        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { 
-            text: `⚠️ *කරුණාකර නිවැරදි Facebook Link එකක් ලබාදෙන්න!*\n\n*භාවිතය:* \`${prefix}fb <link>\`\n*උදා:* \`${prefix}fb https://fb.watch/xxxxxx/\`` 
+          {
+            text: 
+`🌸 ｡ﾟ•┈୨ *FACEBOOK DOWNLOADER* ୧┈•ﾟ｡ 🐾
+
+  🍭 *Usage:*
+  \`${prefix}fb <facebook_video_url>\`
+
+  ✨ *Example:*
+  \`${prefix}fb https://fb.watch/xxxxxx/\`
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
           },
           { quoted: msg }
         );
       }
 
-      // Instant Non-blocking Reaction
+      // Microsecond Reaction
       sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
 
       const apiUrl = `https://api.chamindu.site/api/v1/facebook?url=${encodeURIComponent(rawUrl)}&api_key=chama_api_ec9848130d1aea209f08fb85e0b4720f`;
@@ -136,32 +141,32 @@ export default {
       const audioUrl = data.audio || data.downloads?.audio || null;
 
       if (!hdUrl && !sdUrl) {
-        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+        sock.sendMessage(from, { react: { text: "💔", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "❌ මෙම වීඩියෝව ලබා ගැනීමට නොහැකි විය. (Private හෝ Restricted විය හැක)" },
+          { text: "🌸 *Could not fetch this video!* It might be private or restricted, honey~" },
           { quoted: msg }
         );
       }
 
+      // Cute Interactive Card UI
       const cardUI = 
-`╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+`🎀 ｡ﾟ•┈୨ *FACEBOOK DOWNLOADER* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 🎬 *FACEBOOK DOWNLOADER* 〕
-├─▸ 📌 *Title:* ${title.slice(0, 45)}...
-├─▸ 🌐 *Platform:* Facebook Video
-└───────────────────────
+  🎬 *Title:* ${title.slice(0, 40)}...
+  🌐 *Source:* Facebook Public Reel/Post
 
-*බාගත කිරීමට අදාළ අංකය Reply කරන්න:*
+━━━━━━━━━━━━━━━━━━━━━
+🍬 *Reply with your preferred choice:*
 
-┌─▸ 1️⃣ *HD Video* ${hdUrl ? "🟢" : "🔴"}
-├─▸ 2️⃣ *SD Video* ${sdUrl ? "🟢" : "🔴"}
-└─▸ 3️⃣ *Audio (MP3)* ${(audioUrl || sdUrl) ? "🟢" : "🔴"}
+  🌸 *1* ➔ High Definition [HD] ${hdUrl ? "🟢" : "🔴"}
+  🍰 *2* ➔ Standard Quality [SD] ${sdUrl ? "🟢" : "🔴"}
+  🎧 *3* ➔ Audio (MP3/M4A) ${(audioUrl || sdUrl) ? "🟢" : "🔴"}
 
-> 👑 *Developer:* DINIDU HESHAN
-> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐂𝐎𝐑𝐄 🐦‍🔥*`;
+━━━━━━━━━━━━━━━━━━━━━
+_Reply with 1, 2 or 3 to download softly~ (˶˃ ᵕ ˂˶)_
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
       let sentMsg;
       try {
@@ -171,7 +176,6 @@ export default {
           { quoted: msg }
         );
       } catch (_) {
-        // Thumbnail fail වුණොත් Text එක හෝ ultra fast deliver වේ
         sentMsg = await sock.sendMessage(
           from,
           { text: cardUI },
@@ -188,20 +192,20 @@ export default {
           audio: audioUrl
         });
 
-        // Safe auto-prune
+        // 3-Minute Safe O(1) TTL Auto-Prune
         setTimeout(() => {
-          global.fbSessions?.delete(sentMsg.key.id);
-        }, 4 * 60 * 1000);
+          global.fbSessions.delete(sentMsg.key.id);
+        }, 180000);
       }
 
-      sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
 
     } catch (err) {
       console.error("[FB CMD ERROR]:", err.message);
-      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `❌ Facebook බාගත කිරීම අසාර්ථක විය: ${err.message || "Network Error"}` },
+        { text: `🌸 *Glitch detected:* ${err.message || "Network timeout"}` },
         { quoted: msg }
       );
     }
