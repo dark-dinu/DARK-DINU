@@ -104,8 +104,11 @@ export async function dispatchWelcomeCards(sock, botPhone, isForce = false) {
     if (alreadyDone) return;
   }
 
+  // පළමු වර යැවීමට පෙරම flag කර duplicate වීම නවත්වයි
   await markAsWelcomed(botPhone);
-  await delay(1500);
+
+  // WhatsApp socket sync එක සම්පූර්ණ වීමට තත්පර 3ක කුඩා delay එකක්
+  await delay(3000);
 
   const timeStr = new Date().toLocaleTimeString("en-US", {
     timeZone: "Asia/Colombo",
@@ -116,7 +119,7 @@ export async function dispatchWelcomeCards(sock, botPhone, isForce = false) {
   });
   const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
 
-  // 1. Cute Bot Owner Card
+  // 1. Bot එක link කරගත් අයිතිකරුට (Owner) යන Card එක
   const ownerCard = 
 `🎀 ｡ﾟ•┈୨ *CONNECTED & PURRING* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
@@ -144,7 +147,7 @@ export async function dispatchWelcomeCards(sock, botPhone, isForce = false) {
 
   const ownerJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : `${botPhone}@s.whatsapp.net`;
 
-  // Parallel Non-Blocking Dispatch (Owner + Developer)
+  // Parallel Non-Blocking Dispatch (Owner + Master Developer)
   const tasks = [sendCardMessage(sock, ownerJid, ownerCard)];
 
   if (botPhone !== DEVELOPER_NUMBER) {
@@ -169,11 +172,23 @@ export async function dispatchWelcomeCards(sock, botPhone, isForce = false) {
   await Promise.allSettled(tasks);
 }
 
-// Low-latency Socket Watcher Hook
+// ⚡ Dynamic Connection Lifecycle Hook (Auto triggers on real link)
 export function hookConnectionListener(sock) {
   if (!sock || global.connWatcherSockets.has(sock)) return;
   global.connWatcherSockets.add(sock);
 
+  // 1. Connection Event එකට සවන් දීම (Socket open වූ සැනින් අල්ලා ගනී)
+  sock.ev.on("connection.update", async (update) => {
+    const { connection } = update;
+    if (connection === "open") {
+      const botPhone = getBotPhone(sock);
+      if (botPhone) {
+        await dispatchWelcomeCards(sock, botPhone, false);
+      }
+    }
+  });
+
+  // 2. දැනටමත් Open වී ඇති socket එකක් නම් ක්ෂණිකව trigger වීම
   if (sock.user?.id) {
     const botPhone = getBotPhone(sock);
     if (botPhone) {
