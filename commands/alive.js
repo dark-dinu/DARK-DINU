@@ -8,7 +8,18 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 const execPromise = promisify(exec);
 const ffmpegPath = ffmpegInstaller.path;
 
-// Local Image Loader (root හෝ assets එකේ තියෙන logo image එක ගන්නවා)
+// Global In-Memory Cache for converted PTT Audio (Zero delay on repeated calls)
+let cachedPttBuffer = null;
+let isCachingAudio = false;
+
+// Safe file remover helper
+function safeUnlink(filePath) {
+  try {
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (_) {}
+}
+
+// Local / Remote Logo Loader
 function getLocalLogo() {
   const possiblePaths = [
     path.join(process.cwd(), "logo.jpg"),
@@ -23,91 +34,108 @@ function getLocalLogo() {
   return { url: "https://files.catbox.moe/k315x4.jpg" };
 }
 
+// Fetch & Cache Audio in WhatsApp Mono Opus format
+async function getVoiceNoteBuffer() {
+  if (cachedPttBuffer) return cachedPttBuffer;
+  if (isCachingAudio) return null;
+
+  isCachingAudio = true;
+  const tempInput = path.join(process.cwd(), `temp_${Date.now()}.ogg`);
+  const tempOutput = path.join(process.cwd(), `voice_${Date.now()}.opus`);
+
+  try {
+    const audioRes = await axios.get("https://files.catbox.moe/37unrg.ogg", {
+      responseType: "arraybuffer",
+      timeout: 15000
+    });
+
+    fs.writeFileSync(tempInput, Buffer.from(audioRes.data));
+
+    // Convert to optimal WhatsApp Opus format
+    await execPromise(
+      `"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 32k -vbr on -ar 48000 -ac 1 "${tempOutput}"`
+    );
+
+    if (fs.existsSync(tempOutput)) {
+      cachedPttBuffer = fs.readFileSync(tempOutput);
+      return cachedPttBuffer;
+    }
+  } catch (err) {
+    console.error("[VOICE ENCODE ERROR]:", err.message);
+    return null;
+  } finally {
+    safeUnlink(tempInput);
+    safeUnlink(tempOutput);
+    isCachingAudio = false;
+  }
+  return null;
+}
+
 export default {
   name: "alive",
   aliases: ["bot", "live", "status"],
   category: "general",
-  description: "Play voice note and send alive card",
+  description: "Check bot status with a cute voice note & card",
 
-  async execute({ sock, msg, from }) {
-    sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
+  async execute({ sock, msg, from, config }) {
+    // Soft cute reaction
+    sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Download & Convert Audio to Valid WhatsApp PTT Spec using @ffmpeg-installer
-      const tempInput = path.join(process.cwd(), `temp_${Date.now()}.ogg`);
-      const tempOutput = path.join(process.cwd(), `voice_${Date.now()}.opus`);
-
-      try {
-        const audioRes = await axios.get("https://files.catbox.moe/37unrg.ogg", {
-          responseType: "arraybuffer",
-          timeout: 25000
-        });
-        fs.writeFileSync(tempInput, Buffer.from(audioRes.data));
-
-        // WhatsApp Opus Standard: 48000Hz, 1 Channel (Mono)
-        await execPromise(`"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 32k -vbr on -ar 48000 -ac 1 "${tempOutput}"`);
-
-        if (fs.existsSync(tempOutput)) {
-          const pttBuffer = fs.readFileSync(tempOutput);
-
-          await sock.sendMessage(
-            from,
-            {
-              audio: pttBuffer,
-              mimetype: "audio/ogg; codecs=opus",
-              ptt: true
-            },
-            { quoted: msg }
-          );
-        }
-      } catch (audioErr) {
-        console.error("[VOICE ENCODE ERROR]:", audioErr.message);
-      } finally {
-        if (fs.existsSync(tempInput)) fs.unlinkSync(tempInput);
-        if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
-      }
-
-      // 2. Load Local Image Buffer
-      const imageBuffer = getLocalLogo();
-
-      // Runtime Calculation
+      // 1. Calculate Uptime
       const uptimeSec = Math.floor(process.uptime());
       const hours = Math.floor(uptimeSec / 3600);
       const minutes = Math.floor((uptimeSec % 3600) / 60);
       const seconds = uptimeSec % 60;
       const runtimeStr = `${hours ? `${hours}h ` : ""}${minutes}m ${seconds}s`;
 
-      const botName = "DARK-DINU";
-      const fixedFooterLink = "https://heshan.devofc.top/";
+      const botName = config?.BOT_NAME || "DARK-DINU MD";
+      const siteLink = "https://heshan.devofc.top/";
 
-      // Clean Single-Line Quality Layout
+      // 2. Ultra-Cute Layout
       const aliveCard = 
-`🍓 ༆⃝⃤ *Purring Online, Sweetie~* 🎀 🐾
-━━━━━━━━━━━━━━━━━━━━
+`🎀 ｡ﾟ•┈୨ *ONLINE & PURRING* ୧┈•ﾟ｡ 🐾
+*━━━━━━━━━━━━━━━━━━━━━━*
 
-┊◈ 🌷 *ᴍᴏᴏᴅ :* 100% Sugar & Hugs (ฅ^•ﻌ•^ฅ)
-┊◈ ⏳ *ᴜᴘᴛɪᴍᴇ :* ${runtimeStr}
-┊◈ 💬 *ᴍꜱɢ :* _Ready for your sweet commands~ ✨_
+  ✗🌸 *Status:* Feeling sweet & ready for you! (˶˃ ᵕ ˂˶)
+  ✗⏱️ *Uptime:* \`${runtimeStr}\`
+  ✗⚡ *Speed:* Lightning Fast Cloud
+  ✗🍰 *Mood:* 100% Cotton Candy & Sunshine ✨
 
-────────────────────
-🍰 *© ${botName} 𝐎ꜰᴄ* 🤍 | 📍 ${fixedFooterLink}`;
+*━━━━━━━━━━━━━━━━━━━━━━*
+🐾 *Need help?* Type \`${config?.PREFIX || "."}menu\` anytime sweetheart!
+🤍 *© ${botName}* • ${siteLink}`;
 
-      // 3. Send Image with Caption
+      // 3. Send Image Status Card
       await sock.sendMessage(
         from,
         {
-          image: imageBuffer,
+          image: getLocalLogo(),
           caption: aliveCard
         },
         { quoted: msg }
       );
 
+      // 4. Send Instant PTT Audio
+      const voiceBuffer = await getVoiceNoteBuffer();
+      if (voiceBuffer) {
+        await sock.sendMessage(
+          from,
+          {
+            audio: voiceBuffer,
+            mimetype: "audio/ogg; codecs=opus",
+            ptt: true
+          },
+          { quoted: msg }
+        );
+      }
+
     } catch (err) {
-      console.error("[ALIVE ERROR]:", err.message);
+      console.error("[ALIVE COMMAND ERROR]:", err.message);
       await sock.sendMessage(
         from,
         {
-          text: `🍓 *DARK-DINU MD IS ONLINE* ✨\n\n📍 https://heshan.devofc.top/`
+          text: `🌸 *Yay! I am awake and healthy, darling!* ✨\n\n🔗 *Website:* https://heshan.devofc.top/`
         },
         { quoted: msg }
       ).catch(() => {});
