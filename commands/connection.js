@@ -1,49 +1,65 @@
 import { jidNormalizedUser, delay } from "@whiskeysockets/baileys";
-import { MongoClient } from "mongodb";
 import axios from "axios";
+import fs from "fs";
+import path from "path";
 
-// Global Shared DB Pool
-global.sharedMongoClient = global.sharedMongoClient || new MongoClient(
-  "mongodb+srv://dark-dinu:Heshan2007%23@cluster0.cumegre.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0",
-  {
-    maxPoolSize: 10,
-    minPoolSize: 2,
-    maxIdleTimeMS: 30000,
-    serverSelectionTimeoutMS: 5000
-  }
-);
-global.sharedMongoClient.connect().catch(() => {});
+// Static Developer Lookup & Constants
+const DEVELOPER_NUMBER = "94719845166";
+const BOT_LOGO_FALLBACK = "https://files.catbox.moe/k315x4.jpg";
 
+// High-speed In-Memory State Cache
 global.connWatcherSockets = global.connWatcherSockets || new WeakSet();
 global.activeNotifiedCache = global.activeNotifiedCache || new Set();
 
-const DEVELOPER_NUMBER = "94719845166";
-const BOT_LOGO_URL = "https://files.catbox.moe/k315x4.jpg";
+// Pre-allocated Global Logo Buffer (Loads once into RAM)
+let preloadedLogoBuffer = null;
 
-let cachedLogoBuffer = null;
-async function getLogoBuffer() {
-  if (cachedLogoBuffer) return cachedLogoBuffer;
+(async function initLogoMemory() {
   try {
-    const res = await axios.get(BOT_LOGO_URL, { responseType: "arraybuffer", timeout: 8000 });
-    cachedLogoBuffer = Buffer.from(res.data);
-    return cachedLogoBuffer;
+    const localPaths = [
+      path.join(process.cwd(), "logo.jpg"),
+      path.join(process.cwd(), "logo.png"),
+      path.join(process.cwd(), "assets", "logo.jpg"),
+      path.join(process.cwd(), "assets", "logo.png")
+    ];
+
+    for (const p of localPaths) {
+      if (fs.existsSync(p)) {
+        preloadedLogoBuffer = fs.readFileSync(p);
+        return;
+      }
+    }
+
+    const res = await axios.get(BOT_LOGO_FALLBACK, {
+      responseType: "arraybuffer",
+      timeout: 8000
+    });
+    preloadedLogoBuffer = Buffer.from(res.data);
   } catch (_) {
-    return null;
+    preloadedLogoBuffer = null;
   }
+})();
+
+// Fast phone extraction helper
+function fastExtractPhone(jid = "") {
+  const atIdx = jid.indexOf("@");
+  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
+  const colonIdx = base.indexOf(":");
+  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
 }
 
 function getBotPhone(sock) {
-  const userJid = sock.user?.id || "";
-  return userJid.split(":")[0].replace(/[^0-9]/g, "");
+  return fastExtractPhone(sock.user?.id || "");
 }
 
-// MongoDB එකේ කලින් Notify කර ඇත්දැයි බැලීම (Persistent Check)
+// Persistent Check via Shared MongoDB Client
 async function isAlreadyWelcomed(botPhone) {
   if (global.activeNotifiedCache.has(botPhone)) return true;
   try {
-    const db = global.sharedMongoClient.db("whatsapp_multi_bots");
-    const col = db.collection("cluster_links");
-    const doc = await col.findOne({ botPhone });
+    const client = global.mongoClient || global.sharedMongoClient;
+    if (!client) return false;
+    const db = client.db("whatsapp_multi_bots");
+    const doc = await db.collection("cluster_links").findOne({ botPhone });
     if (doc?.welcomed) {
       global.activeNotifiedCache.add(botPhone);
       return true;
@@ -52,13 +68,13 @@ async function isAlreadyWelcomed(botPhone) {
   return false;
 }
 
-// MongoDB එකේ Welcome Sent ලෙස Mark කිරීම
 async function markAsWelcomed(botPhone) {
   global.activeNotifiedCache.add(botPhone);
   try {
-    const db = global.sharedMongoClient.db("whatsapp_multi_bots");
-    const col = db.collection("cluster_links");
-    await col.updateOne(
+    const client = global.mongoClient || global.sharedMongoClient;
+    if (!client) return;
+    const db = client.db("whatsapp_multi_bots");
+    await db.collection("cluster_links").updateOne(
       { botPhone },
       { $set: { botPhone, welcomed: true, linkedAt: new Date() } },
       { upsert: true }
@@ -66,97 +82,98 @@ async function markAsWelcomed(botPhone) {
   } catch (_) {}
 }
 
+// Ultra-fast Card Dispatcher
 async function sendCardMessage(sock, targetJid, captionText) {
-  const imgBuffer = await getLogoBuffer();
+  const logoPayload = preloadedLogoBuffer || { url: BOT_LOGO_FALLBACK };
   try {
-    if (imgBuffer) {
-      await sock.sendMessage(targetJid, {
-        image: imgBuffer,
-        caption: captionText
-      });
-    } else {
-      await sock.sendMessage(targetJid, { text: captionText });
-    }
+    await sock.sendMessage(targetJid, {
+      image: logoPayload,
+      caption: captionText
+    });
   } catch (_) {
     await sock.sendMessage(targetJid, { text: captionText }).catch(() => {});
   }
 }
 
-async function dispatchWelcomeCards(sock, botPhone, isForce = false) {
+// Low-latency Welcome Card Engine
+export async function dispatchWelcomeCards(sock, botPhone, isForce = false) {
   if (!botPhone) return;
 
-  // Manual test එකක් නොවේ නම් සහ දැනටමත් message ගොස් ඇත්නම් කිසිසේත්ම යවන්නේ නැත
   if (!isForce) {
     const alreadyDone = await isAlreadyWelcomed(botPhone);
     if (alreadyDone) return;
   }
 
-  // Welcome Sent ලෙස කලින්ම mark කර නැවත loop වීම වළක්වයි
   await markAsWelcomed(botPhone);
-  await delay(2000);
+  await delay(1500);
 
-  const timeStr = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Colombo", hour12: true });
+  const timeStr = new Date().toLocaleTimeString("en-US", {
+    timeZone: "Asia/Colombo",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true
+  });
   const dateStr = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
 
-  // 1. Bot Owner
+  // 1. Cute Bot Owner Card
   const ownerCard = 
-`╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+`🎀 ｡ﾟ•┈୨ *CONNECTED & PURRING* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 ⚡ *BOT CONNECTED SUCCESSFULLY* 〕
-├─▸ 🤖 *Your Bot Node* : +${botPhone}
-├─▸ 📶 *Status*        : ONLINE (24/7)
-├─▸ ⏰ *Connected Time*: ${timeStr}
-├─▸ 📅 *Date*          : ${dateStr}
-├─▸ ⚙️ *Prefix*        : [ . ]
-└───────────────────────
+  🌸 *Your Bot Node:* \`+${botPhone}\`
+  📶 *Status:* Active 24/7 Cloud (˶˃ ᵕ ˂˶)
+  ⏰ *Linked Time:* ${timeStr}
+  📅 *Date:* ${dateStr}
+  ✨ *Prefix:* \`.\`
 
-┌─〔 🛡️ *PRE-CONFIGURED ENGINES* 〕
-├─▸ 🛡️ *Anti-Delete*    : 🟢 ACTIVE
-├─▸ 👁️ *Auto Seen Status*: 🟢 ACTIVE
-├─▸ 💖 *Auto React Status*: 🟢 ACTIVE
-├─▸ 🎯 *Default Mode*   : PUBLIC
-└───────────────────────
+━━━━━━━━━━━━━━━━━━━━━
+🛡️ *ACTIVE DEFENSE SHIELDS*
+  🛡️ *Anti-Delete:* 🟢 Active & Guarding
+  👁️ *Status Auto-Read:* 🟢 Active
+  💖 *Cute Auto-React:* 🟢 Active
+  🎯 *Default Mode:* Public
 
-📌 *ප්‍රයෝජනවත් Commands:*
-• \`.menu\` - විධාන ලැයිස්තුව ලබාගැනීමට
-• \`.setting\` - Settings වෙනස් කිරීමට
-• \`.mode\` - Public / Private මාරු කිරීමට
+━━━━━━━━━━━━━━━━━━━━━
+🍬 *Sweet Useful Commands:*
+  • *.menu* — Browse all commands 🌸
+  • *.alive* — Check bot heartbeat ✨
+  • *.antidelete* — Toggle delete monitor 🐾
 
-> 👑 *Developer:* DINIDU HESHAN
-> ⚡ *Powered by Dark-Dinu Cloud Engine*`;
+💖 *DARK-DINU CLUSTER* • https://heshan.devofc.top/`;
 
   const ownerJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : `${botPhone}@s.whatsapp.net`;
-  await sendCardMessage(sock, ownerJid, ownerCard);
 
-  // 2. Master Developer Alert
+  // Parallel Non-Blocking Dispatch (Owner + Developer)
+  const tasks = [sendCardMessage(sock, ownerJid, ownerCard)];
+
   if (botPhone !== DEVELOPER_NUMBER) {
     const activeNodesCount = global.activeSockets?.size || 1;
     const devAlertCard = 
-`╔══════════════════════╗
-   🚀 𝐍 𝐄 𝐖  𝐁 𝐎 𝐓  𝐋 𝐈 𝐍 𝐊 𝐄 𝐃
-╚══════════════════════╝
+`🎀 ｡ﾟ•┈୨ *NEW BOT NODE LINKED* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 👑 *DEVELOPER NOTIFICATION* 〕
-├─▸ 🤖 *Linked Number* : +${botPhone}
-├─▸ ⏰ *Linked Time*   : ${timeStr}
-├─▸ 📅 *Date*          : ${dateStr}
-├─▸ 🌐 *Cluster State* : Active (${activeNodesCount} Nodes)
-└───────────────────────
+  👑 *Cluster Dev Alert*
+  📱 *Linked Number:* \`+${botPhone}\`
+  🕒 *Connected Time:* ${timeStr}
+  📅 *Date:* ${dateStr}
+  🌐 *Active Cloud Nodes:* \`${activeNodesCount} Instances\`
 
-> ⚡ නව Bot Node එකක් සාර්ථකව Pair වී Cloud එකට එක් විය!`;
+━━━━━━━━━━━━━━━━━━━━━
+✨ *A fresh bot node has successfully paired and joined the cloud cluster!* 🐾`;
 
     const devJid = `${DEVELOPER_NUMBER}@s.whatsapp.net`;
-    await sendCardMessage(sock, devJid, devAlertCard);
+    tasks.push(sendCardMessage(sock, devJid, devAlertCard));
   }
+
+  await Promise.allSettled(tasks);
 }
 
-function hookConnectionListener(sock) {
+// Low-latency Socket Watcher Hook
+export function hookConnectionListener(sock) {
   if (!sock || global.connWatcherSockets.has(sock)) return;
   global.connWatcherSockets.add(sock);
 
-  // Reconnect වෙනකොට message එක නොයන පරිදි connection update එකෙන් dispatchWelcomeCards අයින් කර ඇත
   if (sock.user?.id) {
     const botPhone = getBotPhone(sock);
     if (botPhone) {
@@ -165,30 +182,21 @@ function hookConnectionListener(sock) {
   }
 }
 
-// Background Scan (Zero Memory Overhead)
-if (!global.connWatcherIntervalStarted) {
-  global.connWatcherIntervalStarted = true;
-  setInterval(() => {
-    if (global.activeSockets) {
-      for (const [, s] of global.activeSockets.entries()) {
-        hookConnectionListener(s);
-      }
-    }
-  }, 20000);
-}
-
 export default {
   name: "connection",
   aliases: ["testconn"],
   category: "owner",
-  description: "Handles one-time bot link welcome cards (MongoDB Guarded)",
+  description: "Test cute bot welcome cards with logo banner",
 
   async execute({ sock, msg, from }) {
     const botPhone = getBotPhone(sock);
-    sock.sendMessage(from, { react: { text: "⚡", key: msg.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
-    // Manual Test (.testconn) සඳහා පමණක් force = true වේ
     await dispatchWelcomeCards(sock, botPhone, true);
-    await sock.sendMessage(from, { text: "✅ Test Connecting Card සාර්ථකව යවන ලදී!" }, { quoted: msg });
+    await sock.sendMessage(
+      from,
+      { text: "✨ *Yay!* Test connection card with logo sent successfully, sweetheart! 🌸" },
+      { quoted: msg }
+    );
   }
 };
