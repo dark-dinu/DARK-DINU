@@ -23,7 +23,8 @@ const PORT = Number(CONFIG.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-const msgRetryCounterCache = new NodeCache({ stdTTL: 180, checkperiod: 60 });
+// Ultra-fast lightweight in-memory cache
+const msgRetryCounterCache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
 
 // Active Bot Sockets Global Store
 global.activeSockets = global.activeSockets || new Map();
@@ -62,7 +63,7 @@ async function loadCommands() {
   console.log(`[+] Auto-loaded ${commands.size} commands/aliases into memory.`);
 }
 
-// 2. Next-Gen Cyber Glassmorphism Web Portal
+// 2. Next-Gen Cyber Glassmorphism Web Portal (Untouched)
 app.get("/", (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -431,7 +432,7 @@ app.get("/", (req, res) => {
 </html>`);
 });
 
-// 3. Central Socket Launcher & Universal Handler (Zero-Lag Configured)
+// 3. Central Socket Launcher & Universal Handler (Zero Bottleneck)
 async function startBotSocket(sessionId, authCollection) {
   try {
     const { state, saveCreds } = await useMongoDBAuthState(authCollection);
@@ -440,11 +441,11 @@ async function startBotSocket(sessionId, authCollection) {
     const sock = makeWASocket({
       version,
       auth: state,
-      logger: pino({ level: "fatal" }), // Eliminates logging I/O bottleneck
+      logger: pino({ level: "fatal" }), // Completely silences I/O logging overhead
       printQRInTerminal: false,
       msgRetryCounterCache,
       browser: Browsers.ubuntu("Chrome"),
-      connectTimeoutMs: 30000,
+      connectTimeoutMs: 20000,
       defaultQueryTimeoutMs: 0,
       keepAliveIntervalMs: 15000,
       emitOwnEvents: false,
@@ -465,8 +466,8 @@ async function startBotSocket(sessionId, authCollection) {
         activeSockets.delete(sessionId);
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         if (statusCode !== DisconnectReason.loggedOut) {
-          console.log(`[*] Fast reconnecting: ${sessionId}`);
-          setTimeout(() => startBotSocket(sessionId, authCollection), 2000);
+          console.log(`[*] Reconnecting: ${sessionId}`);
+          setTimeout(() => startBotSocket(sessionId, authCollection), 3000);
         } else {
           console.log(`[-] Logged out: ${sessionId}`);
           await authCollection.drop().catch(() => {});
@@ -474,18 +475,14 @@ async function startBotSocket(sessionId, authCollection) {
       }
     });
 
-    sock.ev.on("messages.upsert", async ({ messages, type }) => {
+    sock.ev.on("messages.upsert", ({ messages, type }) => {
       if (type !== "notify") return;
       const msg = messages[0];
       if (!msg?.message) return;
 
       const from = msg.key.remoteJid;
-      if (from === "status@broadcast") return;
-
-      const isGroup = from.endsWith("@g.us");
-      const sender = isGroup
-        ? (msg.key.participant || msg.participant || from)
-        : (msg.key.fromMe ? (sock.user?.id || from) : from);
+      // Drop status broadcast messages instantly to save CPU cycles
+      if (!from || from === "status@broadcast") return;
 
       const body =
         msg.message.conversation ||
@@ -498,7 +495,7 @@ async function startBotSocket(sessionId, authCollection) {
         msg.message?.extendedTextMessage?.contextInfo?.stanzaId ||
         msg.message?.imageMessage?.contextInfo?.stanzaId;
 
-      // Non-blocking interactive reply processing
+      // Handle interactive replies asynchronously
       if (quotedStanzaId) {
         setImmediate(async () => {
           for (const [, handler] of replyHandlers) {
@@ -512,14 +509,21 @@ async function startBotSocket(sessionId, authCollection) {
         });
       }
 
-      if (!body.startsWith(CONFIG.PREFIX)) return;
+      // Early drop if message does not start with Prefix
+      const prefix = CONFIG.PREFIX || ".";
+      if (!body.startsWith(prefix)) return;
 
-      const args = body.slice(CONFIG.PREFIX.length).trim().split(/ +/);
+      const isGroup = from.endsWith("@g.us");
+      const sender = isGroup
+        ? (msg.key.participant || msg.participant || from)
+        : (msg.key.fromMe ? (sock.user?.id || from) : from);
+
+      const args = body.slice(prefix.length).trim().split(/ +/);
       const cmdName = args.shift().toLowerCase();
       const command = commands.get(cmdName);
 
       if (command) {
-        // Non-blocking async queue dispatch for instant response
+        // Non-blocking async queue dispatch for instant response execution
         setImmediate(async () => {
           try {
             await command.execute({
@@ -530,6 +534,7 @@ async function startBotSocket(sessionId, authCollection) {
               body,
               sender,
               config: CONFIG,
+              prefix,
               activeBotsCount: activeSockets.size,
               commands
             });
@@ -548,7 +553,7 @@ async function startBotSocket(sessionId, authCollection) {
   }
 }
 
-// 4. Pairing Endpoint
+// 4. Pairing Endpoint (Untouched)
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone?.replace(/[^0-9]/g, "");
   if (!phone) return res.status(400).json({ error: "Phone number required" });
@@ -577,7 +582,7 @@ app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", activeBots: activeSockets.size });
 });
 
-// 5. Server Run (Immediate Port Bind)
+// 5. Server Run with Staggered Multi-Bot Initializer
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`[+] Web server listening on port ${PORT}`);
 
@@ -593,6 +598,8 @@ app.listen(PORT, "0.0.0.0", async () => {
       if (col.name.startsWith("bot_")) {
         console.log(`[*] Auto-starting session: ${col.name}`);
         startBotSocket(col.name, db.collection(col.name));
+        // Stagger session initialization to prevent RAM and CPU spikes
+        await delay(2500);
       }
     }
   } catch (err) {
@@ -600,13 +607,13 @@ app.listen(PORT, "0.0.0.0", async () => {
   }
 });
 
-// 6. Anti-Sleep Keep-Alive Engine (Dyno awake every 12 mins)
+// 6. Anti-Sleep Keep-Alive Engine
 const KEEP_ALIVE_URL = process.env.APP_URL || "https://heshan.devofc.top";
 setInterval(async () => {
   try {
-    await axios.get(`${KEEP_ALIVE_URL}/health`, { timeout: 10000 });
+    await axios.get(`${KEEP_ALIVE_URL}/health`, { timeout: 8000 });
   } catch (_) {}
-}, 12 * 60 * 1000);
+}, 10 * 60 * 1000);
 
 // Graceful Termination
 process.on("SIGTERM", async () => {
