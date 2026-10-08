@@ -33,12 +33,15 @@ async function loadBotConfig(botPhone, config) {
 
   const defaultSettings = {
     botPhone,
-    mode: "public",
-    antiSend: "off",
-    antiDelete: true,
-    statusSeen: true,
-    statusReact: true,
-    statusEmoji: "💖"
+    mode: "public",         // public | private | group | inbox
+    antiSend: "off",        // me | from | all | off
+    antiDelete: true,       // true | false
+    statusSeen: true,       // true | false
+    statusReact: true,      // true | false
+    statusEmoji: "💖",      // Custom emoji
+    autoReply: true,        // true | false
+    welcomeCard: true,      // true | false
+    antiCall: false         // true | false
   };
 
   try {
@@ -101,7 +104,7 @@ export function attachSettingsEngine(sock, appConfig) {
   const botPhone = getBotPhone(sock);
   if (botPhone) loadBotConfig(botPhone, appConfig);
 
-  // Fast-Path Mode Check
+  // 1. Fast-Path Mode Check
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const m = messages[0];
@@ -137,7 +140,7 @@ export function attachSettingsEngine(sock, appConfig) {
     }
   });
 
-  // Anti-Send Engine
+  // 2. Anti-Send Engine
   sock.ev.on("messages.upsert", async ({ messages }) => {
     for (const m of messages) {
       if (!m?.message) continue;
@@ -156,182 +159,185 @@ export function attachSettingsEngine(sock, appConfig) {
       }
     }
   });
+
+  // 3. Anti-Call Auto Reject
+  sock.ev.on("call", async (calls) => {
+    const currentPhone = getBotPhone(sock);
+    const settings = global.botSettingsStore.get(currentPhone);
+    if (!settings || !settings.antiCall) return;
+
+    for (const call of calls) {
+      if (call.status === "offer") {
+        await sock.rejectCall(call.id, call.from).catch(() => {});
+      }
+    }
+  });
 }
 
 export default {
   name: "setting",
-  aliases: ["settings", "botmode", "mode", "antisend", "config"],
+  aliases: ["settings", "botmode", "mode", "antisend", "config", "set"],
   category: "owner",
-  description: "Cute & fast persistent cluster settings manager",
+  description: "Sweet, simple & complete cluster control dashboard",
 
-  async execute({ sock, msg, from, args, body, config: botAppConfig }) {
+  async execute({ sock, msg, from, args, body, config: botAppConfig, prefix }) {
     attachSettingsEngine(sock, botAppConfig);
 
-    const prefix = botAppConfig?.PREFIX || ".";
+    const pref = prefix || botAppConfig?.PREFIX || ".";
     const botPhone = getBotPhone(sock);
     const settings = await loadBotConfig(botPhone, botAppConfig);
 
+    // Master Owner Check
     if (!isBotOwner(sock, msg, from)) {
       sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: "🎀 *Only my sweet master can change bot configurations!* 🌸" },
+        { text: "🎀 *Only my sweet master can configure bot settings!* 🌸" },
         { quoted: msg }
       );
     }
 
-    const fullBody = body.trim().slice(prefix.length).trim();
+    const fullBody = body.trim().slice(pref.length).trim();
     const commandTrigger = fullBody.split(/\s+/)[0].toLowerCase();
+    const opt = args[0]?.toLowerCase()?.trim();
+    const val = args[1]?.toLowerCase()?.trim();
 
-    // 1. Anti-Send Controller (.antisend me / from / all / off)
-    if (commandTrigger === "antisend") {
-      const modeArg = args[0]?.toLowerCase().trim();
-      if (!["me", "from", "all", "off"].includes(modeArg)) {
-        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          {
-            text: 
-`🌸 ｡ﾟ•┈୨ *ANTI-SEND OPTIONS* ୧┈•ﾟ｡ 🐾
-
-  • *${prefix}antisend me*   ➔ Auto-delete messages sent by me
-  • *${prefix}antisend from* ➔ Auto-delete incoming messages
-  • *${prefix}antisend all*  ➔ Auto-delete all messages
-  • *${prefix}antisend off*  ➔ Disable anti-send
-
-  ⚙️ *Current Mode:* \`${settings.antiSend.toUpperCase()}\`
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
-          },
-          { quoted: msg }
-        );
-      }
-
-      settings.antiSend = modeArg;
-      saveBotConfig(botPhone, settings, botAppConfig);
-
-      sock.sendMessage(from, { react: { text: "🛡️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        {
-          text: `✨ *Anti-Send Updated!* Active mode set to: \`${modeArg.toUpperCase()}\` softly. 🌸`
-        },
-        { quoted: msg }
-      );
-    }
-
-    // 2. Mode Controller (.mode public / private / group / inbox)
-    if (commandTrigger === "mode" || commandTrigger === "botmode") {
-      let modeArg = args[0]?.toLowerCase().trim();
+    // -------------------------------------------------------------
+    // Direct Quick Command: .mode <public|private|group|inbox>
+    // -------------------------------------------------------------
+    if (commandTrigger === "mode" || (commandTrigger === "setting" && opt === "mode")) {
+      let modeArg = (commandTrigger === "mode" ? opt : val);
 
       if (modeArg === "privet" || modeArg === "prv" || modeArg === "pvt") modeArg = "private";
       else if (modeArg === "pub" || modeArg === "pbl") modeArg = "public";
       else if (modeArg === "grp" || modeArg === "groups") modeArg = "group";
       else if (modeArg === "dm" || modeArg === "ib") modeArg = "inbox";
 
-      if (!["public", "private", "group", "inbox"].includes(modeArg)) {
-        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
+      if (["public", "private", "group", "inbox"].includes(modeArg)) {
+        settings.mode = modeArg;
+        saveBotConfig(botPhone, settings, botAppConfig);
+        sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          {
-            text: 
-`🌸 ｡ﾟ•┈୨ *BOT WORK MODES* ୧┈•ﾟ｡ 🐾
-
-  • *${prefix}mode public*  ➔ Open to all users & chats 🌐
-  • *${prefix}mode private* ➔ Only respond to owner 🔒
-  • *${prefix}mode group*   ➔ Active only in groups 👥
-  • *${prefix}mode inbox*   ➔ Active only in direct messages 💌
-
-  ⚙️ *Current Mode:* \`${settings.mode.toUpperCase()}\`
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
-          },
+          { text: `🌸 *Bot Mode Updated!* Successfully changed to \`${modeArg.toUpperCase()}\` mode sweetly~ ✨` },
           { quoted: msg }
         );
       }
+    }
 
-      settings.mode = modeArg;
+    // -------------------------------------------------------------
+    // Direct Quick Command: .antisend <me|from|all|off>
+    // -------------------------------------------------------------
+    if (commandTrigger === "antisend" || (commandTrigger === "setting" && opt === "antisend")) {
+      const modeArg = commandTrigger === "antisend" ? opt : val;
+      if (["me", "from", "all", "off"].includes(modeArg)) {
+        settings.antiSend = modeArg;
+        saveBotConfig(botPhone, settings, botAppConfig);
+        sock.sendMessage(from, { react: { text: "🛡️", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          { text: `✨ *Anti-Send Updated!* Active mode set to: \`${modeArg.toUpperCase()}\` softly. 🌸` },
+          { quoted: msg }
+        );
+      }
+    }
+
+    // -------------------------------------------------------------
+    // Toggle Shortcuts (1-Command Switchers)
+    // -------------------------------------------------------------
+    const toggleMap = {
+      "antidel": "antiDelete",
+      "antidelete": "antiDelete",
+      "stseen": "statusSeen",
+      "statusseen": "statusSeen",
+      "stract": "statusReact",
+      "statusreact": "statusReact",
+      "autoreply": "autoReply",
+      "reply": "autoReply",
+      "welcome": "welcomeCard",
+      "welcomecard": "welcomeCard",
+      "anticall": "antiCall",
+      "call": "antiCall"
+    };
+
+    if (opt && toggleMap[opt]) {
+      const targetKey = toggleMap[opt];
+      let newState = !settings[targetKey]; // Auto toggle if value not passed
+
+      if (val === "on" || val === "true" || val === "1") newState = true;
+      if (val === "off" || val === "false" || val === "0") newState = false;
+
+      settings[targetKey] = newState;
       saveBotConfig(botPhone, settings, botAppConfig);
 
-      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
+      // Memory synchronization with external handlers
+      if (targetKey === "antiDelete") global.antiDeleteSettings?.set(botPhone, newState);
+      if (targetKey === "autoReply") global.autoReplyStatus?.set(botPhone, newState);
+      if (targetKey === "statusSeen" && global.statusSettings?.get(botPhone)) global.statusSettings.get(botPhone).seen = newState;
+      if (targetKey === "statusReact" && global.statusSettings?.get(botPhone)) global.statusSettings.get(botPhone).react = newState;
+
+      sock.sendMessage(from, { react: { text: newState ? "💖" : "💤", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        {
-          text: `🌸 *Bot Mode Updated!* Successfully shifted to \`${modeArg.toUpperCase()}\` mode sweetly~ ✨`
-        },
+        { text: `🌸 *${opt.toUpperCase()} Setting:* ${newState ? "🟢 ACTIVATED & RUNNING ✨" : "🔴 DISABLED SOFTLY 💤"}` },
         { quoted: msg }
       );
     }
 
-    // 3. Status & Anti-Delete Sync Toggles
-    const subAction = args[0]?.toLowerCase();
-    const subVal = args[1]?.toLowerCase();
-
-    if (subAction === "antidel") {
-      const state = subVal === "on";
-      settings.antiDelete = state;
-      global.antiDeleteSettings?.set(botPhone, state);
+    // Custom Status Emoji Setter (.setting emoji 🔥)
+    if (opt === "emoji" && args[1]) {
+      settings.statusEmoji = args[1].trim();
       saveBotConfig(botPhone, settings, botAppConfig);
-
-      sock.sendMessage(from, { react: { text: state ? "🛡️" : "💤", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: `🌸 *Anti-Delete Guardian:* *${state ? "ACTIVATED 🛡️✨" : "DISABLED 💤"}*` },
+        { text: `🍭 *Status React Emoji Changed to:* ${settings.statusEmoji} softly!` },
         { quoted: msg }
       );
     }
 
-    if (subAction === "stseen") {
-      const state = subVal === "on";
-      settings.statusSeen = state;
-      if (global.statusSettings?.get(botPhone)) global.statusSettings.get(botPhone).seen = state;
-      saveBotConfig(botPhone, settings, botAppConfig);
-
-      sock.sendMessage(from, { react: { text: state ? "👁️" : "💤", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: `🌸 *Status Auto-Seen:* *${state ? "ACTIVATED 👁️✨" : "DISABLED 💤"}*` },
-        { quoted: msg }
-      );
-    }
-
-    if (subAction === "stract") {
-      const state = subVal === "on";
-      settings.statusReact = state;
-      if (global.statusSettings?.get(botPhone)) global.statusSettings.get(botPhone).react = state;
-      saveBotConfig(botPhone, settings, botAppConfig);
-
-      sock.sendMessage(from, { react: { text: state ? "💖" : "💤", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: `🌸 *Status Auto-React:* *${state ? "ACTIVATED 💖✨" : "DISABLED 💤"}*` },
-        { quoted: msg }
-      );
-    }
-
-    // 4. Main Cute Configuration Dashboard
+    // -------------------------------------------------------------
+    // Super Easy & Crystal Clear Main Dashboard
+    // -------------------------------------------------------------
     sock.sendMessage(from, { react: { text: "🎛️", key: msg.key } }).catch(() => {});
 
     const dashboardCard = 
-`🎀 ｡ﾟ•┈୨ *SETTINGS & CONTROL* ୧┈•ﾟ｡ 🐾
-━━━━━━━━━━━━━━━━━━━━━━
+`🎀 ｡ﾟ•┈୨ *DARK-DINU MASTER DASHBOARD* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━━━━
 
   📱 *Bot Instance:* \`+${botPhone}\`
-  🎯 *Working Mode:* \`${settings.mode.toUpperCase()}\`
-  🚫 *Anti-Send:* \`${settings.antiSend.toUpperCase()}\`
-  🛡️ *Anti-Delete:* ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"}
-  👁️ *Status Seen:* ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"}
-  💖 *Status React:* ${settings.statusReact ? "🟢 ON" : "🔴 OFF"}
-  🍭 *React Symbol:* ${settings.statusEmoji}
-  💾 *Database Sync:* 🟢 Cloud Memory
+  🌐 *System Status:* Online & Guarding 24/7 (˶˃ ᵕ ˂˶)
 
-━━━━━━━━━━━━━━━━━━━━━━
-🍬 *QUICK CONTROL COMMANDS*
-  • *${prefix}mode <public|private|group|inbox>*
-  • *${prefix}antisend <me|from|all|off>*
-  • *${prefix}setting antidel <on|off>*
-  • *${prefix}setting stseen <on|off>*
-  • *${prefix}setting stract <on|off>*
+┌─〔 ⚙️ *CURRENT ACTIVE SETTINGS* 〕
+├─▸ 🎯 *Bot Work Mode*    : \`${settings.mode.toUpperCase()}\`
+├─▸ 🛡️ *Anti-Delete*      : ${settings.antiDelete ? "🟢 ON (Guarding)" : "🔴 OFF"}
+├─▸ 👁️ *Status Auto-Seen*  : ${settings.statusSeen ? "🟢 ON (Auto Seen)" : "🔴 OFF"}
+├─▸ 💖 *Status Auto-React* : ${settings.statusReact ? "🟢 ON" : "🔴 OFF"} [ ${settings.statusEmoji} ]
+├─▸ 💬 *Auto-Reply Engine* : ${settings.autoReply ? "🟢 ON (Replying)" : "🔴 OFF"}
+├─▸ 💌 *Welcome Card*     : ${settings.welcomeCard ? "🟢 ON (Greeting)" : "🔴 OFF"}
+├─▸ 🚫 *Anti-Send Guard*   : \`${settings.antiSend.toUpperCase()}\`
+├─▸ 📵 *Anti-Call Shield*  : ${settings.antiCall ? "🟢 ON (Rejecting)" : "🔴 OFF"}
+└───────────────────────────
 
-━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━
+🍬 *HOW TO CHANGE ANY SETTING (EASY GUIDE):*
+
+  ✨ *1. Change Bot Mode:*
+  • \`${pref}mode public\`  ➔ හැමෝටම වැඩ
+  • \`${pref}mode private\` ➔ Owner ට විතරයි
+  • \`${pref}mode group\`   ➔ Groups වලට විතරයි
+  • \`${pref}mode inbox\`   ➔ Inbox වලට විතරයි
+
+  🛡️ *2. Quick On / Off Toggles:*
+  • \`${pref}setting antidel on/off\`    ➔ Anti-Delete
+  • \`${pref}setting stseen on/off\`     ➔ Status Seen
+  • \`${pref}setting stract on/off\`     ➔ Status React
+  • \`${pref}setting autoreply on/off\`  ➔ Custom Auto-Replies
+  • \`${pref}setting welcome on/off\`    ➔ Welcome Cards
+  • \`${pref}setting anticall on/off\`   ➔ Anti-Call Reject
+  • \`${pref}setting emoji <emoji>\`     ➔ Status Reaction Emoji
+
+━━━━━━━━━━━━━━━━━━━━━━━━
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
     await sock.sendMessage(from, { text: dashboardCard }, { quoted: msg });
