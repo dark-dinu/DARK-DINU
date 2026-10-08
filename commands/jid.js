@@ -2,44 +2,56 @@ export default {
   name: "jid",
   aliases: ["lid", "infojid", "who"],
   category: "utility",
-  description: "Inspect JID, LID, and Chat metadata",
+  description: "Inspect JID, LID, and Chat metadata with cute styling",
 
   async execute({ sock, msg, from }) {
-    // Non-blocking Reaction (Instant trigger)
-    sock.sendMessage(from, { react: { text: "🕷️", key: msg.key } }).catch(() => {});
+    // Microsecond instant cute reaction
+    sock.sendMessage(from, { react: { text: "🏷️", key: msg.key } }).catch(() => {});
 
     try {
-      const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+      const rawMsg = msg.message?.ephemeralMessage?.message || msg.message;
+      const contextInfo =
+        rawMsg?.extendedTextMessage?.contextInfo ||
+        rawMsg?.imageMessage?.contextInfo ||
+        rawMsg?.videoMessage?.contextInfo;
+
       const quotedParticipant = contextInfo?.participant;
       const mentionedJid = contextInfo?.mentionedJid?.[0];
 
-      // Target JID Resolve
-      const targetJid = 
-        quotedParticipant || 
-        mentionedJid || 
-        (from.endsWith("@g.us") ? (msg.key.participant || from) : from);
-
-      const targetLid = contextInfo?.participantPn || "N/A";
+      // O(1) Fast Priority Target Resolver
       const isGroup = from.endsWith("@g.us");
+      const targetJid =
+        quotedParticipant ||
+        mentionedJid ||
+        (isGroup ? (msg.key.participant || from) : (msg.key.fromMe ? (sock.user?.id || from) : from));
 
-      const text = 
-`╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+      // Resolve LID or Phone Number Context if available
+      const targetLid = contextInfo?.participantPn || contextInfo?.remoteJid || "Not Provided";
 
-┌─〔 🎯 *CHAT & ID METADATA* 〕
-├─▸ 👤 *Target JID:* \`${targetJid}\`
-├─▸ 🆔 *Target LID:* \`${targetLid}\`
-├─▸ 📍 *Chat JID:* \`${from}\`
-├─▸ 👥 *Chat Type:* ${isGroup ? "Group Chat" : "Direct Message"}
-└───────────────────────
+      const metadataCard = 
+`🎀 ｡ﾟ•┈୨ *JID & CHAT METADATA* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
 
-> 👑 *Developer:* DINIDU HESHAN
-> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐂𝐎𝐑𝐄 🐦‍🔥*`;
+  👤 *Target JID:* \`${targetJid}\`
+  🆔 *Target LID:* \`${targetLid}\`
+  📍 *Current Chat:* \`${from}\`
+  💌 *Chat Type:* ${isGroup ? "Group Chat 👥" : "Direct Message 💌"}
 
-      await sock.sendMessage(from, { text }, { quoted: msg });
-    } catch (e) {
-      console.error("[JID ERROR]:", e.message);
+━━━━━━━━━━━━━━━━━━━━━
+✨ *Identity inspection complete softly~ (˶˃ ᵕ ˂˶)*
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+      await sock.sendMessage(from, { text: metadataCard }, { quoted: msg });
+      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
+
+    } catch (err) {
+      console.error("[JID COMMAND ERROR]:", err.message);
+      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(
+        from,
+        { text: `🌸 *Glitch detected:* ${err.message || "Could not read JID metadata softly"}` },
+        { quoted: msg }
+      ).catch(() => {});
     }
   }
 };
