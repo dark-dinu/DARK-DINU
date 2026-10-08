@@ -1,6 +1,6 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
-// Lightweight Cache (Memory පිරීම වැළැක්වීමට 2,000කට සීමා කර ඇත)
+// Lightweight Cache (Memory safe - 2,000 max)
 global.antiDeleteStore = global.antiDeleteStore || new Map();
 global.antiDeleteSettings = global.antiDeleteSettings || new Map();
 global.antiDeleteHookedSockets = global.antiDeleteHookedSockets || new WeakSet();
@@ -21,13 +21,12 @@ function isBotOwner(sock, msg, from) {
   return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
 }
 
-// Background Listener Engine (Zero Loop Lag)
+// Background Listener Engine
 function attachAntiDeleteEngine(sock) {
   if (!sock || global.antiDeleteHookedSockets.has(sock)) return;
   global.antiDeleteHookedSockets.add(sock);
 
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    // Background execution to prevent event-loop delays
+  sock.ev.on("messages.upsert", async ({ messages }) => {
     for (const m of messages) {
       if (!m?.message) continue;
 
@@ -52,23 +51,33 @@ function attachAntiDeleteEngine(sock) {
         const isGroup = chatJid.endsWith("@g.us");
         const deleterJid = m.key.participant || deletedKey.participant || cachedMsg.key?.participant || chatJid;
         const deleterPhone = String(deleterJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+        
+        // Sender Name / PushName detect
+        const senderName = cachedMsg.pushName || m.pushName || `+${deleterPhone}`;
 
-        const timeStr = new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Colombo", hour12: true });
+        // Live Time (Asia/Colombo)
+        const timeStr = new Date().toLocaleTimeString("en-GB", {
+          timeZone: "Asia/Colombo",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: true
+        });
 
+        // Clean Single-Line Aesthetic UI
         const headerUI = 
-`╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+`🍓 ༆⃝⃤ *Oops! Someone Deleted A Message~* 🫧 🐾
+━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 🗑️ *DELETED MESSAGE DETECTED* 〕
-├─▸ 👤 *Deleted By* : +${deleterPhone}
-├─▸ 🌐 *Chat Type*  : ${isGroup ? "Group Chat" : "Private (DM)"}
-├─▸ ⏰ *Time*       : ${timeStr}
-└───────────────────────`;
+┊◈ 👤 *ꜱᴇɴᴅᴇʀ* : *${senderName}* (+${deleterPhone})
+┊◈ 🕐 *ᴛɪᴍᴇ*   : ${timeStr}
+┊◈ 💬 *ᴄʜᴀᴛ*   : ${isGroup ? "Group Chat" : "Private (DM)"}
+┊◈ ✨ *ɴᴏᴛᴇ*   : _Don't worry, I saved it for you!_ 💕
+────────────────────`;
 
         const rawMsg = cachedMsg.message;
 
-        // 1. Text Message Recover
+        // 1. Text Message Recovery
         const textContent =
           rawMsg.conversation ||
           rawMsg.extendedTextMessage?.text ||
@@ -76,12 +85,12 @@ function attachAntiDeleteEngine(sock) {
 
         if (textContent) {
           sock.sendMessage(chatJid, {
-            text: `${headerUI}\n\n💬 *Deleted Text:*\n> ${textContent}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
+            text: `${headerUI}\n\n📝 *ᴅᴇʟᴇᴛᴇᴅ ᴍᴇꜱꜱᴀɢᴇ :*\n> ${textContent}\n\n🍰 *© 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐎ꜰᴄ* 🤍 | 📍 https://heshan.devofc.top/`
           }).catch(() => {});
           continue;
         }
 
-        // 2. Media Message Recover (Async Non-blocking)
+        // 2. Media Message Recovery
         (async () => {
           try {
             const mediaBuffer = await downloadMediaMessage(
@@ -93,20 +102,20 @@ function attachAntiDeleteEngine(sock) {
 
             if (mediaBuffer && mediaBuffer.length > 0) {
               if (rawMsg.imageMessage) {
-                const caption = rawMsg.imageMessage.caption ? `\n\n📝 *Caption:* ${rawMsg.imageMessage.caption}` : "";
+                const caption = rawMsg.imageMessage.caption ? `\n\n💬 *ᴄᴀᴘᴛɪᴏɴ :* _${rawMsg.imageMessage.caption}_` : "";
                 await sock.sendMessage(chatJid, {
                   image: mediaBuffer,
-                  caption: `${headerUI}${caption}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
+                  caption: `${headerUI}${caption}\n\n🍰 *© 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐎ꜰᴄ* 🤍 | 📍 https://heshan.devofc.top/`
                 }).catch(() => {});
               } else if (rawMsg.videoMessage) {
-                const caption = rawMsg.videoMessage.caption ? `\n\n📝 *Caption:* ${rawMsg.videoMessage.caption}` : "";
+                const caption = rawMsg.videoMessage.caption ? `\n\n💬 *ᴄᴀᴘᴛɪᴏɴ :* _${rawMsg.videoMessage.caption}_` : "";
                 await sock.sendMessage(chatJid, {
                   video: mediaBuffer,
-                  caption: `${headerUI}${caption}\n\n> *𝐃𝙍𝕶 𝑫𝙄𝙉𝙐 𝐀𝐍𝐓𝐈-𝐃𝐄𝐋𝐄𝐓𝐄 🛡️*`
+                  caption: `${headerUI}${caption}\n\n🍰 *© 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐎ꜰᴄ* 🤍 | 📍 https://heshan.devofc.top/`
                 }).catch(() => {});
               } else if (rawMsg.audioMessage) {
                 await sock.sendMessage(chatJid, {
-                  text: `${headerUI}\n\n🔊 *Deleted Voice Note Below:*`
+                  text: `${headerUI}\n\n🔊 *ᴅᴇʟᴇᴛᴇᴅ ᴠᴏɪᴄᴇ ɴᴏᴛᴇ :*\n🍰 *© 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐎ꜰᴄ* 🤍`
                 }).catch(() => {});
                 await sock.sendMessage(chatJid, {
                   audio: mediaBuffer,
@@ -115,7 +124,7 @@ function attachAntiDeleteEngine(sock) {
                 }).catch(() => {});
               } else if (rawMsg.stickerMessage) {
                 await sock.sendMessage(chatJid, {
-                  text: `${headerUI}\n\n🎭 *Deleted Sticker Below:*`
+                  text: `${headerUI}\n\n🎭 *ᴅᴇʟᴇᴛᴇᴅ ꜱᴛɪᴄᴋᴇʀ :*\n🍰 *© 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐎ꜰᴄ* 🤍`
                 }).catch(() => {});
                 await sock.sendMessage(chatJid, { sticker: mediaBuffer }).catch(() => {});
               }
@@ -131,7 +140,7 @@ function attachAntiDeleteEngine(sock) {
       if (m.key?.id && !m.key.fromMe) {
         global.antiDeleteStore.set(m.key.id, m);
 
-        // Memory cleanup (පැරණි 500ක් එකවර අයින් කර RAM එක Free තබයි)
+        // Memory cleanup
         if (global.antiDeleteStore.size > 2000) {
           const keys = Array.from(global.antiDeleteStore.keys());
           for (let i = 0; i < 500; i++) {
@@ -143,7 +152,7 @@ function attachAntiDeleteEngine(sock) {
   });
 }
 
-// Background Monitor: තත්පර 20කට වරක් පමණක් සැහැල්ලුවෙන් Check වේ
+// Background Monitor Hook
 if (!global.antiDeleteIntervalStarted) {
   global.antiDeleteIntervalStarted = true;
   setInterval(() => {
@@ -171,7 +180,7 @@ export default {
       sock.sendMessage(from, { react: { text: "🚫", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: "⛔ *ACCESS DENIED:* මෙම setting එක වෙනස් කළ හැක්කේ Bot Owner ට පමණි." },
+        { text: "⛔ *Access Denied:* මෙම setting එක වෙනස් කළ හැක්කේ Bot Owner ට පමණි." },
         { quoted: msg }
       );
     }
@@ -180,23 +189,23 @@ export default {
       const status = subCmd === "on";
       global.antiDeleteSettings.set(botPhone, status);
 
-      const statusText = status ? "✅ *සක්‍රීය කෙරිණි (ACTIVATED)*" : "🛑 *අක්‍රීය කෙරිණි (DISABLED)*";
-      sock.sendMessage(from, { react: { text: status ? "🛡️" : "🔒", key: msg.key } }).catch(() => {});
+      const statusText = status ? "Active & Guarding 🛡️✨" : "Disabled 🔒";
+      sock.sendMessage(from, { react: { text: status ? "🍓" : "🔒", key: msg.key } }).catch(() => {});
 
       return await sock.sendMessage(
         from,
         {
-          text: `╔══════════════════════╗
-   🕷️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔 🕷️
-╚══════════════════════╝
+          text: 
+`🍓 ༆⃝⃤ *DARK-DINU ANTI-DELETE ENGINE* 🎀 🐾
+━━━━━━━━━━━━━━━━━━━━
 
-┌─〔 🛡️ *ANTI-DELETE ENGINE* 〕
-├─▸ 🤖 *Bot Node* : +${botPhone}
-├─▸ ⚙️ *Status*   : ${statusText}
-├─▸ 🌐 *Coverage* : Group & Private (DM)
-└───────────────────────
+┊◈ 📱 *ʙᴏᴛ ɴᴏᴅᴇ* : +${botPhone}
+┊◈ ⚙️ *ꜱᴛᴀᴛᴜꜱ*   : *${statusText}*
+┊◈ 🌐 *ᴄᴏᴠᴇʀᴀɢᴇ* : Group & Private (DM)
+────────────────────
+_${status ? "මැකූ ඕනෑම පණිවිඩයක් දැන් ක්ෂණිකව recover කරනු ඇත." : "Anti-Delete පහසුකම අක්‍රීය කර ඇත."}_
 
-${status ? "දැන් මැකූ ඕනෑම Text, Voice හෝ Media පණිවිඩයක් ක්ෂණිකව නැවත එවනු ඇත." : "Anti-Delete පහසුකම මෙම බොට් සඳහා තාවකාලිකව නවතා ඇත."}`
+🍰 *© 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐎ꜰᴄ* 🤍 | 📍 https://heshan.devofc.top/`
         },
         { quoted: msg }
       );
@@ -206,7 +215,7 @@ ${status ? "දැන් මැකූ ඕනෑම Text, Voice හෝ Media ප�
     return await sock.sendMessage(
       from,
       {
-        text: `⚠️ *භාවිතය:*\n• .antidelete on - සක්‍රීය කිරීමට\n• .antidelete off - අක්‍රීය කිරීමට\n\n*Current Status:* ${currentStatus ? "🟢 ON" : "🔴 OFF"}`
+        text: `🍓 *ANTI-DELETE SETUP*\n\n• *.antidelete on* - සක්‍රීය කිරීමට\n• *.antidelete off* - අක්‍රීය කිරීමට\n\n> ⚙️ *Current Status :* ${currentStatus ? "🟢 ON" : "🔴 OFF"}\n📍 https://heshan.devofc.top/`
       },
       { quoted: msg }
     );
