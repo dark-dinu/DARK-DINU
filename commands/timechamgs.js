@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { downloadMediaMessage } from "@whiskeysockets/baileys";
+import { downloadMediaMessage, generateWAMessageFromContent, proto } from "@whiskeysockets/baileys";
 
 // In-Memory Fast Lookup Maps
 global.autoSendSessions = global.autoSendSessions || new Map();
@@ -41,7 +41,7 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
-// Deep Multi-Layer Text Extractor (Handles massive forwarded posts & link previews)
+// Deep Multi-Layer Text Extractor
 function extractFullPostText(quotedMsg) {
   if (!quotedMsg) return "";
 
@@ -118,24 +118,43 @@ async function syncTaskToDB(task, isDelete = false) {
   } catch (_) {}
 })();
 
-// Full Payload Dispatch Engine
+// 🔥 100% NATIVE CHANNEL DISPATCH ENGINE
 async function dispatchToChannel(sock, task) {
   try {
+    // 1. Image සහිත Post එකක් නම්
     if (task.imageBufferBase64) {
       const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
       await sock.sendMessage(task.channelJid, {
         image: imgBuffer,
         caption: task.caption || ""
       });
-    } else {
-      await sock.sendMessage(task.channelJid, {
-        text: task.caption
-      });
+      console.log(`[AUTOSEND DISPATCHED IMAGE]: Delivered to ${task.channelJid}`);
+      return true;
     }
-    console.log(`[AUTOSEND DISPATCHED]: Big post delivered to ${task.channelJid}`);
-    return true;
+
+    // 2. දිගු Text / Formatted Post එකක් නම් (Plain text fallback සහිතව)
+    if (task.caption) {
+      try {
+        await sock.sendMessage(task.channelJid, {
+          text: task.caption
+        });
+      } catch (err) {
+        // High-level fallback: Relay message using raw binary proto
+        const rawContent = {
+          extendedTextMessage: {
+            text: task.caption
+          }
+        };
+        const waMsg = generateWAMessageFromContent(task.channelJid, rawContent, {});
+        await sock.relayMessage(task.channelJid, waMsg.message, { messageId: waMsg.key.id });
+      }
+      console.log(`[AUTOSEND DISPATCHED TEXT]: Delivered to ${task.channelJid}`);
+      return true;
+    }
+
+    return false;
   } catch (err) {
-    console.error(`[AUTOSEND DISPATCH ERROR]: ${err.message}`);
+    console.error(`[AUTOSEND ERROR]: Could not publish to ${task.channelJid} ->`, err.message);
     return false;
   }
 }
@@ -225,23 +244,31 @@ export function hookAutoSendReplyEngine(sock) {
     global.autoSendTimers.set(taskId, newTask);
     await syncTaskToDB(newTask);
 
-    // Instant Delivery
-    await dispatchToChannel(sock, newTask);
+    // 🚀 Instant Post Try & Result Check
+    const isSent = await dispatchToChannel(sock, newTask);
 
-    sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
+    if (isSent) {
+      sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
+    } else {
+      sock.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
+    }
+
+    const resultNotice = isSent 
+      ? "🟢 *Success:* පළමු Post එක මේ දැන්ම Channel එකට සාර්ථකව Post කළා! ✨"
+      : "⚠️ *Notice:* පළමු Post එක යැවීමට නොහැකි විය. (කරුණාකර මෙම Bot අංකය අදාළ Channel එකේ Admin කෙනෙක් දැයි පරීක්ෂා කරන්න!)";
 
     const successCard = 
 `🎀 ｡ﾟ•┈୨ *POST AUTO-SCHEDULER ACTIVATED* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
   📢 *Target Channel:* \`${session.channelJid}\`
-  ⏳ *Selected Time:* ${chosen.label}
-  🚀 *Initial Post:* Dispatched Right Now! ✨
-  📝 *Characters Captured:* \`${session.caption.length} Characters\`
-  🖼️ *Attachment:* ${session.imageBufferBase64 ? "🟢 Image + Big Post" : "📝 Full Text Post"}
+  ⏳ *Interval:* ${chosen.label}
+  📝 *Content Captured:* \`${session.caption.length} Characters\`
+  🖼️ *Attachment:* ${session.imageBufferBase64 ? "🟢 Image + Text Post" : "📝 Text Post"}
 
 ━━━━━━━━━━━━━━━━━━━━━
-_The full post has been sent! Repeating every ${chosen.label}! (˶˃ ᵕ ˂˶)_
+${resultNotice}
+_Next posts will automatically continue every ${chosen.label}! (˶˃ ᵕ ˂˶)_
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
@@ -338,7 +365,7 @@ export default {
 `🌸 ｡ﾟ•┈୨ *AUTOSEND POST GUIDE* ୧┈•ﾟ｡ 🐾
 
   🍭 *How to use:*
-  1. Forward or send your big post (Image with caption, or long formatted text).
+  1. Forward or send your post (Image with caption, or long text).
   2. Reply to that message with:
      \`${pref}autosend <channel_link>\`
   3. Choose the recurring interval from the sweet menu!
@@ -373,7 +400,7 @@ export default {
       );
     }
 
-    // Capture Full Post Content (No limits)
+    // Extract Text Content
     const captionText = extractFullPostText(quotedMsg);
 
     let imageBase64 = null;
