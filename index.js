@@ -32,6 +32,9 @@ const msgRetryCounterCache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
 global.activeSockets = global.activeSockets || new Map();
 const activeSockets = global.activeSockets;
 
+// Global Set to prevent duplicate settings engine attachment
+global.attachedEngineSockets = global.attachedEngineSockets || new WeakSet();
+
 const commands = new Map();
 const replyHandlers = new Map();
 let db = null;
@@ -467,7 +470,7 @@ async function startBotSocket(sessionId, authCollection) {
       browser: Browsers.ubuntu("Chrome"),
       connectTimeoutMs: 30000,
       defaultQueryTimeoutMs: 0,
-      keepAliveIntervalMs: 15000,
+      keepAliveIntervalMs: 25000,
       emitOwnEvents: false,
       fireInitQueries: false,
       generateHighQualityLinkPreview: false,
@@ -482,12 +485,15 @@ async function startBotSocket(sessionId, authCollection) {
         console.log(`🌸 Bot connected successfully: ${sessionId}`);
         activeSockets.set(sessionId, sock);
 
-        // Instant DB Settings Sync & Hooking Protection Engine
         const currentPhone = cleanPhone(sock.user?.id || "");
         if (currentPhone) {
           await initializeSessionState(currentPhone);
-          attachSettingsEngine(sock);
-          console.log(`🔒 Settings synced from MongoDB for: +${currentPhone}`);
+          // Prevent multiple hook registrations per socket instance
+          if (!global.attachedEngineSockets.has(sock)) {
+            global.attachedEngineSockets.add(sock);
+            attachSettingsEngine(sock);
+            console.log(`🔒 Settings synced & hooked once for: +${currentPhone}`);
+          }
         }
       }
       if (connection === "close") {
@@ -495,7 +501,7 @@ async function startBotSocket(sessionId, authCollection) {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         if (statusCode !== DisconnectReason.loggedOut) {
           console.log(`🔄 Session reconnecting: ${sessionId}`);
-          setTimeout(() => startBotSocket(sessionId, authCollection), 3000);
+          setTimeout(() => startBotSocket(sessionId, authCollection), 5000);
         } else {
           console.log(`❌ Session logged out: ${sessionId}`);
           await authCollection.drop().catch(() => {});
@@ -518,13 +524,13 @@ async function startBotSocket(sessionId, authCollection) {
         msg.message?.imageMessage?.contextInfo?.stanzaId ||
         msg.message?.videoMessage?.contextInfo?.stanzaId;
 
-      // Handle reply listeners asynchronously
-      if (quotedStanzaId) {
-        setImmediate(async () => {
+      // Handle reply listeners without blocking event loop
+      if (quotedStanzaId && replyHandlers.size > 0) {
+        queueMicrotask(async () => {
           for (const [, handler] of replyHandlers) {
             try {
               const handled = await handler({ sock, msg, from, body, quotedStanzaId, config: CONFIG });
-              if (handled) return;
+              if (handled) break;
             } catch (e) {
               console.error("[Reply Handler Error]:", e.message);
             }
@@ -532,7 +538,7 @@ async function startBotSocket(sessionId, authCollection) {
         });
       }
 
-      // Prefix check
+      // Fast prefix bail-out
       const prefix = CONFIG.PREFIX || ".";
       if (!body.startsWith(prefix)) return;
 
@@ -548,7 +554,8 @@ async function startBotSocket(sessionId, authCollection) {
       const command = commands.get(cmdName);
 
       if (command) {
-        setImmediate(async () => {
+        // High priority microtask dispatch
+        queueMicrotask(async () => {
           try {
             await command.execute({
               sock,
@@ -616,11 +623,13 @@ app.listen(PORT, "0.0.0.0", async () => {
 
   try {
     await loadCommands();
-    mongoClient = new MongoClient(CONFIG.MONGODB_URI);
+    mongoClient = new MongoClient(CONFIG.MONGODB_URI, {
+      maxPoolSize: 50,
+      minPoolSize: 5
+    });
     await mongoClient.connect();
     db = mongoClient.db(CONFIG.DB_NAME);
 
-    // Global Database Access for sessionManager.js
     global.mongoClient = mongoClient;
     global.mongoDbInstance = db;
 
@@ -631,7 +640,7 @@ app.listen(PORT, "0.0.0.0", async () => {
       if (col.name.startsWith("bot_")) {
         console.log(`⚡ Waking up session: ${col.name}`);
         startBotSocket(col.name, db.collection(col.name));
-        await delay(2500);
+        await delay(3500); // Stagger startup to prevent RAM spike
       }
     }
   } catch (err) {
