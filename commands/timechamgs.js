@@ -1,25 +1,9 @@
-import fs from "fs";
-import path from "path";
-import { downloadMediaMessage, generateWAMessageFromContent, proto } from "@whiskeysockets/baileys";
+import { downloadMediaMessage, generateWAMessageFromContent } from "@whiskeysockets/baileys";
+import { cleanPhone, initializeSessionState, updateSessionDataList } from "../core/sessionManager.js";
 
-// In-Memory Fast Lookup Maps
 global.autoSendSessions = global.autoSendSessions || new Map();
-global.autoSendTimers = global.autoSendTimers || new Map();
-global.autoSendEngineRunning = global.autoSendEngineRunning || false;
+global.autoSendRunnerActive = global.autoSendRunnerActive || false;
 global.autoSendHookedSockets = global.autoSendHookedSockets || new WeakSet();
-
-const LOCAL_STORAGE_PATH = path.join(process.cwd(), "autosend_tasks.json");
-
-function fastExtractPhone(jid = "") {
-  const atIdx = jid.indexOf("@");
-  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
-  const colonIdx = base.indexOf(":");
-  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
-}
-
-function getBotPhone(sock) {
-  return fastExtractPhone(sock.user?.id || "");
-}
 
 function extractChannelInviteCode(input = "") {
   const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
@@ -41,12 +25,9 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
-// Deep Multi-Layer Text Extractor
 function extractFullPostText(quotedMsg) {
   if (!quotedMsg) return "";
-
   const unwrap = quotedMsg.ephemeralMessage?.message || quotedMsg.viewOnceMessage?.message || quotedMsg;
-
   return (
     unwrap.conversation ||
     unwrap.extendedTextMessage?.text ||
@@ -69,135 +50,76 @@ const INTERVAL_OPTIONS = Object.freeze({
   "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
 });
 
-function loadTasksFromFile() {
-  try {
-    if (fs.existsSync(LOCAL_STORAGE_PATH)) {
-      const raw = fs.readFileSync(LOCAL_STORAGE_PATH, "utf-8");
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((t) => {
-          if (t.id) global.autoSendTimers.set(t.id, t);
-        });
-      }
-    }
-  } catch (_) {}
-}
-
-function saveTasksToFile() {
-  try {
-    const list = Array.from(global.autoSendTimers.values());
-    fs.writeFileSync(LOCAL_STORAGE_PATH, JSON.stringify(list, null, 2));
-  } catch (_) {}
-}
-
-async function syncTaskToDB(task, isDelete = false) {
-  try {
-    const client = global.mongoClient || global.sharedMongoClient;
-    if (client) {
-      const db = client.db("whatsapp_multi_bots");
-      const col = db.collection("autosend_channel_posts");
-      if (isDelete) {
-        await col.deleteOne({ id: task.id });
-      } else {
-        await col.updateOne({ id: task.id }, { $set: task }, { upsert: true });
-      }
-    }
-  } catch (_) {}
-  saveTasksToFile();
-}
-
-(async function initAutoSendStorage() {
-  loadTasksFromFile();
-  try {
-    const client = global.mongoClient || global.sharedMongoClient;
-    if (client) {
-      const db = client.db("whatsapp_multi_bots");
-      const tasks = await db.collection("autosend_channel_posts").find({}).toArray();
-      tasks.forEach((t) => global.autoSendTimers.set(t.id, t));
-    }
-  } catch (_) {}
-})();
-
-// 🔥 100% NATIVE CHANNEL DISPATCH ENGINE
 async function dispatchToChannel(sock, task) {
   try {
-    // 1. Image සහිත Post එකක් නම්
     if (task.imageBufferBase64) {
       const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
       await sock.sendMessage(task.channelJid, {
         image: imgBuffer,
         caption: task.caption || ""
       });
-      console.log(`[AUTOSEND DISPATCHED IMAGE]: Delivered to ${task.channelJid}`);
       return true;
     }
 
-    // 2. දිගු Text / Formatted Post එකක් නම් (Plain text fallback සහිතව)
     if (task.caption) {
       try {
-        await sock.sendMessage(task.channelJid, {
-          text: task.caption
-        });
-      } catch (err) {
-        // High-level fallback: Relay message using raw binary proto
-        const rawContent = {
-          extendedTextMessage: {
-            text: task.caption
-          }
-        };
+        await sock.sendMessage(task.channelJid, { text: task.caption });
+      } catch (_) {
+        const rawContent = { extendedTextMessage: { text: task.caption } };
         const waMsg = generateWAMessageFromContent(task.channelJid, rawContent, {});
         await sock.relayMessage(task.channelJid, waMsg.message, { messageId: waMsg.key.id });
       }
-      console.log(`[AUTOSEND DISPATCHED TEXT]: Delivered to ${task.channelJid}`);
       return true;
     }
-
     return false;
   } catch (err) {
-    console.error(`[AUTOSEND ERROR]: Could not publish to ${task.channelJid} ->`, err.message);
+    console.error(`[AUTOSEND DISPATCH ERR]: ${err.message}`);
     return false;
   }
 }
 
-// Precision Loop
-export function startAutoSendEngine(defaultSock) {
-  if (global.autoSendEngineRunning) return;
-  global.autoSendEngineRunning = true;
+export function startAutoSendDaemon(sock) {
+  if (global.autoSendRunnerActive) return;
+  global.autoSendRunnerActive = true;
 
   setInterval(async () => {
-    if (global.autoSendTimers.size === 0) return;
+    if (global.sessionStatePool.size === 0) return;
 
     const now = Date.now();
 
-    for (const [id, task] of global.autoSendTimers.entries()) {
-      if (now - task.lastSentTime >= task.intervalMs) {
-        task.lastSentTime = now;
-        syncTaskToDB(task);
+    for (const [botPhone, sessionState] of global.sessionStatePool.entries()) {
+      const posts = sessionState.channelPosts || [];
+      let updated = false;
 
-        let targetSocket = null;
-        const activeSockets = global.activeSockets || new Map();
+      for (const task of posts) {
+        if (now - task.lastSentTime >= task.intervalMs) {
+          task.lastSentTime = now;
+          updated = true;
 
-        for (const [nodeId, s] of activeSockets.entries()) {
-          const sPhone = getBotPhone(s);
-          if (sPhone === task.senderBotPhone || String(nodeId).includes(task.senderBotPhone)) {
-            targetSocket = s;
-            break;
+          const activeSockets = global.activeSockets || new Map();
+          let targetSocket = null;
+
+          for (const [, s] of activeSockets.entries()) {
+            if (cleanPhone(s.user?.id || "") === botPhone) {
+              targetSocket = s;
+              break;
+            }
+          }
+          if (!targetSocket && cleanPhone(sock.user?.id || "") === botPhone) targetSocket = sock;
+
+          if (targetSocket) {
+            await dispatchToChannel(targetSocket, task);
           }
         }
+      }
 
-        if (!targetSocket) {
-          targetSocket = defaultSock;
-        }
-
-        if (targetSocket) {
-          await dispatchToChannel(targetSocket, task);
-        }
+      if (updated) {
+        await updateSessionDataList(botPhone, "channelPosts", posts);
       }
     }
   }, 10000);
 }
 
-// Interactive Choice Listener
 export function hookAutoSendReplyEngine(sock) {
   if (!sock || global.autoSendHookedSockets.has(sock)) return;
   global.autoSendHookedSockets.add(sock);
@@ -212,16 +134,10 @@ export function hookAutoSendReplyEngine(sock) {
     const quotedId = rawMsg?.extendedTextMessage?.contextInfo?.stanzaId;
 
     if (!quotedId || !global.autoSendSessions.has(quotedId)) return;
+    const sessionData = global.autoSendSessions.get(quotedId);
+    if (sessionData.from !== from) return;
 
-    const session = global.autoSendSessions.get(quotedId);
-    if (session.from !== from) return;
-
-    const choice = (
-      rawMsg.conversation ||
-      rawMsg.extendedTextMessage?.text ||
-      ""
-    ).trim();
-
+    const choice = (rawMsg.conversation || rawMsg.extendedTextMessage?.text || "").trim();
     if (!INTERVAL_OPTIONS[choice]) return;
 
     global.autoSendSessions.delete(quotedId);
@@ -229,47 +145,44 @@ export function hookAutoSendReplyEngine(sock) {
 
     sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
 
-    const taskId = `${session.senderBotPhone}_${session.channelJid}`;
+    const botPhone = sessionData.senderBotPhone;
+    const session = await initializeSessionState(botPhone);
+    const posts = session.channelPosts || [];
+
     const newTask = {
-      id: taskId,
-      senderBotPhone: session.senderBotPhone,
-      channelJid: session.channelJid,
-      caption: session.caption,
-      imageBufferBase64: session.imageBufferBase64,
+      id: `${botPhone}_${sessionData.channelJid}`,
+      channelJid: sessionData.channelJid,
+      caption: sessionData.caption,
+      imageBufferBase64: sessionData.imageBufferBase64,
       intervalMs: chosen.ms,
       intervalLabel: chosen.label,
       lastSentTime: Date.now()
     };
 
-    global.autoSendTimers.set(taskId, newTask);
-    await syncTaskToDB(newTask);
+    // Replace if exists, else push
+    const existingIdx = posts.findIndex((p) => p.channelJid === sessionData.channelJid);
+    if (existingIdx !== -1) posts[existingIdx] = newTask;
+    else posts.push(newTask);
 
-    // 🚀 Instant Post Try & Result Check
+    await updateSessionDataList(botPhone, "channelPosts", posts);
+
+    // Initial instant delivery
     const isSent = await dispatchToChannel(sock, newTask);
 
-    if (isSent) {
-      sock.sendMessage(from, { react: { text: "💖", key: m.key } }).catch(() => {});
-    } else {
-      sock.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
-    }
-
-    const resultNotice = isSent 
-      ? "🟢 *Success:* පළමු Post එක මේ දැන්ම Channel එකට සාර්ථකව Post කළා! ✨"
-      : "⚠️ *Notice:* පළමු Post එක යැවීමට නොහැකි විය. (කරුණාකර මෙම Bot අංකය අදාළ Channel එකේ Admin කෙනෙක් දැයි පරීක්ෂා කරන්න!)";
+    sock.sendMessage(from, { react: { text: isSent ? "💖" : "⚠️", key: m.key } }).catch(() => {});
 
     const successCard = 
 `🎀 ｡ﾟ•┈୨ *POST AUTO-SCHEDULER ACTIVATED* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
-  📢 *Target Channel:* \`${session.channelJid}\`
+  📢 *Target Channel:* \`${sessionData.channelJid}\`
   ⏳ *Interval:* ${chosen.label}
-  📝 *Content Captured:* \`${session.caption.length} Characters\`
-  🖼️ *Attachment:* ${session.imageBufferBase64 ? "🟢 Image + Text Post" : "📝 Text Post"}
+  🤖 *Session Node:* \`+${botPhone}\`
+  🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Pending (Check Channel Admin Rights)"}
+  🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Full Post" : "📝 Full Text Only"}
 
 ━━━━━━━━━━━━━━━━━━━━━
-${resultNotice}
-_Next posts will automatically continue every ${chosen.label}! (˶˃ ᵕ ˂˶)_
-
+_The schedule is strictly locked to this bot session and MongoDB! (˶˃ ᵕ ˂˶)_
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
     await sock.sendMessage(from, { text: successCard }, { quoted: m });
@@ -280,46 +193,35 @@ export default {
   name: "autosend",
   aliases: ["delautosend", "listautosend"],
   category: "owner",
-  description: "Schedule massive posts or images to channels recurringly",
+  description: "Schedule massive posts or images to channels recurringly per session",
 
   async execute({ sock, msg, from, args, body, prefix, config }) {
-    startAutoSendEngine(sock);
+    startAutoSendDaemon(sock);
     hookAutoSendReplyEngine(sock);
 
     const pref = prefix || config?.PREFIX || ".";
     const fullBody = body.trim();
     const cleanCmd = fullBody.slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
-    const currentBotPhone = getBotPhone(sock);
+    const botPhone = cleanPhone(sock.user?.id || "");
+    const session = await initializeSessionState(botPhone);
+    const posts = session.channelPosts || [];
 
     // 1. LIST COMMAND
     if (cleanCmd === "listautosend") {
-      const myTasks = Array.from(global.autoSendTimers.values()).filter(
-        (t) => t.senderBotPhone === currentBotPhone
-      );
-
-      if (myTasks.length === 0) {
-        return await sock.sendMessage(
-          from,
-          { text: "🌸 *No active scheduled posts found!* Reply to a post with `.autosend <link>` darling~" },
-          { quoted: msg }
-        );
+      if (posts.length === 0) {
+        return await sock.sendMessage(from, { text: "🌸 *No active scheduled channel posts found for this session!*" }, { quoted: msg });
       }
 
       let listText = 
 `🎀 ｡ﾟ•┈୨ *YOUR ACTIVE AUTO-POSTS* ୧┈•ﾟ｡ 🐾
-━━━━━━━━━━━━━━━━━━━━━\n\n`;
+━━━━━━━━━━━━━━━━━━━━━
+🤖 *Session Node:* \`+${botPhone}\`\n\n`;
 
-      let index = 1;
-      for (const t of myTasks) {
-        listText += `  🌸 *${index}. Channel:* \`${t.channelJid}\`\n`;
-        listText += `     ⏳ *Repeat:* ${t.intervalLabel}\n`;
-        listText += `     🖼️ *Media:* ${t.imageBufferBase64 ? "Image Attached" : "Text"}\n`;
-        listText += `     💬 *Preview:* "${(t.caption || "").slice(0, 40)}..."\n\n`;
-        index++;
-      }
+      posts.forEach((t, i) => {
+        listText += `  🌸 *${i + 1}. Channel:* \`${t.channelJid}\`\n     ⏳ *Repeat:* ${t.intervalLabel}\n     💬 *Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
+      });
 
       listText += `━━━━━━━━━━━━━━━━━━━━━\n_To cancel: \`${pref}delautosend <channel_link>\`_\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
       return await sock.sendMessage(from, { text: listText }, { quoted: msg });
     }
 
@@ -329,95 +231,51 @@ export default {
       const channelJid = await resolveChannelJid(sock, targetInput);
       const searchKey = channelJid || targetInput;
 
-      let removed = 0;
-      for (const [id, t] of global.autoSendTimers.entries()) {
-        if ((t.channelJid === searchKey || id.includes(searchKey)) && t.senderBotPhone === currentBotPhone) {
-          global.autoSendTimers.delete(id);
-          await syncTaskToDB({ id }, true);
-          removed++;
-        }
-      }
+      const filtered = posts.filter((p) => p.channelJid !== searchKey && !p.id.includes(searchKey));
+      const removed = posts.length - filtered.length;
 
       if (removed > 0) {
+        await updateSessionDataList(botPhone, "channelPosts", filtered);
         sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          { text: `🧹 *Removed:* Successfully cancelled auto-publish for this channel softly!` },
-          { quoted: msg }
-        );
+        return await sock.sendMessage(from, { text: `🧹 *Removed:* Cleared auto-publish task from session \`+${botPhone}\`!` }, { quoted: msg });
       } else {
-        return await sock.sendMessage(
-          from,
-          { text: "🌸 *No auto-post found for this channel!*" },
-          { quoted: msg }
-        );
+        return await sock.sendMessage(from, { text: "🌸 *No auto-post found for this channel under your session!*" }, { quoted: msg });
       }
     }
 
     // 3. MAIN COMMAND: .autosend <channel_link>
     const targetChannelLink = args[0]?.trim();
     if (!targetChannelLink) {
-      sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        {
-          text: 
-`🌸 ｡ﾟ•┈୨ *AUTOSEND POST GUIDE* ୧┈•ﾟ｡ 🐾
-
-  🍭 *How to use:*
-  1. Forward or send your post (Image with caption, or long text).
-  2. Reply to that message with:
-     \`${pref}autosend <channel_link>\`
-  3. Choose the recurring interval from the sweet menu!
-
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
-        },
-        { quoted: msg }
-      );
+      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
     }
 
     const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
     const quotedMsg = contextInfo?.quotedMessage;
 
     if (!quotedMsg) {
-      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: "🌸 *Oopsie!* Please reply to the post/image you want to auto-schedule honey~" },
-        { quoted: msg }
-      );
+      return await sock.sendMessage(from, { text: "🌸 *Please reply to the post/image you want to schedule!*" }, { quoted: msg });
     }
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
-
     const targetChannelJid = await resolveChannelJid(sock, targetChannelLink);
+
     if (!targetChannelJid) {
-      sock.sendMessage(from, { react: { text: "💔", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: "🌸 *Could not resolve channel!* Make sure the invite link is valid, sweetie~" },
-        { quoted: msg }
-      );
+      return await sock.sendMessage(from, { text: "🌸 *Could not resolve channel JID!* Make sure the invite link is valid." }, { quoted: msg });
     }
 
-    // Extract Text Content
     const captionText = extractFullPostText(quotedMsg);
-
     let imageBase64 = null;
-    const targetImgObj = quotedMsg.imageMessage || quotedMsg.ephemeralMessage?.message?.imageMessage;
-    if (targetImgObj) {
+    const targetImg = quotedMsg.imageMessage || quotedMsg.ephemeralMessage?.message?.imageMessage;
+
+    if (targetImg) {
       try {
         const imgBuffer = await downloadMediaMessage(
           { key: { id: contextInfo.stanzaId, remoteJid: from }, message: quotedMsg },
           "buffer",
           {}
         );
-        if (imgBuffer && imgBuffer.length > 0) {
-          imageBase64 = imgBuffer.toString("base64");
-        }
-      } catch (e) {
-        console.error("[IMAGE DOWNLOAD ERR]:", e.message);
-      }
+        if (imgBuffer?.length) imageBase64 = imgBuffer.toString("base64");
+      } catch (_) {}
     }
 
     const menuCard = 
@@ -425,41 +283,33 @@ export default {
 ━━━━━━━━━━━━━━━━━━━━━
 
   📢 *Target Channel:* \`${targetChannelJid}\`
-  📝 *Text Size:* \`${captionText.length} Characters Captured\`
-  🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Full Text Only 📝"}
-  💬 *Preview:* "${captionText.slice(0, 50)}..."
+  📝 *Content Captured:* \`${captionText.length} Characters\`
+  🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Text Only 📝"}
 
 ━━━━━━━━━━━━━━━━━━━━━
-🍬 *Reply with your preferred time interval:*
+🍬 *Reply with interval number:*
 
-  ⚡ *0*  ➔ Every 1 Minute (Live Fast Test) 🚀
+  ⚡ *0*  ➔ Every 1 Minute (Fast Test)
   ⏱️ *00* ➔ Every 2 Minutes (Short Test)
-  🌸 *1*  ➔ Every 30 Minutes (Half Hour)
-  ⏰ *2*  ➔ Every 1 Hour (60 Minutes)
+  🌸 *1*  ➔ Every 30 Minutes
+  ⏰ *2*  ➔ Every 1 Hour
   🕒 *3*  ➔ Every 2 Hours
   🌟 *4*  ➔ Every 4 Hours
-  🌙 *5*  ➔ Every 12 Hours (Twice Daily)
+  🌙 *5*  ➔ Every 12 Hours
 
 ━━━━━━━━━━━━━━━━━━━━━
-_Reply with 0, 00, 1, 2, 3, 4 or 5 to start publishing softly~ (˶˃ ᵕ ˂˶)_
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-    const sentMsg = await sock.sendMessage(from, { text: menuCard }, { quoted: msg });
-
-    if (sentMsg?.key?.id) {
-      global.autoSendSessions.set(sentMsg.key.id, {
+    const sent = await sock.sendMessage(from, { text: menuCard }, { quoted: msg });
+    if (sent?.key?.id) {
+      global.autoSendSessions.set(sent.key.id, {
         from,
-        senderBotPhone: currentBotPhone,
+        senderBotPhone: botPhone,
         channelJid: targetChannelJid,
         caption: captionText,
         imageBufferBase64: imageBase64
       });
-
-      setTimeout(() => {
-        global.autoSendSessions.delete(sentMsg.key.id);
-      }, 300000);
+      setTimeout(() => global.autoSendSessions.delete(sent.key.id), 300000);
     }
-
-    sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
   }
 };
