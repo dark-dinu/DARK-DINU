@@ -1,10 +1,16 @@
+import fs from "fs";
+import path from "path";
 import { 
-  downloadMediaMessage, 
   generateWAMessageFromContent,
   prepareWAMessageMedia,
-  proto
+  proto 
 } from "@whiskeysockets/baileys";
 import { cleanPhone, initializeSessionState, updateSessionDataList } from "../core/sessionManager.js";
+
+// ==========================================
+// ඔයාගේ Bot එකේ Logo එක තියෙන Path එක මෙතනට දෙන්න
+// ==========================================
+const LOCAL_LOGO_PATH = path.resolve("./logo.jpg"); // logo.jpg වෙන ෆෝල්ඩර් එකක නම් './assets/logo.jpg' වගේ දෙන්න
 
 global.autoSendSessions = global.autoSendSessions || new Map();
 global.autoSendRunnerActive = global.autoSendRunnerActive || false;
@@ -69,17 +75,22 @@ const INTERVAL_OPTIONS = Object.freeze({
   "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
 });
 
-// Newsletter Media Dispatch Engine
+// Local Logo එක අරන් Channel එකට Direct Upload කරන Engine එක
 async function dispatchToChannel(sock, task) {
   try {
     const isChannel = task.channelJid.endsWith("@newsletter");
+    let imgBuffer = null;
 
-    // 1. IMAGE + CAPTION DISPATCH
-    if (task.imageBufferBase64) {
-      const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
+    // 1. Local Logo file එක තියෙනවද බලලා buffer එක ගන්නවා
+    if (fs.existsSync(LOCAL_LOGO_PATH)) {
+      imgBuffer = fs.readFileSync(LOCAL_LOGO_PATH);
+    } else if (task.imageBufferBase64) {
+      imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
+    }
 
+    // 2. Image එකත් එක්ක Caption එක යැවීම
+    if (imgBuffer) {
       if (isChannel) {
-        // ක්‍රමය 1: Baileys prepareWAMessageMedia විශේෂ newsletter type එකක් ලෙස upload කිරීම
         try {
           const media = await prepareWAMessageMedia(
             { image: imgBuffer },
@@ -105,10 +116,10 @@ async function dispatchToChannel(sock, task) {
           });
           return true;
         } catch (e1) {
-          console.error("[AUTOSEND] Relay Image Failed:", e1.message);
+          console.error("[AUTOSEND LOCAL LOGO RELAY FAIL]:", e1.message);
         }
 
-        // ක්‍රමය 2: native newsletterSendMessage
+        // Fallback: newsletterSendMessage
         if (typeof sock.newsletterSendMessage === "function") {
           try {
             await sock.newsletterSendMessage(task.channelJid, {
@@ -117,27 +128,20 @@ async function dispatchToChannel(sock, task) {
             });
             return true;
           } catch (e2) {
-            console.error("[AUTOSEND] newsletterSendMessage Image Failed:", e2.message);
+            console.error("[AUTOSEND LOCAL LOGO NATIVE FAIL]:", e2.message);
           }
         }
-
-        // ක්‍රමය 3: Standard sendMessage Fallback
-        await sock.sendMessage(task.channelJid, {
-          image: imgBuffer,
-          caption: task.caption || ""
-        });
-        return true;
-      } else {
-        // Group හෝ DM නම්
-        await sock.sendMessage(task.channelJid, {
-          image: imgBuffer,
-          caption: task.caption || ""
-        });
-        return true;
       }
+
+      // Channel නොවන තැනකට හෝ Direct sendMessage fallback
+      await sock.sendMessage(task.channelJid, {
+        image: imgBuffer,
+        caption: task.caption || ""
+      });
+      return true;
     }
 
-    // 2. TEXT ONLY DISPATCH
+    // 3. Image නැතිනම් Text පමණක් යැවීම
     if (task.caption) {
       if (isChannel && typeof sock.newsletterSendMessage === "function") {
         try {
@@ -146,24 +150,19 @@ async function dispatchToChannel(sock, task) {
         } catch (_) {}
       }
 
-      try {
-        const waMsg = generateWAMessageFromContent(
-          task.channelJid,
-          {
-            extendedTextMessage: {
-              text: task.caption
-            }
-          },
-          {}
-        );
-        await sock.relayMessage(task.channelJid, waMsg.message, {
-          messageId: waMsg.key.id
-        });
-        return true;
-      } catch (_) {
-        await sock.sendMessage(task.channelJid, { text: task.caption });
-        return true;
-      }
+      const waMsg = generateWAMessageFromContent(
+        task.channelJid,
+        {
+          extendedTextMessage: {
+            text: task.caption
+          }
+        },
+        {}
+      );
+      await sock.relayMessage(task.channelJid, waMsg.message, {
+        messageId: waMsg.key.id
+      });
+      return true;
     }
 
     return false;
@@ -250,13 +249,12 @@ export function hookAutoSendReplyEngine(sock) {
       id: `${botPhone}_${sessionData.channelJid}`,
       channelJid: sessionData.channelJid,
       caption: sessionData.caption,
-      imageBufferBase64: sessionData.imageBufferBase64,
       intervalMs: chosen.ms,
       intervalLabel: chosen.label,
       lastSentTime: Date.now()
     };
 
-    // පළමු instant delivery එක push කිරීම
+    // පළමු delivery එක push කිරීම
     const isSent = await dispatchToChannel(sock, newTask);
 
     const existingIdx = posts.findIndex((p) => p.channelJid === sessionData.channelJid);
@@ -278,7 +276,7 @@ export function hookAutoSendReplyEngine(sock) {
   ⏳ *Interval:* ${chosen.label}
   🤖 *Session Node:* \`+${botPhone}\`
   🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Dispatch Failed! (Check Console Log)"}
-  🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Full Post" : "📝 Text Only"}
+  🖼️ *Attachment:* 🟢 Bot Logo + Text Post
 
 ━━━━━━━━━━━━━━━━━━━━━
 _The schedule is strictly locked to this bot session and MongoDB! (˶˃ ᵕ ˂˶)_
@@ -316,7 +314,7 @@ export default {
 🤖 *Session Node:* \`+${botPhone}\`\n\n`;
 
       posts.forEach((t, i) => {
-        listText += `  🌸 *${i + 1}. Channel:* \`${t.channelJid}\`\n     ⏳ *Repeat:* ${t.intervalLabel}\n     🖼️ *Image:* ${t.imageBufferBase64 ? "Yes" : "No"}\n     💬 *Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
+        listText += `  🌸 *${i + 1}. Channel:* \`${t.channelJid}\`\n     ⏳ *Repeat:* ${t.intervalLabel}\n     💬 *Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
       });
 
       listText += `━━━━━━━━━━━━━━━━━━━━━\n_To cancel: \`${pref}delautosend <channel_link>\`_\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
@@ -342,7 +340,7 @@ export default {
 
     const targetChannelLink = args[0]?.trim();
     if (!targetChannelLink) {
-      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post/image with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
+      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to text post with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
     }
 
     const unwrapRoot = unwrapMessage(msg.message);
@@ -350,7 +348,7 @@ export default {
     const quotedMsg = contextInfo?.quotedMessage;
 
     if (!quotedMsg) {
-      return await sock.sendMessage(from, { text: "🌸 *Please reply to the post/image you want to schedule!*" }, { quoted: msg });
+      return await sock.sendMessage(from, { text: "🌸 *Please reply to the text/post you want to schedule!*" }, { quoted: msg });
     }
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
@@ -360,32 +358,9 @@ export default {
       return await sock.sendMessage(from, { text: "🌸 *Could not resolve channel JID!* Make sure the invite link is valid." }, { quoted: msg });
     }
 
-    const unwrappedQuoted = unwrapMessage(quotedMsg);
     const captionText = extractFullPostText(quotedMsg);
-    let imageBase64 = null;
 
-    // Image download එක සහ Base64 conversion
-    if (unwrappedQuoted?.imageMessage) {
-      try {
-        const fakeMsgObj = {
-          key: {
-            remoteJid: from,
-            id: contextInfo.stanzaId,
-            participant: contextInfo.participant
-          },
-          message: {
-            imageMessage: unwrappedQuoted.imageMessage
-          }
-        };
-
-        const imgBuffer = await downloadMediaMessage(fakeMsgObj, "buffer", {});
-        if (imgBuffer && imgBuffer.length > 0) {
-          imageBase64 = imgBuffer.toString("base64");
-        }
-      } catch (e) {
-        console.error("[AUTOSEND MEDIA DOWNLOAD ERR]:", e.message);
-      }
-    }
+    const hasLogo = fs.existsSync(LOCAL_LOGO_PATH);
 
     const menuCard = 
 `🎀 ｡ﾟ•┈୨ *CHOOSE AUTO-POST INTERVAL* ୧┈•ﾟ｡ 🐾
@@ -393,7 +368,7 @@ export default {
 
   📢 *Target Channel:* \`${targetChannelJid}\`
   📝 *Content Captured:* \`${captionText.length} Characters\`
-  🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Text Only 📝"}
+  🖼️ *Attachment:* ${hasLogo ? "Local Bot Logo + Text Caption ✨" : "Text Only (Logo not found) 📝"}
 
 ━━━━━━━━━━━━━━━━━━━━━
 🍬 *Reply to this message with interval number:*
@@ -415,8 +390,7 @@ export default {
         from,
         senderBotPhone: botPhone,
         channelJid: targetChannelJid,
-        caption: captionText,
-        imageBufferBase64: imageBase64
+        caption: captionText
       });
       setTimeout(() => global.autoSendSessions.delete(sent.key.id), 300000);
     }
