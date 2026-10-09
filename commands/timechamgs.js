@@ -1,7 +1,8 @@
 import { 
   downloadMediaMessage, 
   generateWAMessageFromContent,
-  prepareWAMessageMedia 
+  prepareWAMessageMedia,
+  proto
 } from "@whiskeysockets/baileys";
 import { cleanPhone, initializeSessionState, updateSessionDataList } from "../core/sessionManager.js";
 
@@ -68,63 +69,75 @@ const INTERVAL_OPTIONS = Object.freeze({
   "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
 });
 
-// Channel Dispatch Engine (Fallback Mechanism සහිතව)
+// Newsletter Media Dispatch Engine
 async function dispatchToChannel(sock, task) {
   try {
     const isChannel = task.channelJid.endsWith("@newsletter");
 
-    // 1. Channel එකට Image + Caption යැවීම
+    // 1. IMAGE + CAPTION DISPATCH
     if (task.imageBufferBase64) {
       const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
 
-      // ක්‍රමය A: newsletterSendMessage Native Method එක
-      if (isChannel && typeof sock.newsletterSendMessage === "function") {
+      if (isChannel) {
+        // ක්‍රමය 1: Baileys prepareWAMessageMedia විශේෂ newsletter type එකක් ලෙස upload කිරීම
         try {
-          await sock.newsletterSendMessage(task.channelJid, {
-            image: imgBuffer,
-            caption: task.caption || ""
+          const media = await prepareWAMessageMedia(
+            { image: imgBuffer },
+            { 
+              upload: sock.waUploadToServer,
+              newsletter: true 
+            }
+          );
+
+          const waMsg = generateWAMessageFromContent(
+            task.channelJid,
+            proto.Message.fromObject({
+              imageMessage: {
+                ...media.imageMessage,
+                caption: task.caption || ""
+              }
+            }),
+            {}
+          );
+
+          await sock.relayMessage(task.channelJid, waMsg.message, {
+            messageId: waMsg.key.id
           });
           return true;
-        } catch (e) {
-          console.error("[AUTOSEND] newsletterSendMessage Image failed, trying relay:", e.message);
+        } catch (e1) {
+          console.error("[AUTOSEND] Relay Image Failed:", e1.message);
         }
-      }
 
-      // ක්‍රමය B: Media Upload කර RelayMessage හරහා යැවීම
-      try {
-        const media = await prepareWAMessageMedia(
-          { image: imgBuffer },
-          { upload: sock.waUploadToServer }
-        );
-
-        const waMsg = generateWAMessageFromContent(
-          task.channelJid,
-          {
-            imageMessage: {
-              ...media.imageMessage,
+        // ක්‍රමය 2: native newsletterSendMessage
+        if (typeof sock.newsletterSendMessage === "function") {
+          try {
+            await sock.newsletterSendMessage(task.channelJid, {
+              image: imgBuffer,
               caption: task.caption || ""
-            }
-          },
-          {}
-        );
+            });
+            return true;
+          } catch (e2) {
+            console.error("[AUTOSEND] newsletterSendMessage Image Failed:", e2.message);
+          }
+        }
 
-        await sock.relayMessage(task.channelJid, waMsg.message, {
-          messageId: waMsg.key.id
+        // ක්‍රමය 3: Standard sendMessage Fallback
+        await sock.sendMessage(task.channelJid, {
+          image: imgBuffer,
+          caption: task.caption || ""
         });
         return true;
-      } catch (e) {
-        console.error("[AUTOSEND] Relay Image failed, trying standard send:", e.message);
+      } else {
+        // Group හෝ DM නම්
+        await sock.sendMessage(task.channelJid, {
+          image: imgBuffer,
+          caption: task.caption || ""
+        });
+        return true;
       }
-
-      // ක්‍රමය C: Direct sendMessage
-      await sock.sendMessage(task.channelJid, {
-        image: imgBuffer,
-        caption: task.caption || ""
-      });
-      return true;
     }
 
-    // 2. Text/Caption පමණක් Channel එකට යැවීම
+    // 2. TEXT ONLY DISPATCH
     if (task.caption) {
       if (isChannel && typeof sock.newsletterSendMessage === "function") {
         try {
@@ -160,7 +173,6 @@ async function dispatchToChannel(sock, task) {
   }
 }
 
-// Background Task Runner
 export function startAutoSendDaemon(sock) {
   if (global.autoSendRunnerActive) return;
   global.autoSendRunnerActive = true;
@@ -175,7 +187,6 @@ export function startAutoSendDaemon(sock) {
       let updated = false;
 
       for (const task of posts) {
-        // Interval එක පිරුණු පසු post කිරීම
         if (now - (task.lastSentTime || 0) >= task.intervalMs) {
           task.lastSentTime = now;
           updated = true;
@@ -206,7 +217,6 @@ export function startAutoSendDaemon(sock) {
   }, 10000);
 }
 
-// Time Reply Engine (පළමු වර සහ කාල සීමාව Register කරන තැන)
 export function hookAutoSendReplyEngine(sock) {
   if (!sock || global.autoSendHookedSockets.has(sock)) return;
   global.autoSendHookedSockets.add(sock);
@@ -246,10 +256,9 @@ export function hookAutoSendReplyEngine(sock) {
       lastSentTime: Date.now()
     };
 
-    // 1. මුලින්ම පළමු පෝස්ට් එක channel එකට dispatch කර බලයි
+    // පළමු instant delivery එක push කිරීම
     const isSent = await dispatchToChannel(sock, newTask);
 
-    // 2. Schedule එක array එකට දමා Database එකට Update කරයි
     const existingIdx = posts.findIndex((p) => p.channelJid === sessionData.channelJid);
     if (existingIdx !== -1) {
       posts[existingIdx] = newTask;
@@ -268,8 +277,8 @@ export function hookAutoSendReplyEngine(sock) {
   📢 *Target Channel:* \`${sessionData.channelJid}\`
   ⏳ *Interval:* ${chosen.label}
   🤖 *Session Node:* \`+${botPhone}\`
-  🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Dispatch Failed! (Check Terminal Console)"}
-  🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Text Caption" : "📝 Text Only"}
+  🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Dispatch Failed! (Check Console Log)"}
+  🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Full Post" : "📝 Text Only"}
 
 ━━━━━━━━━━━━━━━━━━━━━
 _The schedule is strictly locked to this bot session and MongoDB! (˶˃ ᵕ ˂˶)_
@@ -296,7 +305,6 @@ export default {
     const session = await initializeSessionState(botPhone);
     const posts = session.channelPosts || [];
 
-    // 1. LIST COMMAND
     if (cleanCmd === "listautosend") {
       if (posts.length === 0) {
         return await sock.sendMessage(from, { text: "🌸 *No active scheduled channel posts found for this session!*" }, { quoted: msg });
@@ -315,7 +323,6 @@ export default {
       return await sock.sendMessage(from, { text: listText }, { quoted: msg });
     }
 
-    // 2. DELETE COMMAND
     if (cleanCmd === "delautosend") {
       const targetInput = args.join(" ").trim();
       const channelJid = await resolveChannelJid(sock, targetInput);
@@ -333,7 +340,6 @@ export default {
       }
     }
 
-    // 3. MAIN COMMAND: .autosend <channel_link>
     const targetChannelLink = args[0]?.trim();
     if (!targetChannelLink) {
       return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post/image with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
@@ -358,6 +364,7 @@ export default {
     const captionText = extractFullPostText(quotedMsg);
     let imageBase64 = null;
 
+    // Image download එක සහ Base64 conversion
     if (unwrappedQuoted?.imageMessage) {
       try {
         const fakeMsgObj = {
