@@ -14,6 +14,8 @@ import axios from "axios";
 import { fileURLToPath, pathToFileURL } from "url";
 import { useMongoDBAuthState } from "./auth.js";
 import CONFIG from "./config.js";
+import { cleanPhone, initializeSessionState } from "./core/sessionManager.js";
+import { attachSettingsEngine } from "./commands/setting.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -479,6 +481,14 @@ async function startBotSocket(sessionId, authCollection) {
       if (connection === "open") {
         console.log(`🌸 Bot connected successfully: ${sessionId}`);
         activeSockets.set(sessionId, sock);
+
+        // Instant DB Settings Sync & Hooking Protection Engine
+        const currentPhone = cleanPhone(sock.user?.id || "");
+        if (currentPhone) {
+          await initializeSessionState(currentPhone);
+          attachSettingsEngine(sock);
+          console.log(`🔒 Settings synced from MongoDB for: +${currentPhone}`);
+        }
       }
       if (connection === "close") {
         activeSockets.delete(sessionId);
@@ -609,6 +619,11 @@ app.listen(PORT, "0.0.0.0", async () => {
     mongoClient = new MongoClient(CONFIG.MONGODB_URI);
     await mongoClient.connect();
     db = mongoClient.db(CONFIG.DB_NAME);
+
+    // Global Database Access for sessionManager.js
+    global.mongoClient = mongoClient;
+    global.mongoDbInstance = db;
+
     console.log("🍃 MongoDB database connected successfully!");
 
     const collections = await db.listCollections().toArray();
