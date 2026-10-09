@@ -1,4 +1,7 @@
+import fs from "fs";
+import path from "path";
 import { delay } from "@whiskeysockets/baileys";
+import { cleanPhone } from "../core/sessionManager.js";
 
 // Static Pre-allocated Emoji Lookup Pool (O(1) Memory Layout)
 const CHANNEL_EMOJI_POOL = Object.freeze([
@@ -9,6 +12,78 @@ const EMOJI_MASK = CHANNEL_EMOJI_POOL.length;
 // In-Memory Cluster Stores
 global.activeChannelReacts = global.activeChannelReacts || new Set();
 global.channelHookedSockets = global.channelHookedSockets || new WeakSet();
+global.channelStoreInitialized = global.channelStoreInitialized || false;
+
+const BACKUP_FILE = path.join(process.cwd(), "session_backups", "channel_reacts.json");
+
+function getDbInstance() {
+  const client = global.mongoClient || global.sharedMongoClient;
+  return client ? client.db(process.env.DB_NAME || "whatsapp_multi_bots") : null;
+}
+
+// 1. Dual-Storage Load (MongoDB -> Local Fallback)
+async function initChannelStorage() {
+  if (global.channelStoreInitialized) return;
+  global.channelStoreInitialized = true;
+
+  try {
+    const db = getDbInstance();
+    if (db) {
+      const col = db.collection("channel_auto_reacts");
+      const savedDocs = await col.find({}).toArray();
+      for (const doc of savedDocs) {
+        if (doc._id) global.activeChannelReacts.add(doc._id);
+      }
+    }
+  } catch (err) {
+    console.error("[CHANNEL DB LOAD ERR]:", err.message);
+  }
+
+  // Local JSON Backup Fallback
+  try {
+    if (fs.existsSync(BACKUP_FILE)) {
+      const data = JSON.parse(fs.readFileSync(BACKUP_FILE, "utf-8"));
+      if (Array.isArray(data)) {
+        data.forEach((jid) => global.activeChannelReacts.add(jid));
+      }
+    }
+  } catch (_) {}
+}
+
+// 2. Dual-Storage Sync (Write to DB & Local File)
+async function syncChannelTarget(channelJid, isDelete = false) {
+  try {
+    const dir = path.dirname(BACKUP_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    
+    if (isDelete) {
+      global.activeChannelReacts.delete(channelJid);
+    } else {
+      global.activeChannelReacts.add(channelJid);
+    }
+
+    fs.writeFileSync(BACKUP_FILE, JSON.stringify(Array.from(global.activeChannelReacts), null, 2));
+
+    const db = getDbInstance();
+    if (db) {
+      const col = db.collection("channel_auto_reacts");
+      if (isDelete) {
+        await col.deleteOne({ _id: channelJid });
+      } else {
+        await col.updateOne(
+          { _id: channelJid },
+          { $set: { jid: channelJid, updatedAt: new Date() } },
+          { upsert: true }
+        );
+      }
+    }
+  } catch (err) {
+    console.error("[CHANNEL DB SYNC ERR]:", err.message);
+  }
+}
+
+// Run storage init immediately
+initChannelStorage();
 
 // Fast Invite Code Extractor from URL
 function extractInviteCode(input = "") {
@@ -96,9 +171,10 @@ export default {
   name: "channel",
   aliases: ["cfollow", "ch", "newsletter"],
   category: "owner",
-  description: "Official channel auto-reaction & follower suite",
+  description: "Official channel auto-reaction & follower suite with persistent MongoDB memory",
 
   async execute({ sock, msg, from, args, body, prefix, config }) {
+    await initChannelStorage();
     hookChannelListener(sock);
     if (global.activeSockets) {
       for (const [, s] of global.activeSockets.entries()) {
@@ -188,11 +264,11 @@ export default {
         );
       }
 
-      global.activeChannelReacts.delete(targetJid);
+      await syncChannelTarget(targetJid, true);
       sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: `🧹 *Removed:* Channel auto-reactions stopped for \`${targetJid}\` softly.` },
+        { text: `🧹 *Removed:* Channel auto-reactions permanently stopped for \`${targetJid}\` softly.` },
         { quoted: msg }
       );
     }
@@ -224,7 +300,7 @@ export default {
         );
       }
 
-      global.activeChannelReacts.add(targetJid);
+      await syncChannelTarget(targetJid, false);
       sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
       const statusCard = 
@@ -232,12 +308,12 @@ export default {
 ━━━━━━━━━━━━━━━━━━━━━━
 
   📢 *Target Channel:* \`${targetJid}\`
-  ⚡ *Status:* Active & Listening ✨
+  ⚡ *Status:* Active & Permanently Stored 🔒
   🤖 *Connected Nodes:* \`${socketsList.length} Sockets\`
   🍭 *Reaction Mode:* Random Soft Pastel Emojis
 
 ━━━━━━━━━━━━━━━━━━━━━━
-_Every new post in this channel will get instant reactions across all online bots! (˶˃ ᵕ ˂˶)_
+_Every new post in this channel will get instant reactions across all online bots! Persists across bot reboots! (˶˃ ᵕ ˂˶)_
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
@@ -254,7 +330,7 @@ _Every new post in this channel will get instant reactions across all online bot
 
   🍭 *How to use:*
   • *${pref}cfollow <channel_link>* — Follow channel across all bots ✨
-  • *${pref}channel react <channel_link>* — Activate auto-reactions 💖
+  • *${pref}channel react <channel_link>* — Activate permanent auto-reactions 💖
   • *${pref}del channel react <channel_link>* — Stop auto-reactions 🛑
 
   📊 *Active Reaction Channels:* ${global.activeChannelReacts.size}
