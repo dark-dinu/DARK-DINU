@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import axios from "axios";
+import { generateWAMessageContent, generateWAMessageFromContent } from "@whiskeysockets/baileys";
 
 const API_KEY = "supun-tvo5olfxylo98b8l6b9lq174";
 const NEWS_SOURCES = Object.freeze([
@@ -97,11 +98,17 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
-// Robust Image Downloader to Buffer (Prevents Baileys URL Dropping)
+// Download image buffer safely with browser headers
 async function fetchImageBuffer(url) {
   if (!url) return null;
   try {
-    const res = await axios.get(url, { responseType: "arraybuffer", timeout: 8000 });
+    const res = await axios.get(url, {
+      responseType: "arraybuffer",
+      timeout: 10000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
+    });
     return Buffer.from(res.data);
   } catch (_) {
     return null;
@@ -126,7 +133,7 @@ async function fetchSourceNews(endpointUrl) {
   }
 }
 
-// Safe Dispatch to Newsletter / Chat
+// Low-Level Safe Dispatcher (Works on Channels, Groups, & Chats)
 async function dispatchNewsPost(sock, targetJid, item, tag) {
   const newsCard = 
 `🚨 ｡ﾟ•┈୨ *BREAKING UPDATE* ୧┈•ﾟ｡ 📰
@@ -145,24 +152,55 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
   try {
+    const isNewsletter = targetJid.endsWith("@newsletter");
     const imgBuffer = await fetchImageBuffer(item.image);
+
+    if (isNewsletter) {
+      // 1. Try Baileys Newsletter Relay Stream
+      try {
+        if (imgBuffer && typeof sock.waUploadToServer === "function") {
+          const mediaContent = await generateWAMessageContent(
+            { image: imgBuffer, caption: newsCard },
+            { upload: sock.waUploadToServer }
+          );
+          const fullMsg = generateWAMessageFromContent(targetJid, mediaContent, {});
+          await sock.relayMessage(targetJid, fullMsg.message, { messageId: fullMsg.key.id });
+          return true;
+        }
+      } catch (err) {
+        console.warn(`[RELAY ATTEMPT FAILED]: ${err.message}, falling back to direct send...`);
+      }
+
+      // 2. Fallback to sock.sendMessage
+      if (imgBuffer) {
+        await sock.sendMessage(targetJid, { image: imgBuffer, caption: newsCard });
+      } else {
+        await sock.sendMessage(targetJid, { text: newsCard });
+      }
+      return true;
+    }
+
+    // Standard Chat / Group Sending
     if (imgBuffer) {
-      await sock.sendMessage(targetJid, {
-        image: imgBuffer,
-        caption: newsCard
-      });
+      await sock.sendMessage(targetJid, { image: imgBuffer, caption: newsCard });
     } else {
       await sock.sendMessage(targetJid, { text: newsCard });
     }
-    console.log(`[NEWS AUTO-DISPATCHED]: Successfully published to ${targetJid}`);
     return true;
+
   } catch (err) {
-    console.error(`[NEWS DISPATCH FAILED to ${targetJid}]:`, err.message);
-    return false;
+    console.error(`[NEWS DISPATCH FAILED -> ${targetJid}]:${err.message}`);
+    // Final emergency fallback: plain text send
+    try {
+      await sock.sendMessage(targetJid, { text: newsCard });
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 }
 
-// 4. Background Auto News Engine (Checks every 40 Seconds)
+// Background Auto-News Daemon (Checks every 40s)
 export function startContinuousNewsDaemon(sock) {
   if (global.autoNewsLoopActive) return;
   global.autoNewsLoopActive = true;
@@ -188,7 +226,7 @@ export default {
   name: "news",
   aliases: ["lankadeepa", "newslk", "theverge", "techcrunch", "bbc", "nasa", "autonews"],
   category: "news",
-  description: "Live news feed with instant auto-publisher for WhatsApp Channels",
+  description: "Live news feed with guaranteed channel & chat auto-publishing",
 
   async execute({ sock, msg, from, args, body, prefix, config: appConfig }) {
     startContinuousNewsDaemon(sock);
@@ -199,7 +237,7 @@ export default {
     const opt = args[0]?.toLowerCase()?.trim();
 
     // -------------------------------------------------------------
-    // Auto News Subscriber Controller (.news auto on <link/jid>)
+    // Auto-Publisher Controls (.news auto on <link/jid>)
     // -------------------------------------------------------------
     if (opt === "auto" || cmd === "autonews") {
       const state = (cmd === "autonews" ? args[0] : args[1])?.toLowerCase()?.trim();
@@ -214,26 +252,26 @@ export default {
         await syncSubscriber(targetJid, false);
         sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-        // ⚡ INSTANT DISPATCH: Check and dispatch the latest available news right now
+        // Instant dispatch of latest Lankadeepa news as proof
         const testItem = await fetchSourceNews(NEWS_SOURCES[0].url);
-        let dispatched = false;
+        let sent = false;
         if (testItem) {
-          dispatched = await dispatchNewsPost(sock, targetJid, testItem, NEWS_SOURCES[0].tag);
+          sent = await dispatchNewsPost(sock, targetJid, testItem, NEWS_SOURCES[0].tag);
           recordPublishedTitle(testItem.title);
         }
 
-        sock.sendMessage(from, { react: { text: "🔔", key: msg.key } }).catch(() => {});
+        sock.sendMessage(from, { react: { text: sent ? "💖" : "⚠️", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
           {
             text: 
 `✨ *Auto-News Activated Successfully!* 🚀
 ━━━━━━━━━━━━━━━━━━━━━
-📢 *Target:* \`${targetJid}\`
-📰 *Initial Post:* ${dispatched ? "🟢 Delivered right now to channel!" : "⚠️ Pending (Bot must be Channel Admin)"}
-⚡ *Monitoring:* Lankadeepa, NewsLK, BBC, The Verge, TechCrunch, NASA
+📢 *Destination:* \`${targetJid}\`
+🚀 *Instant Delivery:* ${sent ? "🟢 Sent successfully right now!" : "⚠️ Failed (Make sure bot is an Admin of this channel!)"}
+📡 *Active Feeds:* Lankadeepa, NewsLK, BBC, The Verge, TechCrunch, NASA
 
-_New updates will auto-publish every 40s!_
+_New breaking posts will dispatch automatically within 40 seconds._
 💖 *DARK-DINU MD*`
           },
           { quoted: msg }
@@ -245,18 +283,18 @@ _New updates will auto-publish every 40s!_
         sock.sendMessage(from, { react: { text: "🔕", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: `🧹 *Auto-News Disabled!* Removed alerts for: \`${targetJid}\`` },
+          { text: `🧹 *Removed:* Channel alerts stopped for \`${targetJid}\`` },
           { quoted: msg }
         );
       }
 
       if (state === "list") {
-        let subsText = `🎀 ｡ﾟ•┈୨ *ACTIVE NEWS SUBSCRIBERS* ୧┈•ﾟ｡ 📰\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        let listText = `🎀 ｡ﾟ•┈୨ *ACTIVE NEWS TARGETS* ୧┈•ﾟ｡ 📰\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
         global.autoNewsSubs.forEach((id, idx) => {
-          subsText += `  • ${idx + 1}. \`${id}\`\n`;
+          listText += `  • ${idx + 1}. \`${id}\`\n`;
         });
-        subsText += `\n━━━━━━━━━━━━━━━━━━━━━\n💖 *DARK-DINU MD*`;
-        return await sock.sendMessage(from, { text: subsText }, { quoted: msg });
+        listText += `\n━━━━━━━━━━━━━━━━━━━━━\n💖 *DARK-DINU MD*`;
+        return await sock.sendMessage(from, { text: listText }, { quoted: msg });
       }
 
       return await sock.sendMessage(
@@ -266,17 +304,18 @@ _New updates will auto-publish every 40s!_
 `🌸 ｡ﾟ•┈୨ *AUTO-NEWS GUIDE* ୧┈•ﾟ｡ 🐾
 
   • *${pref}news auto on <channel_link>* ➔ Channel එකට On කරන්න
-  • *${pref}news auto off <channel_link>* ➔ Remove කරන්න
-  • *${pref}news auto list* ➔ Active Channels බලාගන්න
+  • *${pref}news auto on <channel_jid>*  ➔ Direct JID එකට On කරන්න
+  • *${pref}news auto off <channel_link>* ➔ Off කරන්න
+  • *${pref}news auto list* ➔ Active Targets බලන්න
 
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+💖 *DARK-DINU MD*`
         },
         { quoted: msg }
       );
     }
 
     // -------------------------------------------------------------
-    // Manual Command Handling
+    // Manual Trigger Command
     // -------------------------------------------------------------
     const directMap = {
       "lankadeepa": NEWS_SOURCES[0],
@@ -287,14 +326,13 @@ _New updates will auto-publish every 40s!_
       "nasa": NEWS_SOURCES[5]
     };
 
-    let selectedSource = directMap[cmd] || (opt && directMap[opt]);
-    if (!selectedSource) selectedSource = NEWS_SOURCES[0];
+    let selectedSource = directMap[cmd] || (opt && directMap[opt]) || NEWS_SOURCES[0];
 
     sock.sendMessage(from, { react: { text: "📰", key: msg.key } }).catch(() => {});
     const item = await fetchSourceNews(selectedSource.url);
 
     if (!item) {
-      return await sock.sendMessage(from, { text: "💔 *Could not fetch news right now! Please try again.*" }, { quoted: msg });
+      return await sock.sendMessage(from, { text: "💔 *Could not fetch news right now!*" }, { quoted: msg });
     }
 
     const manualCard = 
@@ -310,12 +348,6 @@ ${item.desc ? item.desc : ""}
 ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
 
 ━━━━━━━━━━━━━━━━━━━━━
-🍬 *AVAILABLE SOURCES:*
-  • *${pref}news lankadeepa* | *${pref}news newslk*
-  • *${pref}news theverge*   | *${pref}news techcrunch*
-  • *${pref}news bbc*        | *${pref}news nasa*
-
-📢 *Channel Auto-Push:* \`${pref}news auto on <channel_link>\`
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
     const imgBuffer = await fetchImageBuffer(item.image);
