@@ -1,5 +1,3 @@
-import { cmd } from "../command.js";
-
 // Truth Questions (ඇත්ත ප්‍රශ්න)
 const truthQuestions = [
   "ඔයාගේ ජීවිතේ කාටවත් නොකියපු ලොකුම රහස මොකක්ද?",
@@ -32,55 +30,68 @@ const dareActions = [
 
 const getRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-// Truth Command
-cmd({
-  pattern: "truth",
-  alias: ["aththa"],
-  desc: "Ask a random truth question.",
+export default {
+  name: "truth",
+  aliases: ["dare", "verite", "action", "td"],
   category: "fun",
-  react: "🕵️‍♂️"
-}, async (sock, msg, m, { reply }) => {
-  try {
-    const rawMsg = msg.message?.extendedTextMessage || msg.message?.conversation;
-    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+  description: "Truth or Dare fun game",
+
+  async execute({ sock, msg, from, args, body, prefix, config }) {
+    const pref = prefix || config?.PREFIX || ".";
+    const full = (body || "").trim();
+    const cmd = full.slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
+
+    // Mention කළ අය ලබා ගැනීම
+    const rawMsg = msg.message?.extendedTextMessage || msg.message;
+    const mentioned = rawMsg?.contextInfo?.mentionedJid || [];
+    const targetUser = mentioned.length > 0 ? mentioned[0] : null;
+
+    // Dare විධානය ක්‍රියාත්මක වීම (.dare හෝ .action)
+    if (cmd === "dare" || cmd === "action") {
+      sock.sendMessage(from, { react: { text: "🔥", key: msg.key } }).catch(() => {});
+      const challenge = getRandom(dareActions);
+
+      if (targetUser) {
+        return await sock.sendMessage(
+          from,
+          {
+            text: `🔥 *DARE CHALLENGE FOR @${targetUser.split("@")[0]} :*\n\n👉 ${challenge}\n\n_අභියෝගය සම්පූර්ණ කර චැට් එකට සාක්ෂියක් එවන්න!_ 😉`,
+            mentions: [targetUser]
+          },
+          { quoted: msg }
+        );
+      }
+
+      return await sock.sendMessage(
+        from,
+        {
+          text: `🔥 *DARE CHALLENGE :*\n\n👉 ${challenge}\n\n_අභියෝගය සම්පූර්ණ කර චැට් එකට සාක්ෂියක් එවන්න!_ 😉`
+        },
+        { quoted: msg }
+      );
+    }
+
+    // Truth විධානය ක්‍රියාත්මක වීම (.truth හෝ .verite)
+    sock.sendMessage(from, { react: { text: "🕵️‍♂️", key: msg.key } }).catch(() => {});
     const question = getRandom(truthQuestions);
 
-    if (mentioned.length > 0) {
-      const target = mentioned[0];
-      return await sock.sendMessage(m.from, {
-        text: `🎭 *TRUTH QUESTION FOR @${target.split("@")[0]}:*\n\n👉 ${question}`,
-        mentions: [target]
-      }, { quoted: msg });
+    if (targetUser) {
+      return await sock.sendMessage(
+        from,
+        {
+          text: `🎭 *TRUTH QUESTION FOR @${targetUser.split("@")[0]} :*\n\n👉 ${question}\n\n_ඇත්තම විතරක් කියන්න ඕනෙ හොඳද!_ 🤫`,
+          mentions: [targetUser]
+        },
+        { quoted: msg }
+      );
     }
 
-    await reply(`🎭 *TRUTH QUESTION:*\n\n👉 ${question}`);
-  } catch (err) {
-    reply("⚠️ දෝෂයක් සිදු විය.");
+    return await sock.sendMessage(
+      from,
+      {
+        text: `🎭 *TRUTH QUESTION :*\n\n👉 ${question}\n\n_ඇත්තම විතරක් කියන්න ඕනෙ හොඳද!_ 🤫`
+      },
+      { quoted: msg }
+    );
   }
-});
-
-// Dare Command
-cmd({
-  pattern: "dare",
-  alias: ["abhiyoga"],
-  desc: "Give a random dare challenge.",
-  category: "fun",
-  react: "🔥"
-}, async (sock, msg, m, { reply }) => {
-  try {
-    const mentioned = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
-    const challenge = getRandom(dareActions);
-
-    if (mentioned.length > 0) {
-      const target = mentioned[0];
-      return await sock.sendMessage(m.from, {
-        text: `🔥 *DARE CHALLENGE FOR @${target.split("@")[0]}:*\n\n👉 ${challenge}`,
-        mentions: [target]
-      }, { quoted: msg });
-    }
-
-    await reply(`🔥 *DARE CHALLENGE:*\n\n👉 ${challenge}`);
-  } catch (err) {
-    reply("⚠️ දෝෂයක් සිදු විය.");
-  }
-});
+};
