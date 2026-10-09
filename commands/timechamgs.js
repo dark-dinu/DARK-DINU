@@ -25,9 +25,21 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
+function unwrapMessage(msg) {
+  if (!msg) return null;
+  return (
+    msg.ephemeralMessage?.message ||
+    msg.viewOnceMessage?.message ||
+    msg.viewOnceMessageV2?.message ||
+    msg.documentWithCaptionMessage?.message ||
+    msg
+  );
+}
+
 function extractFullPostText(quotedMsg) {
-  if (!quotedMsg) return "";
-  const unwrap = quotedMsg.ephemeralMessage?.message || quotedMsg.viewOnceMessage?.message || quotedMsg;
+  const unwrap = unwrapMessage(quotedMsg);
+  if (!unwrap) return "";
+
   return (
     unwrap.conversation ||
     unwrap.extendedTextMessage?.text ||
@@ -45,7 +57,7 @@ const INTERVAL_OPTIONS = Object.freeze({
   "00": { label: "Every 2 Minutes ⏱️ (Short Test)", ms: 2 * 60 * 1000 },
   "1": { label: "Every 30 Minutes ⏳ (Half Hour)", ms: 30 * 60 * 1000 },
   "2": { label: "Every 1 Hour ⏰", ms: 60 * 60 * 1000 },
-  "3": { label: "Every 2 Hours 🕒", ms: 2 * 60 * 60 * 1000 },
+  "3": { label: "Every 2 Hours 🕒", ms: 2 * 60 * 1000 * 60 },
   "4": { label: "Every 4 Hours 🌸", ms: 4 * 60 * 60 * 1000 },
   "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
 });
@@ -83,7 +95,7 @@ export function startAutoSendDaemon(sock) {
   global.autoSendRunnerActive = true;
 
   setInterval(async () => {
-    if (global.sessionStatePool.size === 0) return;
+    if (!global.sessionStatePool || global.sessionStatePool.size === 0) return;
 
     const now = Date.now();
 
@@ -92,7 +104,7 @@ export function startAutoSendDaemon(sock) {
       let updated = false;
 
       for (const task of posts) {
-        if (now - task.lastSentTime >= task.intervalMs) {
+        if (now - (task.lastSentTime || 0) >= task.intervalMs) {
           task.lastSentTime = now;
           updated = true;
 
@@ -105,7 +117,9 @@ export function startAutoSendDaemon(sock) {
               break;
             }
           }
-          if (!targetSocket && cleanPhone(sock.user?.id || "") === botPhone) targetSocket = sock;
+          if (!targetSocket && cleanPhone(sock.user?.id || "") === botPhone) {
+            targetSocket = sock;
+          }
 
           if (targetSocket) {
             await dispatchToChannel(targetSocket, task);
@@ -130,7 +144,7 @@ export function hookAutoSendReplyEngine(sock) {
     if (!m?.message) return;
 
     const from = m.key.remoteJid;
-    const rawMsg = m.message.ephemeralMessage?.message || m.message;
+    const rawMsg = unwrapMessage(m.message);
     const quotedId = rawMsg?.extendedTextMessage?.contextInfo?.stanzaId;
 
     if (!quotedId || !global.autoSendSessions.has(quotedId)) return;
@@ -159,14 +173,15 @@ export function hookAutoSendReplyEngine(sock) {
       lastSentTime: Date.now()
     };
 
-    // Replace if exists, else push
     const existingIdx = posts.findIndex((p) => p.channelJid === sessionData.channelJid);
-    if (existingIdx !== -1) posts[existingIdx] = newTask;
-    else posts.push(newTask);
+    if (existingIdx !== -1) {
+      posts[existingIdx] = newTask;
+    } else {
+      posts.push(newTask);
+    }
 
     await updateSessionDataList(botPhone, "channelPosts", posts);
 
-    // Initial instant delivery
     const isSent = await dispatchToChannel(sock, newTask);
 
     sock.sendMessage(from, { react: { text: isSent ? "💖" : "⚠️", key: m.key } }).catch(() => {});
@@ -179,7 +194,7 @@ export function hookAutoSendReplyEngine(sock) {
   ⏳ *Interval:* ${chosen.label}
   🤖 *Session Node:* \`+${botPhone}\`
   🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Pending (Check Channel Admin Rights)"}
-  🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Full Post" : "📝 Full Text Only"}
+  🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Text Caption" : "📝 Text Only"}
 
 ━━━━━━━━━━━━━━━━━━━━━
 _The schedule is strictly locked to this bot session and MongoDB! (˶˃ ᵕ ˂˶)_
@@ -218,7 +233,7 @@ export default {
 🤖 *Session Node:* \`+${botPhone}\`\n\n`;
 
       posts.forEach((t, i) => {
-        listText += `  🌸 *${i + 1}. Channel:* \`${t.channelJid}\`\n     ⏳ *Repeat:* ${t.intervalLabel}\n     💬 *Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
+        listText += `  🌸 *${i + 1}. Channel:* \`${t.channelJid}\`\n     ⏳ *Repeat:* ${t.intervalLabel}\n     🖼️ *Image:* ${t.imageBufferBase64 ? "Yes" : "No"}\n     💬 *Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
       });
 
       listText += `━━━━━━━━━━━━━━━━━━━━━\n_To cancel: \`${pref}delautosend <channel_link>\`_\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
@@ -246,10 +261,11 @@ export default {
     // 3. MAIN COMMAND: .autosend <channel_link>
     const targetChannelLink = args[0]?.trim();
     if (!targetChannelLink) {
-      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
+      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post/image with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
     }
 
-    const contextInfo = msg.message?.extendedTextMessage?.contextInfo;
+    const unwrapRoot = unwrapMessage(msg.message);
+    const contextInfo = unwrapRoot?.extendedTextMessage?.contextInfo || unwrapRoot?.imageMessage?.contextInfo;
     const quotedMsg = contextInfo?.quotedMessage;
 
     if (!quotedMsg) {
@@ -263,19 +279,30 @@ export default {
       return await sock.sendMessage(from, { text: "🌸 *Could not resolve channel JID!* Make sure the invite link is valid." }, { quoted: msg });
     }
 
+    const unwrappedQuoted = unwrapMessage(quotedMsg);
     const captionText = extractFullPostText(quotedMsg);
     let imageBase64 = null;
-    const targetImg = quotedMsg.imageMessage || quotedMsg.ephemeralMessage?.message?.imageMessage;
 
-    if (targetImg) {
+    if (unwrappedQuoted?.imageMessage) {
       try {
-        const imgBuffer = await downloadMediaMessage(
-          { key: { id: contextInfo.stanzaId, remoteJid: from }, message: quotedMsg },
-          "buffer",
-          {}
-        );
-        if (imgBuffer?.length) imageBase64 = imgBuffer.toString("base64");
-      } catch (_) {}
+        const fakeMsgObj = {
+          key: {
+            remoteJid: from,
+            id: contextInfo.stanzaId,
+            participant: contextInfo.participant
+          },
+          message: {
+            imageMessage: unwrappedQuoted.imageMessage
+          }
+        };
+
+        const imgBuffer = await downloadMediaMessage(fakeMsgObj, "buffer", {});
+        if (imgBuffer && imgBuffer.length > 0) {
+          imageBase64 = imgBuffer.toString("base64");
+        }
+      } catch (e) {
+        console.error("[AUTOSEND MEDIA DOWNLOAD ERR]:", e.message);
+      }
     }
 
     const menuCard = 
@@ -287,7 +314,7 @@ export default {
   🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Text Only 📝"}
 
 ━━━━━━━━━━━━━━━━━━━━━
-🍬 *Reply with interval number:*
+🍬 *Reply to this message with interval number:*
 
   ⚡ *0*  ➔ Every 1 Minute (Fast Test)
   ⏱️ *00* ➔ Every 2 Minutes (Short Test)
