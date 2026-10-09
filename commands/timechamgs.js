@@ -1,13 +1,5 @@
-import fs from "fs";
-import path from "path";
-import { 
-  generateWAMessageFromContent,
-  prepareWAMessageMedia 
-} from "@whiskeysockets/baileys";
+import { downloadMediaMessage, generateWAMessageFromContent } from "@whiskeysockets/baileys";
 import { cleanPhone, initializeSessionState, updateSessionDataList } from "../core/sessionManager.js";
-
-// ඔබගේ Bot Logo එක තියෙන තැන හරියටම දෙන්න
-const LOCAL_LOGO_PATH = path.resolve("./logo.jpg"); 
 
 global.autoSendSessions = global.autoSendSessions || new Map();
 global.autoSendRunnerActive = global.autoSendRunnerActive || false;
@@ -29,9 +21,7 @@ async function resolveChannelJid(sock, input) {
       const meta = await sock.newsletterMetadata("invite", code);
       return meta?.id || null;
     }
-  } catch (err) {
-    console.error("[AUTOSEND] Channel Resolve Error:", err.message);
-  }
+  } catch (_) {}
   return null;
 }
 
@@ -67,63 +57,35 @@ const INTERVAL_OPTIONS = Object.freeze({
   "00": { label: "Every 2 Minutes ⏱️ (Short Test)", ms: 2 * 60 * 1000 },
   "1": { label: "Every 30 Minutes ⏳ (Half Hour)", ms: 30 * 60 * 1000 },
   "2": { label: "Every 1 Hour ⏰", ms: 60 * 60 * 1000 },
-  "3": { label: "Every 2 Hours 🕒", ms: 2 * 60 * 60 * 1000 },
+  "3": { label: "Every 2 Hours 🕒", ms: 2 * 60 * 1000 * 60 },
   "4": { label: "Every 4 Hours 🌸", ms: 4 * 60 * 60 * 1000 },
   "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
 });
 
-// Channel Dispatcher
 async function dispatchToChannel(sock, task) {
   try {
-    let imgBuffer = null;
-    if (fs.existsSync(LOCAL_LOGO_PATH)) {
-      imgBuffer = fs.readFileSync(LOCAL_LOGO_PATH);
+    if (task.imageBufferBase64) {
+      const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
+      await sock.sendMessage(task.channelJid, {
+        image: imgBuffer,
+        caption: task.caption || ""
+      });
+      return true;
     }
 
-    // 1. Logo එක තිබේ නම් Image + Caption විදිහට Channel එකට යැවීම
-    if (imgBuffer) {
-      try {
-        const media = await prepareWAMessageMedia(
-          { image: imgBuffer },
-          { upload: sock.waUploadToServer }
-        );
-
-        const waMsg = generateWAMessageFromContent(
-          task.channelJid,
-          {
-            imageMessage: {
-              ...media.imageMessage,
-              caption: task.caption || ""
-            }
-          },
-          {}
-        );
-
-        await sock.relayMessage(task.channelJid, waMsg.message, {
-          messageId: waMsg.key.id
-        });
-        return true;
-      } catch (err) {
-        console.error("[AUTOSEND] Image dispatch failed, falling back to text:", err.message);
-      }
-    }
-
-    // 2. Image අසාර්ථක වුවහොත් හෝ නැත්නම් Text එක යැවීම
     if (task.caption) {
       try {
+        await sock.sendMessage(task.channelJid, { text: task.caption });
+      } catch (_) {
         const rawContent = { extendedTextMessage: { text: task.caption } };
         const waMsg = generateWAMessageFromContent(task.channelJid, rawContent, {});
         await sock.relayMessage(task.channelJid, waMsg.message, { messageId: waMsg.key.id });
-        return true;
-      } catch (err) {
-        await sock.sendMessage(task.channelJid, { text: task.caption });
-        return true;
       }
+      return true;
     }
-
     return false;
   } catch (err) {
-    console.error(`[AUTOSEND DISPATCH ERR]:`, err.message);
+    console.error(`[AUTOSEND DISPATCH ERR]: ${err.message}`);
     return false;
   }
 }
@@ -205,13 +167,11 @@ export function hookAutoSendReplyEngine(sock) {
       id: `${botPhone}_${sessionData.channelJid}`,
       channelJid: sessionData.channelJid,
       caption: sessionData.caption,
+      imageBufferBase64: sessionData.imageBufferBase64,
       intervalMs: chosen.ms,
       intervalLabel: chosen.label,
       lastSentTime: Date.now()
     };
-
-    // Instant send trigger
-    const isSent = await dispatchToChannel(sock, newTask);
 
     const existingIdx = posts.findIndex((p) => p.channelJid === sessionData.channelJid);
     if (existingIdx !== -1) {
@@ -222,6 +182,8 @@ export function hookAutoSendReplyEngine(sock) {
 
     await updateSessionDataList(botPhone, "channelPosts", posts);
 
+    const isSent = await dispatchToChannel(sock, newTask);
+
     sock.sendMessage(from, { react: { text: isSent ? "💖" : "⚠️", key: m.key } }).catch(() => {});
 
     const successCard = 
@@ -231,8 +193,8 @@ export function hookAutoSendReplyEngine(sock) {
   📢 *Target Channel:* \`${sessionData.channelJid}\`
   ⏳ *Interval:* ${chosen.label}
   🤖 *Session Node:* \`+${botPhone}\`
-  🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Dispatch Failed! (Check Console)"}
-  🖼️ *Attachment:* ${fs.existsSync(LOCAL_LOGO_PATH) ? "🟢 Local Logo + Text" : "📝 Text Only"}
+  🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Pending (Check Channel Admin Rights)"}
+  🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Text Caption" : "📝 Text Only"}
 
 ━━━━━━━━━━━━━━━━━━━━━
 _The schedule is strictly locked to this bot session and MongoDB! (˶˃ ᵕ ˂˶)_
@@ -259,6 +221,7 @@ export default {
     const session = await initializeSessionState(botPhone);
     const posts = session.channelPosts || [];
 
+    // 1. LIST COMMAND
     if (cleanCmd === "listautosend") {
       if (posts.length === 0) {
         return await sock.sendMessage(from, { text: "🌸 *No active scheduled channel posts found for this session!*" }, { quoted: msg });
@@ -270,13 +233,14 @@ export default {
 🤖 *Session Node:* \`+${botPhone}\`\n\n`;
 
       posts.forEach((t, i) => {
-        listText += `  🌸 *${i + 1}. Channel:* \`${t.channelJid}\`\n     ⏳ *Repeat:* ${t.intervalLabel}\n     💬 *Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
+        listText += `  🌸 *${i + 1}. Channel:* \`${t.channelJid}\`\n     ⏳ *Repeat:* ${t.intervalLabel}\n     🖼️ *Image:* ${t.imageBufferBase64 ? "Yes" : "No"}\n     💬 *Preview:* "${(t.caption || "").slice(0, 35)}..."\n\n`;
       });
 
       listText += `━━━━━━━━━━━━━━━━━━━━━\n_To cancel: \`${pref}delautosend <channel_link>\`_\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
       return await sock.sendMessage(from, { text: listText }, { quoted: msg });
     }
 
+    // 2. DELETE COMMAND
     if (cleanCmd === "delautosend") {
       const targetInput = args.join(" ").trim();
       const channelJid = await resolveChannelJid(sock, targetInput);
@@ -294,9 +258,10 @@ export default {
       }
     }
 
+    // 3. MAIN COMMAND: .autosend <channel_link>
     const targetChannelLink = args[0]?.trim();
     if (!targetChannelLink) {
-      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post/text with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
+      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post/image with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
     }
 
     const unwrapRoot = unwrapMessage(msg.message);
@@ -304,7 +269,7 @@ export default {
     const quotedMsg = contextInfo?.quotedMessage;
 
     if (!quotedMsg) {
-      return await sock.sendMessage(from, { text: "🌸 *Please reply to the text/post you want to schedule!*" }, { quoted: msg });
+      return await sock.sendMessage(from, { text: "🌸 *Please reply to the post/image you want to schedule!*" }, { quoted: msg });
     }
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
@@ -314,8 +279,31 @@ export default {
       return await sock.sendMessage(from, { text: "🌸 *Could not resolve channel JID!* Make sure the invite link is valid." }, { quoted: msg });
     }
 
+    const unwrappedQuoted = unwrapMessage(quotedMsg);
     const captionText = extractFullPostText(quotedMsg);
-    const hasLogo = fs.existsSync(LOCAL_LOGO_PATH);
+    let imageBase64 = null;
+
+    if (unwrappedQuoted?.imageMessage) {
+      try {
+        const fakeMsgObj = {
+          key: {
+            remoteJid: from,
+            id: contextInfo.stanzaId,
+            participant: contextInfo.participant
+          },
+          message: {
+            imageMessage: unwrappedQuoted.imageMessage
+          }
+        };
+
+        const imgBuffer = await downloadMediaMessage(fakeMsgObj, "buffer", {});
+        if (imgBuffer && imgBuffer.length > 0) {
+          imageBase64 = imgBuffer.toString("base64");
+        }
+      } catch (e) {
+        console.error("[AUTOSEND MEDIA DOWNLOAD ERR]:", e.message);
+      }
+    }
 
     const menuCard = 
 `🎀 ｡ﾟ•┈୨ *CHOOSE AUTO-POST INTERVAL* ୧┈•ﾟ｡ 🐾
@@ -323,7 +311,7 @@ export default {
 
   📢 *Target Channel:* \`${targetChannelJid}\`
   📝 *Content Captured:* \`${captionText.length} Characters\`
-  🖼️ *Attachment:* ${hasLogo ? "Local Bot Logo + Text Post ✨" : "Text Only (Logo file not found) 📝"}
+  🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Text Only 📝"}
 
 ━━━━━━━━━━━━━━━━━━━━━
 🍬 *Reply to this message with interval number:*
@@ -345,7 +333,8 @@ export default {
         from,
         senderBotPhone: botPhone,
         channelJid: targetChannelJid,
-        caption: captionText
+        caption: captionText,
+        imageBufferBase64: imageBase64
       });
       setTimeout(() => global.autoSendSessions.delete(sent.key.id), 300000);
     }
