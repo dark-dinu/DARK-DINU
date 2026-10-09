@@ -3,9 +3,11 @@ import path from "path";
 import axios from "axios";
 
 const configPath = path.resolve("./autovoice.json");
-const sudoPath = path.resolve("./sudo.json");
 
-// Voice Clips Mapping (Google Drive Links)
+// Hardcoded Master Owners (ඔයාගේ අංකය කෙලින්ම ඇතුළත් කර ඇත)
+const MASTER_OWNERS = ["94719845166"];
+
+// Voice Responses (Google Drive Direct Links)
 const voiceResponses = {
   "hi": "https://drive.google.com/uc?export=download&id=17MNI_gDra5NIyij3HOutvel0mB4PSygW",
   "හායි": "https://drive.google.com/uc?export=download&id=17MNI_gDra5NIyij3HOutvel0mB4PSygW",
@@ -37,8 +39,7 @@ const voiceResponses = {
   "moko": "https://drive.google.com/uc?export=download&id=17Kku_JRLVvQtHgIR5IqZiw6Oc0bVdYCf"
 };
 
-// Config කියවීම (Auto Voice Status)
-function isAutoVoiceActive() {
+function getAutoVoiceStatus() {
   try {
     if (!fs.existsSync(configPath)) {
       fs.writeFileSync(configPath, JSON.stringify({ enabled: true }, null, 2));
@@ -51,48 +52,14 @@ function isAutoVoiceActive() {
   }
 }
 
-// Config ලියවීම
-function setAutoVoiceStatus(status) {
+function setAutoVoiceStatus(val) {
   try {
-    fs.writeFileSync(configPath, JSON.stringify({ enabled: status }, null, 2));
+    fs.writeFileSync(configPath, JSON.stringify({ enabled: val }, null, 2));
   } catch (err) {
-    console.error("[AUTOVOICE SAVE ERR]:", err.message);
+    console.error("[AUTOVOICE ERR]:", err.message);
   }
 }
 
-// Owner සහ Sudo පරීක්ෂාව
-function checkIsOwner(msg, senderNum, baseIsOwner, config) {
-  if (baseIsOwner || msg.key.fromMe) return true;
-
-  try {
-    if (fs.existsSync(sudoPath)) {
-      const sudos = JSON.parse(fs.readFileSync(sudoPath, "utf-8") || "[]");
-      if (sudos.includes(senderNum)) return true;
-    }
-  } catch (_) {}
-
-  const ownerNums = [
-    ...(Array.isArray(config?.OWNER_NUMBERS) ? config.OWNER_NUMBERS : []),
-    config?.OWNER_NUMBER,
-    config?.ownerNumber
-  ].filter(Boolean).map(n => String(n).replace(/[^0-9]/g, ""));
-
-  return ownerNums.includes(senderNum);
-}
-
-// Google Drive Link එකෙන් කෙලින්ම Buffer එකක් ලෙස download කරගැනීම
-async function fetchAudioBuffer(url) {
-  const res = await axios.get(url, {
-    responseType: "arraybuffer",
-    timeout: 15000,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-  });
-  return Buffer.from(res.data);
-}
-
-// Global listener hook
 global.autoVoiceEngineHooked = global.autoVoiceEngineHooked || new WeakSet();
 
 export default {
@@ -101,12 +68,19 @@ export default {
   category: "settings",
   description: "Turn on/off auto voice replies",
 
-  async execute({ sock, msg, from, args, prefix, isOwner: baseIsOwner, config }) {
+  async execute({ sock, msg, from, args, prefix, isOwner, config }) {
     const pref = prefix || config?.PREFIX || ".";
     const sender = msg.key.participant || msg.key.remoteJid || "";
     const senderNum = sender.replace(/[^0-9]/g, "");
 
-    // 1. Background Message Listener එක register කිරීම
+    // 100% Unstoppable Owner Access Check
+    const isMaster =
+      isOwner ||
+      msg.key.fromMe ||
+      MASTER_OWNERS.includes(senderNum) ||
+      (config?.OWNER_NUMBER && String(config.OWNER_NUMBER).includes(senderNum));
+
+    // Message Hook for Voice Replies
     if (sock && !global.autoVoiceEngineHooked.has(sock)) {
       global.autoVoiceEngineHooked.add(sock);
 
@@ -115,8 +89,7 @@ export default {
         const m = messages[0];
         if (!m?.message || m.key.fromMe) return;
 
-        // Auto Voice OFF කර ඇත්නම් ක්‍රියාත්මක නොවේ
-        if (!isAutoVoiceActive()) return;
+        if (!getAutoVoiceStatus()) return;
 
         const chatJid = m.key.remoteJid;
         const raw = m.message.conversation || m.message.extendedTextMessage?.text || "";
@@ -136,82 +109,56 @@ export default {
 
         if (audioUrl) {
           try {
-            const audioBuf = await fetchAudioBuffer(audioUrl);
+            const res = await axios.get(audioUrl, {
+              responseType: "arraybuffer",
+              timeout: 15000,
+              headers: { "User-Agent": "Mozilla/5.0" }
+            });
+
             await sock.sendMessage(
               chatJid,
               {
-                audio: audioBuf,
+                audio: Buffer.from(res.data),
                 mimetype: "audio/mp4",
-                ptt: true // WhatsApp Voice Note (කොළ පාට mic icon එක සහිතව)
+                ptt: true
               },
               { quoted: m }
             );
           } catch (err) {
-            console.error("[AUTOVOICE SEND ERR]:", err.message);
+            console.error("[AUTOVOICE AUDIO ERR]:", err.message);
           }
         }
       });
     }
 
-    // 2. Command එක Handle කිරීම (.autovoice on / off)
     const opt = (args[0] || "").toLowerCase();
-    const isAuthorized = checkIsOwner(msg, senderNum, baseIsOwner, config);
 
+    // ON COMMAND
     if (opt === "on") {
-      if (!isAuthorized) {
-        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          { text: "❌ මෙම විධානය භාවිත කළ හැක්කේ Bot Owner හෝ Sudo පරිශීලකයින්ට පමණි!" },
-          { quoted: msg }
-        );
+      if (!isMaster) {
+        return await sock.sendMessage(from, { text: "❌ මෙම විධානය භාවිතා කළ හැක්කේ Owner ට පමණි!" }, { quoted: msg });
       }
-
       setAutoVoiceStatus(true);
       sock.sendMessage(from, { react: { text: "🎙️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: "🎙️ *DARK-DINU MD Auto Voice සාර්ථකව සක්‍රිය (ON) කරන ලදී!*" },
-        { quoted: msg }
-      );
+      return await sock.sendMessage(from, { text: "🎙️ *Auto Voice සාර්ථකව සක්‍රිය (ON) කරන ලදී!*" }, { quoted: msg });
     }
 
+    // OFF COMMAND
     if (opt === "off") {
-      if (!isAuthorized) {
-        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          { text: "❌ මෙම විධානය භාවිත කළ හැක්කේ Bot Owner හෝ Sudo පරිශීලකයින්ට පමණි!" },
-          { quoted: msg }
-        );
+      if (!isMaster) {
+        return await sock.sendMessage(from, { text: "❌ මෙම විධානය භාවිතා කළ හැක්කේ Owner ට පමණි!" }, { quoted: msg });
       }
-
       setAutoVoiceStatus(false);
       sock.sendMessage(from, { react: { text: "🔇", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: "🔇 *DARK-DINU MD Auto Voice සාර්ථකව අක්‍රිය (OFF) කරන ලදී!*" },
-        { quoted: msg }
-      );
+      return await sock.sendMessage(from, { text: "🔇 *Auto Voice සාර්ථකව අක්‍රිය (OFF) කරන ලදී!*" }, { quoted: msg });
     }
 
-    // Status එක පෙන්වීම
-    const state = isAutoVoiceActive() ? "ක්‍රියාත්මකයි (ON) ✅" : "අක්‍රියයි (OFF) ❌";
+    // STATUS
+    const current = getAutoVoiceStatus() ? "සක්‍රියයි (ON) ✅" : "අක්‍රියයි (OFF) ❌";
     return await sock.sendMessage(
       from,
       {
-        text: 
-`🎙️ ｡ﾟ•┈୨ *AUTO VOICE SYSTEM* ୧┈•ﾟ｡ 🔊
-━━━━━━━━━━━━━━━━━━━━━
-
-⚙️ *තත්ත්වය:* ${state}
-
-📌 *භාවිතය:*
-  • \`${pref}autovoice on\` ➔ සක්‍රිය කිරීමට
-  • \`${pref}autovoice off\` ➔ අක්‍රිය කිරීමට
-
-━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+        text: `🎙️ *AUTO VOICE STATUS:* ${current}\n\n*භාවිතය:*\n• \`${pref}autovoice on\`\n• \`${pref}autovoice off\``
       },
       { quoted: msg }
     );
