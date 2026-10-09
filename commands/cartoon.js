@@ -7,44 +7,35 @@ global.cartoonSearchSessions = global.cartoonSearchSessions || new Map();
 global.cartoonEpSessions = global.cartoonEpSessions || new Map();
 global.cartoonHooked = global.cartoonHooked || new WeakSet();
 
-// 1. Direct Web Scraper for Cartoons.lk (Bypasses limited API search)
-async function searchCartoonsDirect(query) {
+// 1. Google Fallback Scraper (Bypasses Cloudflare block on cartoons.lk search)
+async function searchCartoonsUniversal(query) {
   try {
-    // cartoons.lk native search endpoint
-    const searchUrl = `https://cartoons.lk/?s=${encodeURIComponent(query)}`;
-    const { data: html } = await axios.get(searchUrl, {
+    const googleUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent("site:cartoons.lk " + query)}`;
+    const { data: html } = await axios.get(googleUrl, {
       timeout: 10000,
       headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
       }
     });
 
     const results = [];
-    // Regular expression to extract post links and titles from WordPress layout
-    const regex = /<h[23][^>]*class="[^"]*entry-title[^"]*"[^>]*>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
+    const linkRegex = /<a class="result__url"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
     let match;
-    while ((match = regex.exec(html)) !== null) {
-      const link = match[1];
-      const title = match[2].trim().replace(/&#8211;/g, "-").replace(/&#8217;/g, "'");
-      if (link.includes("cartoons.lk") && !results.some(r => r.link === link)) {
-        results.push({ title, link });
-      }
-      if (results.length >= 8) break;
-    }
 
-    // Fallback regex if theme is different
-    if (results.length === 0) {
-      const fallbackRegex = /<a\s+href="(https:\/\/cartoons\.lk\/[^"]+\/)"\s+rel="bookmark">([^<]+)<\/a>/gi;
-      let fbMatch;
-      while ((fbMatch = fallbackRegex.exec(html)) !== null) {
-        results.push({ title: fbMatch[2].trim(), link: fbMatch[1] });
-        if (results.length >= 8) break;
-      }
+    // Alternative simple link extraction
+    const rawLinks = html.match(/https?:\/\/(?:www\.)?cartoons\.lk\/[a-zA-Z0-9\-]+\//gi) || [];
+    const uniqueLinks = [...new Set(rawLinks)].filter(l => !l.endsWith("/page/") && !l.includes("/tag/") && !l.includes("/category/"));
+
+    for (const link of uniqueLinks.slice(0, 8)) {
+      // Clean slug to title
+      const slug = link.replace("https://cartoons.lk/", "").replace(/\//g, "").replace(/-/g, " ");
+      const title = slug.replace(/\b\w/g, l => l.toUpperCase());
+      results.push({ title, link });
     }
 
     return results;
   } catch (err) {
-    console.error("[DIRECT CARTOON SEARCH FAILED]:", err.message);
+    console.error("[FALLBACK SEARCH FAILED]:", err.message);
     return [];
   }
 }
@@ -177,7 +168,7 @@ function hookCartoonInteractive(sock) {
         sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
         const statusMsg = await sock.sendMessage(
           from,
-          { text: `🚀 *Uploading Episode ${chosenNum}...*\n_වීඩියෝව chat එකට upload වෙමින් පවතී, සුළු මොහොතක් රැඳී සිටින්න..._` },
+          { text: `🚀 *Uploading Episode ${chosenNum}...*\n_වීඩියෝව upload වෙමින් පවතී, සුළු මොහොතක් රැඳී සිටින්න..._` },
           { quoted: m }
         );
 
@@ -228,7 +219,7 @@ export default {
     if (!query) {
       return await sock.sendMessage(
         from,
-        { text: `🌸 *භාවිතය:* \`${pref}cartoon <කාටූන් නම>\`\n*උදාහරණ:* \`${pref}cartoon avatar\` හෝ \`${pref}cartoon scooby\`` },
+        { text: `🌸 *භාවිතය:* \`${pref}cartoon <කාටූන් නම>\`\n*උදාහරණ:* \`${pref}cartoon Scooby-Doo\`` },
         { quoted: msg }
       );
     }
@@ -239,19 +230,7 @@ export default {
 
     sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
 
-    // Try Cartoons.lk Direct Search
-    let results = await searchCartoonsDirect(query);
-
-    // Fallback: If direct search fails, try chamindu search API
-    if (results.length === 0) {
-      try {
-        const { data: res } = await axios.get(`https://api.chamindu.site/api/v1/movies/cartoons/search?q=${encodeURIComponent(query)}&api_key=${API_KEY}`, { timeout: 10000 });
-        const apiData = res?.data || res?.result || [];
-        if (Array.isArray(apiData) && apiData.length > 0) {
-          results = apiData.map(i => ({ title: i.title || i.name, link: i.link || i.url }));
-        }
-      } catch (_) {}
-    }
+    const results = await searchCartoonsUniversal(query);
 
     if (results.length === 0) {
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
