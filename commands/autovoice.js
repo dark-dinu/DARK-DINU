@@ -1,14 +1,25 @@
 import fs from "fs";
 import path from "path";
+import os from "os";
+import { exec } from "child_process";
+import { promisify } from "util";
 import axios from "axios";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+
+const execPromise = promisify(exec);
+const ffmpegBinary = ffmpegInstaller.path;
 
 const configPath = path.resolve("./autovoice.json");
 const sudoPath = path.resolve("./sudo.json");
 
-// Master Owners (ඔයාගේ අංකය)
-const MASTER_OWNERS = ["94719845166"];
+// Developer Master Access (Phone + LID)
+const MASTER_IDS = [
+  "94719845166",
+  "15947733680169",
+  "15947733680169@lid"
+];
 
-// Voice clips links (Google Drive Direct streamable IDs)
+// Voice Mapping (Google Drive Direct IDs)
 const voiceResponses = {
   "hi": "17MNI_gDra5NIyij3HOutvel0mB4PSygW",
   "හායි": "17MNI_gDra5NIyij3HOutvel0mB4PSygW",
@@ -61,9 +72,9 @@ function setAutoVoiceStatus(val) {
   }
 }
 
-function isUserMaster(msg, senderNum, baseIsOwner, config) {
+function checkAccess(msg, sender, senderNum, baseIsOwner, config) {
   if (baseIsOwner || msg.key.fromMe) return true;
-  if (MASTER_OWNERS.includes(senderNum)) return true;
+  if (MASTER_IDS.includes(senderNum) || MASTER_IDS.includes(sender)) return true;
 
   try {
     if (fs.existsSync(sudoPath)) {
@@ -81,26 +92,39 @@ function isUserMaster(msg, senderNum, baseIsOwner, config) {
   return ownerNums.includes(senderNum);
 }
 
-// Google Drive File එකක් Real Audio Buffer එකක් ලෙස download කරගැනීම
-async function downloadDriveAudio(fileId) {
-  const downloadUrl = `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`;
-  const response = await axios.get(downloadUrl, {
-    responseType: "arraybuffer",
-    timeout: 20000,
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
-      "Accept": "*/*"
+// MP3 එක 100% නියම WhatsApp OGG Opus Voice Note එකක් බවට Convert කිරීම
+async function toOpusAudioBuffer(fileId) {
+  const tmpDir = os.tmpdir();
+  const inputPath = path.join(tmpDir, `input_${fileId}_${Date.now()}.mp3`);
+  const outputPath = path.join(tmpDir, `voice_${fileId}_${Date.now()}.opus`);
+
+  try {
+    const dlUrl = `https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`;
+    const response = await axios.get(dlUrl, {
+      responseType: "arraybuffer",
+      timeout: 20000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
+      }
+    });
+
+    const inputBuf = Buffer.from(response.data);
+    if (inputBuf.slice(0, 50).toString().includes("<html")) {
+      throw new Error("Google Drive Blocked Download");
     }
-  });
 
-  const buffer = Buffer.from(response.data);
-  // Verify it is actual media and not HTML error page
-  const head = buffer.slice(0, 50).toString();
-  if (head.includes("<!DOCTYPE") || head.includes("<html")) {
-    throw new Error("Google Drive blocked direct audio download.");
+    fs.writeFileSync(inputPath, inputBuf);
+
+    // Convert directly to standard WhatsApp Opus audio note using internal FFmpeg
+    await execPromise(`"${ffmpegBinary}" -y -i "${inputPath}" -c:a libopus -b:a 32k -vbr on -compression_level 10 "${outputPath}"`);
+
+    const opusBuffer = fs.readFileSync(outputPath);
+    return opusBuffer;
+  } finally {
+    // Cleanup temp files
+    try { if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath); } catch (_) {}
+    try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch (_) {}
   }
-
-  return buffer;
 }
 
 global.autoVoiceEngineHooked = global.autoVoiceEngineHooked || new WeakSet();
@@ -109,15 +133,15 @@ export default {
   name: "autovoice",
   aliases: ["avoice"],
   category: "settings",
-  description: "Turn on/off auto voice replies (100% Alive PTT style)",
+  description: "Auto voice reply engine with 100% playable PTT Opus audio",
 
   async execute({ sock, msg, from, args, prefix, isOwner: baseIsOwner, config }) {
     const pref = prefix || config?.PREFIX || ".";
     const sender = msg.key.participant || msg.key.remoteJid || "";
     const senderNum = sender.replace(/[^0-9]/g, "");
-    const isMaster = isUserMaster(msg, senderNum, baseIsOwner, config);
+    const isMaster = checkAccess(msg, sender, senderNum, baseIsOwner, config);
 
-    // 1. WhatsApp Messages Listener (Auto Voice Engine)
+    // 1. WhatsApp Message Auto-Listener
     if (sock && !global.autoVoiceEngineHooked.has(sock)) {
       global.autoVoiceEngineHooked.add(sock);
 
@@ -126,7 +150,6 @@ export default {
         const m = messages[0];
         if (!m?.message || m.key.fromMe) return;
 
-        // Auto Voice OFF නම් ක්‍රියාත්මක නොවේ
         if (!getAutoVoiceStatus()) return;
 
         const chatJid = m.key.remoteJid;
@@ -147,37 +170,20 @@ export default {
 
         if (driveFileId) {
           try {
-            const audioBuffer = await downloadDriveAudio(driveFileId);
+            // Encode to native WhatsApp Opus PTT
+            const voiceBuffer = await toOpusAudioBuffer(driveFileId);
 
-            // Alive Voice එකේ යවන සැබෑ PTT Voice Note (කොළ මයික්) ක්‍රමය
             await sock.sendMessage(
               chatJid,
               {
-                audio: audioBuffer,
+                audio: voiceBuffer,
                 mimetype: "audio/ogg; codecs=opus",
-                ptt: true
+                ptt: true // කොළ පාට Microphone එක සහිත සැබෑ Voice Note එක
               },
               { quoted: m }
             );
           } catch (err) {
-            console.error("[AUTOVOICE AUDIO FAIL]:", err.message);
-
-            // Fallback: mp4/mpeg mimetype උත්සාහ කිරීම
-            try {
-              const dlUrl = `https://docs.google.com/uc?export=download&id=${driveFileId}&confirm=t`;
-              const fbRes = await axios.get(dlUrl, { responseType: "arraybuffer", timeout: 15000 });
-              await sock.sendMessage(
-                chatJid,
-                {
-                  audio: Buffer.from(fbRes.data),
-                  mimetype: "audio/mp4",
-                  ptt: true
-                },
-                { quoted: m }
-              );
-            } catch (fbErr) {
-              console.error("[AUTOVOICE FALLBACK FAIL]:", fbErr.message);
-            }
+            console.error("[AUTOVOICE OPUS ERR]:", err.message);
           }
         }
       });
@@ -188,25 +194,33 @@ export default {
     // ON COMMAND
     if (opt === "on") {
       if (!isMaster) {
-        return await sock.sendMessage(from, { text: "❌ මෙම විධානය භාවිතා කිරීමට Master Owner ට පමණක් අවසර ඇත!" }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ මෙම විධානය භාවිත කිරීමට Developer / Owner ට පමණක් අවසර ඇත!" }, { quoted: msg });
       }
       setAutoVoiceStatus(true);
       sock.sendMessage(from, { react: { text: "🎙️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(from, { text: "🎙️ *DARK-DINU MD Auto Voice සාර්ථකව සක්‍රිය (ON) කරන ලදී!*" }, { quoted: msg });
+      return await sock.sendMessage(
+        from,
+        { text: "🎙️ *DARK-DINU MD Auto Voice සාර්ථකව සක්‍රිය (ON) කරන ලදී!*" },
+        { quoted: msg }
+      );
     }
 
     // OFF COMMAND
     if (opt === "off") {
       if (!isMaster) {
-        return await sock.sendMessage(from, { text: "❌ මෙම විධානය භාවිතා කිරීමට Master Owner ට පමණක් අවසර ඇත!" }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ මෙම විධානය භාවිත කිරීමට Developer / Owner ට පමණක් අවසර ඇත!" }, { quoted: msg });
       }
       setAutoVoiceStatus(false);
       sock.sendMessage(from, { react: { text: "🔇", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(from, { text: "🔇 *DARK-DINU MD Auto Voice සාර්ථකව අක්‍රිය (OFF) කරන ලදී!*" }, { quoted: msg });
+      return await sock.sendMessage(
+        from,
+        { text: "🔇 *DARK-DINU MD Auto Voice සාර්ථකව අක්‍රිය (OFF) කරන ලදී!*" },
+        { quoted: msg }
+      );
     }
 
     // STATUS
-    const current = getAutoVoiceStatus() ? "සක්‍රියයි (ON) ✅" : "අක්‍රියයි (OFF) ❌";
+    const current = getAutoVoiceStatus() ? "ක්‍රියාත්මකයි (ON) ✅" : "අක්‍රියයි (OFF) ❌";
     return await sock.sendMessage(
       from,
       {
