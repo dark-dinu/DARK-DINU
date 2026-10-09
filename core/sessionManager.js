@@ -10,13 +10,16 @@ if (!fs.existsSync(LOCAL_BACKUP_DIR)) {
 }
 
 export function cleanPhone(jid = "") {
+  if (!jid) return "";
   const atIdx = jid.indexOf("@");
   const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
   const colonIdx = base.indexOf(":");
   return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
 }
 
+// Global Shared Database Instance Retriever
 function getDbInstance() {
+  if (global.mongoDbInstance) return global.mongoDbInstance;
   const client = global.mongoClient || global.sharedMongoClient;
   return client ? client.db(process.env.DB_NAME || "whatsapp_multi_bots") : null;
 }
@@ -39,27 +42,32 @@ function readLocalBackup(botPhone) {
   return null;
 }
 
-// 1. Session Init & Load (Called on Bot Socket Connect)
-export async function initializeSessionState(botPhone) {
+// Default Schema
+const DEFAULT_CONFIG = {
+  mode: "public",
+  antiDelete: true,
+  statusSeen: true,
+  statusReact: true,
+  statusEmoji: "💖",
+  antiSend: "off",
+  antiCall: false,
+  autoReply: true,
+  welcomeCard: true
+};
+
+// 1. Session Init & Load (Bot Socket Connect වෙද්දී Run වෙන කොටස)
+export async function initializeSessionState(rawPhone) {
+  const botPhone = cleanPhone(rawPhone);
   if (!botPhone) return null;
 
+  // RAM Pool එකේ කලින්ම තියෙනවද බැලීම
   if (global.sessionStatePool.has(botPhone)) {
     return global.sessionStatePool.get(botPhone);
   }
 
   const defaultState = {
     botPhone,
-    config: {
-      mode: "public",
-      antiDelete: true,
-      statusSeen: true,
-      statusReact: true,
-      statusEmoji: "💖",
-      antiSend: "off",
-      antiCall: false,
-      autoReply: true,
-      welcomeCard: true
-    },
+    config: { ...DEFAULT_CONFIG },
     timers: [],
     channelPosts: [],
     customReplies: []
@@ -71,7 +79,7 @@ export async function initializeSessionState(botPhone) {
     const db = getDbInstance();
     if (db) {
       const col = db.collection("bot_sessions_v2");
-      const record = await col.findOne({ _id: botPhone });
+      const record = await col.findOne({ _id: String(botPhone) });
       if (record) {
         defaultState.config = { ...defaultState.config, ...record.config };
         defaultState.timers = record.timers || [];
@@ -79,15 +87,17 @@ export async function initializeSessionState(botPhone) {
         defaultState.customReplies = record.customReplies || [];
         loaded = true;
       } else {
-        await col.insertOne({ _id: botPhone, ...defaultState });
+        await col.insertOne({ _id: String(botPhone), ...defaultState, createdAt: new Date() });
         loaded = true;
       }
+    } else {
+      console.warn(`[SESSION WARNING]: MongoDB not ready for +${botPhone}, trying local backup...`);
     }
   } catch (err) {
-    console.error(`[SESSION DB ERR - ${botPhone}]:`, err.message);
+    console.error(`[SESSION DB ERR - +${botPhone}]:`, err.message);
   }
 
-  // 2nd Priority: Local Storage Fallback if DB is slow or unavailable
+  // 2nd Priority: Local Storage Fallback
   if (!loaded) {
     const local = readLocalBackup(botPhone);
     if (local) {
@@ -103,8 +113,11 @@ export async function initializeSessionState(botPhone) {
   return defaultState;
 }
 
-// 2. Atomic Config Modifier
-export async function updateSessionConfig(botPhone, key, value) {
+// 2. Atomic Config Modifier (Settings වෙනස් කරපු සැණින් Save වීම)
+export async function updateSessionConfig(rawPhone, key, value) {
+  const botPhone = cleanPhone(rawPhone);
+  if (!botPhone) return;
+
   let session = global.sessionStatePool.get(botPhone);
   if (!session) session = await initializeSessionState(botPhone);
 
@@ -112,40 +125,34 @@ export async function updateSessionConfig(botPhone, key, value) {
   global.sessionStatePool.set(botPhone, session);
   saveLocalBackup(botPhone, session);
 
-  setImmediate(async () => {
-    try {
-      const db = getDbInstance();
-      if (db) {
-        await db.collection("bot_sessions_v2").updateOne(
-          { _id: botPhone },
-          { $set: { [`config.${key}`]: value, lastUpdated: new Date() } },
-          { upsert: true }
-        );
-      }
-    } catch (_) {}
-  });
+  try {
+    const db = getDbInstance();
+    if (db) {
+      await db.collection("bot_sessions_v2").updateOne(
+        { _id: String(botPhone) },
+        { $set: { [`config.${key}`]: value, lastUpdated: new Date() } },
+        { upsert: true }
+      );
+    }
+  } catch (err) {
+    console.error(`[DB UPDATE FAILED - +${botPhone}]:`, err.message);
+  }
 }
 
 // 3. Fast Config Getter
-export function getSessionConfig(botPhone) {
+export function getSessionConfig(rawPhone) {
+  const botPhone = cleanPhone(rawPhone);
   const state = global.sessionStatePool.get(botPhone);
   if (state?.config) return state.config;
 
-  return {
-    mode: "public",
-    antiDelete: true,
-    statusSeen: true,
-    statusReact: true,
-    statusEmoji: "💖",
-    antiSend: "off",
-    antiCall: false,
-    autoReply: true,
-    welcomeCard: true
-  };
+  return { ...DEFAULT_CONFIG };
 }
 
-// 4. Session Tasks Modifier (Timers & Channel Posts)
-export async function updateSessionDataList(botPhone, listKey, newList) {
+// 4. Session Tasks Modifier
+export async function updateSessionDataList(rawPhone, listKey, newList) {
+  const botPhone = cleanPhone(rawPhone);
+  if (!botPhone) return;
+
   let session = global.sessionStatePool.get(botPhone);
   if (!session) session = await initializeSessionState(botPhone);
 
@@ -153,16 +160,14 @@ export async function updateSessionDataList(botPhone, listKey, newList) {
   global.sessionStatePool.set(botPhone, session);
   saveLocalBackup(botPhone, session);
 
-  setImmediate(async () => {
-    try {
-      const db = getDbInstance();
-      if (db) {
-        await db.collection("bot_sessions_v2").updateOne(
-          { _id: botPhone },
-          { $set: { [listKey]: newList, lastUpdated: new Date() } },
-          { upsert: true }
-        );
-      }
-    } catch (_) {}
-  });
+  try {
+    const db = getDbInstance();
+    if (db) {
+      await db.collection("bot_sessions_v2").updateOne(
+        { _id: String(botPhone) },
+        { $set: { [listKey]: newList, lastUpdated: new Date() } },
+        { upsert: true }
+      );
+    }
+  } catch (_) {}
 }
