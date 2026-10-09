@@ -1,4 +1,8 @@
-import { downloadMediaMessage, generateWAMessageFromContent } from "@whiskeysockets/baileys";
+import { 
+  downloadMediaMessage, 
+  generateWAMessageFromContent,
+  prepareWAMessageMedia 
+} from "@whiskeysockets/baileys";
 import { cleanPhone, initializeSessionState, updateSessionDataList } from "../core/sessionManager.js";
 
 global.autoSendSessions = global.autoSendSessions || new Map();
@@ -21,7 +25,9 @@ async function resolveChannelJid(sock, input) {
       const meta = await sock.newsletterMetadata("invite", code);
       return meta?.id || null;
     }
-  } catch (_) {}
+  } catch (err) {
+    console.error("[AUTOSEND] Newsletter metadata error:", err.message);
+  }
   return null;
 }
 
@@ -57,35 +63,77 @@ const INTERVAL_OPTIONS = Object.freeze({
   "00": { label: "Every 2 Minutes ⏱️ (Short Test)", ms: 2 * 60 * 1000 },
   "1": { label: "Every 30 Minutes ⏳ (Half Hour)", ms: 30 * 60 * 1000 },
   "2": { label: "Every 1 Hour ⏰", ms: 60 * 60 * 1000 },
-  "3": { label: "Every 2 Hours 🕒", ms: 2 * 60 * 1000 * 60 },
+  "3": { label: "Every 2 Hours 🕒", ms: 2 * 60 * 60 * 1000 },
   "4": { label: "Every 4 Hours 🌸", ms: 4 * 60 * 60 * 1000 },
   "5": { label: "Every 12 Hours 🌙 (Twice a Day)", ms: 12 * 60 * 60 * 1000 }
 });
 
+// Channel එකට Images & Text 100% ක් deliver වෙන Dispatcher එක
 async function dispatchToChannel(sock, task) {
   try {
+    const isChannel = task.channelJid.endsWith("@newsletter");
+
+    // 1. Image එක්ක Caption තියෙනවා නම්
     if (task.imageBufferBase64) {
       const imgBuffer = Buffer.from(task.imageBufferBase64, "base64");
-      await sock.sendMessage(task.channelJid, {
-        image: imgBuffer,
-        caption: task.caption || ""
-      });
-      return true;
+
+      if (isChannel) {
+        // WhatsApp Channel Media Relay Engine
+        const media = await prepareWAMessageMedia(
+          { image: imgBuffer },
+          { upload: sock.waUploadToServer }
+        );
+
+        const waMsg = generateWAMessageFromContent(
+          task.channelJid,
+          {
+            imageMessage: {
+              ...media.imageMessage,
+              caption: task.caption || ""
+            }
+          },
+          {}
+        );
+
+        await sock.relayMessage(task.channelJid, waMsg.message, {
+          messageId: waMsg.key.id
+        });
+        return true;
+      } else {
+        await sock.sendMessage(task.channelJid, {
+          image: imgBuffer,
+          caption: task.caption || ""
+        });
+        return true;
+      }
     }
 
+    // 2. Text Only නම්
     if (task.caption) {
-      try {
+      if (isChannel) {
+        const waMsg = generateWAMessageFromContent(
+          task.channelJid,
+          {
+            extendedTextMessage: {
+              text: task.caption
+            }
+          },
+          {}
+        );
+
+        await sock.relayMessage(task.channelJid, waMsg.message, {
+          messageId: waMsg.key.id
+        });
+        return true;
+      } else {
         await sock.sendMessage(task.channelJid, { text: task.caption });
-      } catch (_) {
-        const rawContent = { extendedTextMessage: { text: task.caption } };
-        const waMsg = generateWAMessageFromContent(task.channelJid, rawContent, {});
-        await sock.relayMessage(task.channelJid, waMsg.message, { messageId: waMsg.key.id });
+        return true;
       }
-      return true;
     }
+
     return false;
   } catch (err) {
-    console.error(`[AUTOSEND DISPATCH ERR]: ${err.message}`);
+    console.error(`[AUTOSEND DISPATCH ERR]:`, err);
     return false;
   }
 }
@@ -182,6 +230,7 @@ export function hookAutoSendReplyEngine(sock) {
 
     await updateSessionDataList(botPhone, "channelPosts", posts);
 
+    // Initial instant delivery try
     const isSent = await dispatchToChannel(sock, newTask);
 
     sock.sendMessage(from, { react: { text: isSent ? "💖" : "⚠️", key: m.key } }).catch(() => {});
@@ -193,7 +242,7 @@ export function hookAutoSendReplyEngine(sock) {
   📢 *Target Channel:* \`${sessionData.channelJid}\`
   ⏳ *Interval:* ${chosen.label}
   🤖 *Session Node:* \`+${botPhone}\`
-  🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Pending (Check Channel Admin Rights)"}
+  🚀 *Initial Post:* ${isSent ? "🟢 Dispatched Right Now!" : "⚠️ Dispatch Failed (Make sure bot is Channel Admin!)"}
   🖼️ *Attachment:* ${sessionData.imageBufferBase64 ? "🟢 Image + Text Caption" : "📝 Text Only"}
 
 ━━━━━━━━━━━━━━━━━━━━━
