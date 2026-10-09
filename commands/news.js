@@ -2,17 +2,26 @@ import fs from "fs";
 import path from "path";
 import axios from "axios";
 
-// Static API Configs
-const API_BASE = "https://supunofc.site/api/news";
+// 1. API Endpoint Configuration Table
 const API_KEY = "supun-tvo5olfxylo98b8l6b9lq174";
+const NEWS_SOURCES = Object.freeze([
+  { id: "lankadeepa", name: "ලංකාදීප", tag: "🇱🇰 LANKADEEPA", url: `https://supunofc.site/api/news/lankadeepa?apikey=${API_KEY}` },
+  { id: "newslk", name: "NewsLK", tag: "🇱🇰 NEWS.LK", url: `https://supunofc.site/api/news/newslk?apikey=${API_KEY}` },
+  { id: "theverge", name: "The Verge AI", tag: "🤖 THE VERGE | AI", url: `https://supunofc.site/api/news/theverge/ai-artificial-intelligence?apikey=${API_KEY}` },
+  { id: "techcrunch", name: "TechCrunch AI", tag: "⚡ TECHCRUNCH | AI", url: `https://supunofc.site/api/news/techcrunch/artificial-intelligence?apikey=${API_KEY}` },
+  { id: "bbc", name: "BBC News", tag: "🌍 BBC WORLD", url: `https://supunofc.site/api/news/bbc?apikey=${API_KEY}` },
+  { id: "nasa_news", name: "NASA News", tag: "🚀 NASA DISCOVERY", url: `https://supunofc.site/api/news/nasa?type=news&apikey=${API_KEY}` },
+  { id: "nasa_missions", name: "NASA Missions", tag: "🛰️ NASA MISSIONS", url: `https://supunofc.site/api/news/nasa?type=missions&apikey=${API_KEY}` }
+]);
 
-// In-Memory Storage & Daemon Locks
+// Memory Cache & Loop Trackers
 global.autoNewsSubs = global.autoNewsSubs || new Set();
-global.lastPublishedNewsTitle = global.lastPublishedNewsTitle || "";
-global.autoNewsDaemonRunning = global.autoNewsDaemonRunning || false;
+global.seenNewsTitles = global.seenNewsTitles || new Set();
+global.autoNewsLoopActive = global.autoNewsLoopActive || false;
 
 const BACKUP_DIR = path.join(process.cwd(), "session_backups");
 const BACKUP_FILE = path.join(BACKUP_DIR, "news_subs.json");
+const HISTORY_FILE = path.join(BACKUP_DIR, "news_history.json");
 
 if (!fs.existsSync(BACKUP_DIR)) {
   try { fs.mkdirSync(BACKUP_DIR, { recursive: true }); } catch (_) {}
@@ -23,31 +32,29 @@ function getDbInstance() {
   return client ? client.db(process.env.DB_NAME || "whatsapp_multi_bots") : null;
 }
 
-// 1. Dual-Storage Load (MongoDB + Local JSON)
-async function initNewsStorage() {
+// 2. Storage Handlers
+async function initStorage() {
   try {
     const db = getDbInstance();
     if (db) {
-      const col = db.collection("news_subscribers");
-      const savedDocs = await col.find({}).toArray();
-      for (const doc of savedDocs) {
-        if (doc._id) global.autoNewsSubs.add(doc._id);
-      }
+      const docs = await db.collection("news_subscribers").find({}).toArray();
+      docs.forEach((d) => { if (d._id) global.autoNewsSubs.add(d._id); });
     }
   } catch (_) {}
 
   try {
     if (fs.existsSync(BACKUP_FILE)) {
-      const data = JSON.parse(fs.readFileSync(BACKUP_FILE, "utf-8"));
-      if (Array.isArray(data)) {
-        data.forEach(id => global.autoNewsSubs.add(id));
-      }
+      const arr = JSON.parse(fs.readFileSync(BACKUP_FILE, "utf-8"));
+      if (Array.isArray(arr)) arr.forEach((id) => global.autoNewsSubs.add(id));
+    }
+    if (fs.existsSync(HISTORY_FILE)) {
+      const history = JSON.parse(fs.readFileSync(HISTORY_FILE, "utf-8"));
+      if (Array.isArray(history)) history.forEach((t) => global.seenNewsTitles.add(t));
     }
   } catch (_) {}
 }
 
-// 2. Dual-Storage Sync
-async function syncNewsSub(targetJid, isDelete = false) {
+async function syncSubscriber(targetJid, isDelete = false) {
   try {
     if (isDelete) global.autoNewsSubs.delete(targetJid);
     else global.autoNewsSubs.add(targetJid);
@@ -58,93 +65,121 @@ async function syncNewsSub(targetJid, isDelete = false) {
     if (db) {
       const col = db.collection("news_subscribers");
       if (isDelete) await col.deleteOne({ _id: targetJid });
-      else await col.updateOne({ _id: targetJid }, { $set: { jid: targetJid, updatedAt: new Date() } }, { upsert: true });
+      else await col.updateOne({ _id: targetJid }, { $set: { jid: targetJid, date: new Date() } }, { upsert: true });
     }
   } catch (_) {}
 }
 
-initNewsStorage();
-
-// 3. API Fetchers
-async function fetchLankadeepaNews() {
+function recordPublishedTitle(title) {
+  global.seenNewsTitles.add(title);
   try {
-    const res = await axios.get(`${API_BASE}/lankadeepa?apikey=${API_KEY}`, { timeout: 10000 });
-    if (res.data?.success && res.data?.results) {
-      return res.data.results;
+    const arr = Array.from(global.seenNewsTitles).slice(-150); // Keep last 150 items
+    fs.writeFileSync(HISTORY_FILE, JSON.stringify(arr, null, 2));
+  } catch (_) {}
+}
+
+initStorage();
+
+// Channel Invite Code Extractor
+function extractChannelInvite(input = "") {
+  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
+  return match ? match[1] : input.trim();
+}
+
+async function resolveChannelJid(sock, input) {
+  if (!input) return null;
+  const clean = input.trim();
+  if (clean.endsWith("@newsletter") || clean.endsWith("@g.us")) return clean;
+
+  const code = extractChannelInvite(clean);
+  try {
+    if (typeof sock.newsletterMetadata === "function") {
+      const meta = await sock.newsletterMetadata("invite", code);
+      return meta?.id || null;
     }
-  } catch (err) {
-    console.error("[NEWS API ERR - Lankadeepa]:", err.message);
-  }
+  } catch (_) {}
   return null;
 }
 
-async function fetchNasa(type = "news") {
+// 3. API Parser & Normalizer
+async function fetchSourceNews(endpointUrl) {
   try {
-    const res = await axios.get(`${API_BASE}/nasa?type=${type}&apikey=${API_KEY}`, { timeout: 10000 });
-    if (res.data?.success && res.data?.results) {
-      return res.data.results;
-    }
-  } catch (err) {
-    console.error(`[NEWS API ERR - NASA (${type})]:`, err.message);
+    const res = await axios.get(endpointUrl, { timeout: 8000 });
+    if (!res.data?.success || !res.data?.results) return null;
+
+    const r = res.data.results;
+    return {
+      title: (r.title || "").trim(),
+      image: r.image || null,
+      publish: r.publish || r.date || "Just Now",
+      desc: (r.dec || r.description || "").trim(),
+      link: r.link || ""
+    };
+  } catch (_) {
+    return null;
   }
-  return null;
 }
 
-// 4. Background Auto News Engine (Checks every 3 minutes)
-export function startAutoNewsDaemon(sock) {
-  if (global.autoNewsDaemonRunning) return;
-  global.autoNewsDaemonRunning = true;
+// 4. Low-latency Channel/Chat Auto Broadcaster (Runs every 45 Seconds)
+export function startContinuousNewsDaemon(sock) {
+  if (global.autoNewsLoopActive) return;
+  global.autoNewsLoopActive = true;
 
   setInterval(async () => {
     if (global.autoNewsSubs.size === 0) return;
 
-    const data = await fetchLankadeepaNews();
-    if (!data || !data.title) return;
+    for (const src of NEWS_SOURCES) {
+      const item = await fetchSourceNews(src.url);
+      if (!item || !item.title) continue;
 
-    // Check if new breaking news arrived
-    if (data.title !== global.lastPublishedNewsTitle) {
-      global.lastPublishedNewsTitle = data.title;
+      // Unique verification (Ensures no duplicate pushes)
+      if (global.seenNewsTitles.has(item.title)) continue;
+      recordPublishedTitle(item.title);
 
-      const card = 
-`🚨 ｡ﾟ•┈୨ *BREAKING NEWS | ලංකාදීප* ୧┈•ﾟ｡ 📰
+      const newsCard = 
+`🚨 ｡ﾟ•┈୨ *BREAKING UPDATE* ୧┈•ﾟ｡ 📰
 ━━━━━━━━━━━━━━━━━━━━━
 
-📰 *${data.title}*
+📢 *Source:* \`${src.tag}\`
+📰 *${item.title}*
 
-📅 *දිනය/වේලාව:* \`${data.publish || "මෑතකදී"}\`
+📅 *Time:* \`${item.publish}\`
 
-${data.dec ? data.dec.trim() : ""}
+${item.desc ? item.desc : ""}
 
-🔗 *වැඩිදුර තොරතුරු:* ${data.link}
+${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
 
 ━━━━━━━━━━━━━━━━━━━━━
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
+      // Broadcast across all subscribed channels and groups
       for (const targetJid of global.autoNewsSubs) {
         try {
-          if (data.image) {
+          if (item.image) {
             await sock.sendMessage(targetJid, {
-              image: { url: data.image },
-              caption: card
+              image: { url: item.image },
+              caption: newsCard
             });
           } else {
-            await sock.sendMessage(targetJid, { text: card });
+            await sock.sendMessage(targetJid, { text: newsCard });
           }
-        } catch (_) {}
+        } catch (err) {
+          console.error(`[NEWS DISPATCH FAILED to ${targetJid}]:`, err.message);
+        }
       }
     }
-  }, 180000); // 3 minutes
+  }, 45000); // 45-Second Realtime Polling
 }
 
-// 5. Main Plugin Command Execution
+// 5. Plugin Interface
 export default {
   name: "news",
-  aliases: ["lankadeepa", "nasa", "nasamission", "autonews"],
+  aliases: ["lankadeepa", "newslk", "theverge", "techcrunch", "bbc", "nasa"],
   category: "news",
-  description: "Live news from Lankadeepa and NASA with auto-broadcast engine",
+  description: "Live news feed with instant auto-publisher for WhatsApp Channels",
 
   async execute({ sock, msg, from, args, body, prefix, config: appConfig }) {
-    startAutoNewsDaemon(sock);
+    startContinuousNewsDaemon(sock);
 
     const pref = prefix || appConfig?.PREFIX || ".";
     const fullBody = body.trim();
@@ -152,136 +187,113 @@ export default {
     const opt = args[0]?.toLowerCase()?.trim();
 
     // -------------------------------------------------------------
-    // 1. Auto-News Subscriber Toggle (.news auto on/off)
+    // Channel / Group Auto-Push Controller (.news auto on <link/jid>)
     // -------------------------------------------------------------
     if (opt === "auto" || cmd === "autonews") {
       const state = (cmd === "autonews" ? args[0] : args[1])?.toLowerCase()?.trim();
+      const rawTarget = (cmd === "autonews" ? args[1] : args[2])?.trim();
+
+      let targetJid = from;
+      if (rawTarget) {
+        targetJid = await resolveChannelJid(sock, rawTarget) || rawTarget;
+      }
 
       if (state === "on") {
-        await syncNewsSub(from, false);
+        await syncSubscriber(targetJid, false);
         sock.sendMessage(from, { react: { text: "🔔", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "✨ *Auto News Alerts Activated!* අලුත් Breaking News ආපු සැණින් මෙම Chat එකට ලැබෙනු ඇත. 📰" },
+          { text: `✨ *Auto-News Activated!* New updates from all sources will now instantly auto-publish to:\n\`${targetJid}\` 🚀` },
           { quoted: msg }
         );
       }
 
       if (state === "off") {
-        await syncNewsSub(from, true);
+        await syncSubscriber(targetJid, true);
         sock.sendMessage(from, { react: { text: "🔕", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "🧹 *Auto News Alerts Disabled!* Breaking News ලැබීම නවතා දමන ලදී." },
+          { text: `🧹 *Auto-News Disabled!* Removed alerts for: \`${targetJid}\`` },
           { quoted: msg }
         );
       }
 
+      if (state === "list") {
+        let subsText = `🎀 ｡ﾟ•┈୨ *ACTIVE NEWS SUBSCRIBERS* ୧┈•ﾟ｡ 📰\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
+        global.autoNewsSubs.forEach((id, idx) => {
+          subsText += `  • ${idx + 1}. \`${id}\`\n`;
+        });
+        subsText += `\n━━━━━━━━━━━━━━━━━━━━━\n💖 *DARK-DINU MD*`;
+        return await sock.sendMessage(from, { text: subsText }, { quoted: msg });
+      }
+
       return await sock.sendMessage(
         from,
-        { text: `🌸 *භාවිතය:* \`${pref}news auto on\` හෝ \`${pref}news auto off\`` },
+        {
+          text: 
+`🌸 ｡ﾟ•┈୨ *AUTO-NEWS GUIDE* ୧┈•ﾟ｡ 🐾
+
+  • *${pref}news auto on* ➔ Current Chat එකට On කරන්න
+  • *${pref}news auto on <channel_link>* ➔ Channel එකට On කරන්න
+  • *${pref}news auto off <channel_link>* ➔ Remove කරන්න
+  • *${pref}news auto list* ➔ Active Channels/Chats බලාගන්න
+
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+        },
         { quoted: msg }
       );
     }
 
     // -------------------------------------------------------------
-    // 2. NASA News (.nasa / .news nasa)
+    // Direct Specific Category Commands
     // -------------------------------------------------------------
-    if (cmd === "nasa" || (cmd === "news" && opt === "nasa")) {
-      sock.sendMessage(from, { react: { text: "🚀", key: msg.key } }).catch(() => {});
+    const directMap = {
+      "lankadeepa": NEWS_SOURCES[0],
+      "newslk": NEWS_SOURCES[1],
+      "theverge": NEWS_SOURCES[2],
+      "techcrunch": NEWS_SOURCES[3],
+      "bbc": NEWS_SOURCES[4],
+      "nasa": NEWS_SOURCES[5]
+    };
 
-      const data = await fetchNasa("news");
-      if (!data) {
-        return await sock.sendMessage(from, { text: "💔 *NASA News fetch කිරීමට නොහැකි විය! පසුව උත්සාහ කරන්න.*" }, { quoted: msg });
-      }
+    let selectedSource = directMap[cmd] || (opt && directMap[opt]);
 
-      const nasaCard = 
-`🌌 ｡ﾟ•┈୨ *NASA RECENT NEWS* ୧┈•ﾟ｡ 🚀
-━━━━━━━━━━━━━━━━━━━━━
-
-🛸 *Title:* ${data.title || "NASA Update"}
-📅 *Date:* \`${data.publish || data.date || "Latest"}\`
-
-${data.dec || data.description || ""}
-
-${data.link ? `🔗 *Read More:* ${data.link}` : ""}
-
-━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
-      if (data.image) {
-        return await sock.sendMessage(from, { image: { url: data.image }, caption: nasaCard }, { quoted: msg });
-      } else {
-        return await sock.sendMessage(from, { text: nasaCard }, { quoted: msg });
-      }
+    if (!selectedSource) {
+      selectedSource = NEWS_SOURCES[0]; // Default to Lankadeepa
     }
 
-    // -------------------------------------------------------------
-    // 3. NASA Missions (.nasamission / .news mission)
-    // -------------------------------------------------------------
-    if (cmd === "nasamission" || (cmd === "news" && (opt === "mission" || opt === "missions"))) {
-      sock.sendMessage(from, { react: { text: "🛰️", key: msg.key } }).catch(() => {});
-
-      const data = await fetchNasa("missions");
-      if (!data) {
-        return await sock.sendMessage(from, { text: "💔 *NASA Missions fetch කිරීමට නොහැකි විය! පසුව උත්සාහ කරන්න.*" }, { quoted: msg });
-      }
-
-      const missionCard = 
-`🛰️ ｡ﾟ•┈୨ *NASA MISSIONS UPDATE* ୧┈•ﾟ｡ 🌌
-━━━━━━━━━━━━━━━━━━━━━
-
-🪐 *Mission:* ${data.title || "NASA Space Mission"}
-📅 *Date:* \`${data.publish || data.date || "Active"}\`
-
-${data.dec || data.description || ""}
-
-${data.link ? `🔗 *Details:* ${data.link}` : ""}
-
-━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
-      if (data.image) {
-        return await sock.sendMessage(from, { image: { url: data.image }, caption: missionCard }, { quoted: msg });
-      } else {
-        return await sock.sendMessage(from, { text: missionCard }, { quoted: msg });
-      }
-    }
-
-    // -------------------------------------------------------------
-    // 4. Default: Lankadeepa Live News (.news / .lankadeepa)
-    // -------------------------------------------------------------
     sock.sendMessage(from, { react: { text: "📰", key: msg.key } }).catch(() => {});
+    const item = await fetchSourceNews(selectedSource.url);
 
-    const news = await fetchLankadeepaNews();
-    if (!news) {
-      return await sock.sendMessage(from, { text: "💔 *පුවත් ලබාගැනීමට නොහැකි විය! පසුව උත්සාහ කරන්න.*" }, { quoted: msg });
+    if (!item) {
+      return await sock.sendMessage(from, { text: "💔 *Could not fetch news right now! Please try again.*" }, { quoted: msg });
     }
 
-    const newsCard = 
-`📰 ｡ﾟ•┈୨ *LANKADEEPA LATEST NEWS* ୧┈•ﾟ｡ 🇱🇰
+    const manualCard = 
+`📰 ｡ﾟ•┈୨ *${selectedSource.tag}* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
-📰 *${news.title}*
+📰 *${item.title}*
 
-📅 *දිනය/වේලාව:* \`${news.publish || "මෑතකදී"}\`
+📅 *Time:* \`${item.publish}\`
 
-${news.dec ? news.dec.trim() : ""}
+${item.desc ? item.desc : ""}
 
-🔗 *Read Full Article:* ${news.link}
+${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
 
 ━━━━━━━━━━━━━━━━━━━━━
-🍬 *OTHER NEWS COMMANDS:*
-  • *${pref}news auto on/off* ➔ Auto Breaking News Push
-  • *${pref}nasa* ➔ NASA Space News
-  • *${pref}nasamission* ➔ NASA Missions
+🍬 *AVAILABLE SOURCES:*
+  • *${pref}news lankadeepa* | *${pref}news newslk*
+  • *${pref}news theverge*   | *${pref}news techcrunch*
+  • *${pref}news bbc*        | *${pref}news nasa*
 
+📢 *Channel Auto-Push:* \`${pref}news auto on <channel_link>\`
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-    if (news.image) {
-      return await sock.sendMessage(from, { image: { url: news.image }, caption: newsCard }, { quoted: msg });
+    if (item.image) {
+      return await sock.sendMessage(from, { image: { url: item.image }, caption: manualCard }, { quoted: msg });
     } else {
-      return await sock.sendMessage(from, { text: newsCard }, { quoted: msg });
+      return await sock.sendMessage(from, { text: manualCard }, { quoted: msg });
     }
   }
 };
