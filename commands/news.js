@@ -2,7 +2,6 @@ import fs from "fs";
 import path from "path";
 import axios from "axios";
 
-// 1. API Endpoint Configuration Table
 const API_KEY = "supun-tvo5olfxylo98b8l6b9lq174";
 const NEWS_SOURCES = Object.freeze([
   { id: "lankadeepa", name: "ලංකාදීප", tag: "🇱🇰 LANKADEEPA", url: `https://supunofc.site/api/news/lankadeepa?apikey=${API_KEY}` },
@@ -14,7 +13,6 @@ const NEWS_SOURCES = Object.freeze([
   { id: "nasa_missions", name: "NASA Missions", tag: "🛰️ NASA MISSIONS", url: `https://supunofc.site/api/news/nasa?type=missions&apikey=${API_KEY}` }
 ]);
 
-// Memory Cache & Loop Trackers
 global.autoNewsSubs = global.autoNewsSubs || new Set();
 global.seenNewsTitles = global.seenNewsTitles || new Set();
 global.autoNewsLoopActive = global.autoNewsLoopActive || false;
@@ -32,7 +30,6 @@ function getDbInstance() {
   return client ? client.db(process.env.DB_NAME || "whatsapp_multi_bots") : null;
 }
 
-// 2. Storage Handlers
 async function initStorage() {
   try {
     const db = getDbInstance();
@@ -73,14 +70,13 @@ async function syncSubscriber(targetJid, isDelete = false) {
 function recordPublishedTitle(title) {
   global.seenNewsTitles.add(title);
   try {
-    const arr = Array.from(global.seenNewsTitles).slice(-150); // Keep last 150 items
+    const arr = Array.from(global.seenNewsTitles).slice(-200);
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(arr, null, 2));
   } catch (_) {}
 }
 
 initStorage();
 
-// Channel Invite Code Extractor
 function extractChannelInvite(input = "") {
   const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
   return match ? match[1] : input.trim();
@@ -101,7 +97,17 @@ async function resolveChannelJid(sock, input) {
   return null;
 }
 
-// 3. API Parser & Normalizer
+// Robust Image Downloader to Buffer (Prevents Baileys URL Dropping)
+async function fetchImageBuffer(url) {
+  if (!url) return null;
+  try {
+    const res = await axios.get(url, { responseType: "arraybuffer", timeout: 8000 });
+    return Buffer.from(res.data);
+  } catch (_) {
+    return null;
+  }
+}
+
 async function fetchSourceNews(endpointUrl) {
   try {
     const res = await axios.get(endpointUrl, { timeout: 8000 });
@@ -120,27 +126,13 @@ async function fetchSourceNews(endpointUrl) {
   }
 }
 
-// 4. Low-latency Channel/Chat Auto Broadcaster (Runs every 45 Seconds)
-export function startContinuousNewsDaemon(sock) {
-  if (global.autoNewsLoopActive) return;
-  global.autoNewsLoopActive = true;
-
-  setInterval(async () => {
-    if (global.autoNewsSubs.size === 0) return;
-
-    for (const src of NEWS_SOURCES) {
-      const item = await fetchSourceNews(src.url);
-      if (!item || !item.title) continue;
-
-      // Unique verification (Ensures no duplicate pushes)
-      if (global.seenNewsTitles.has(item.title)) continue;
-      recordPublishedTitle(item.title);
-
-      const newsCard = 
+// Safe Dispatch to Newsletter / Chat
+async function dispatchNewsPost(sock, targetJid, item, tag) {
+  const newsCard = 
 `🚨 ｡ﾟ•┈୨ *BREAKING UPDATE* ୧┈•ﾟ｡ 📰
 ━━━━━━━━━━━━━━━━━━━━━
 
-📢 *Source:* \`${src.tag}\`
+📢 *Source:* \`${tag}\`
 📰 *${item.title}*
 
 📅 *Time:* \`${item.publish}\`
@@ -152,29 +144,49 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
 ━━━━━━━━━━━━━━━━━━━━━
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      // Broadcast across all subscribed channels and groups
-      for (const targetJid of global.autoNewsSubs) {
-        try {
-          if (item.image) {
-            await sock.sendMessage(targetJid, {
-              image: { url: item.image },
-              caption: newsCard
-            });
-          } else {
-            await sock.sendMessage(targetJid, { text: newsCard });
-          }
-        } catch (err) {
-          console.error(`[NEWS DISPATCH FAILED to ${targetJid}]:`, err.message);
-        }
-      }
+  try {
+    const imgBuffer = await fetchImageBuffer(item.image);
+    if (imgBuffer) {
+      await sock.sendMessage(targetJid, {
+        image: imgBuffer,
+        caption: newsCard
+      });
+    } else {
+      await sock.sendMessage(targetJid, { text: newsCard });
     }
-  }, 45000); // 45-Second Realtime Polling
+    console.log(`[NEWS AUTO-DISPATCHED]: Successfully published to ${targetJid}`);
+    return true;
+  } catch (err) {
+    console.error(`[NEWS DISPATCH FAILED to ${targetJid}]:`, err.message);
+    return false;
+  }
 }
 
-// 5. Plugin Interface
+// 4. Background Auto News Engine (Checks every 40 Seconds)
+export function startContinuousNewsDaemon(sock) {
+  if (global.autoNewsLoopActive) return;
+  global.autoNewsLoopActive = true;
+
+  setInterval(async () => {
+    if (global.autoNewsSubs.size === 0) return;
+
+    for (const src of NEWS_SOURCES) {
+      const item = await fetchSourceNews(src.url);
+      if (!item || !item.title) continue;
+
+      if (global.seenNewsTitles.has(item.title)) continue;
+      recordPublishedTitle(item.title);
+
+      for (const targetJid of global.autoNewsSubs) {
+        await dispatchNewsPost(sock, targetJid, item, src.tag);
+      }
+    }
+  }, 40000);
+}
+
 export default {
   name: "news",
-  aliases: ["lankadeepa", "newslk", "theverge", "techcrunch", "bbc", "nasa"],
+  aliases: ["lankadeepa", "newslk", "theverge", "techcrunch", "bbc", "nasa", "autonews"],
   category: "news",
   description: "Live news feed with instant auto-publisher for WhatsApp Channels",
 
@@ -187,7 +199,7 @@ export default {
     const opt = args[0]?.toLowerCase()?.trim();
 
     // -------------------------------------------------------------
-    // Channel / Group Auto-Push Controller (.news auto on <link/jid>)
+    // Auto News Subscriber Controller (.news auto on <link/jid>)
     // -------------------------------------------------------------
     if (opt === "auto" || cmd === "autonews") {
       const state = (cmd === "autonews" ? args[0] : args[1])?.toLowerCase()?.trim();
@@ -200,10 +212,30 @@ export default {
 
       if (state === "on") {
         await syncSubscriber(targetJid, false);
+        sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
+
+        // ⚡ INSTANT DISPATCH: Check and dispatch the latest available news right now
+        const testItem = await fetchSourceNews(NEWS_SOURCES[0].url);
+        let dispatched = false;
+        if (testItem) {
+          dispatched = await dispatchNewsPost(sock, targetJid, testItem, NEWS_SOURCES[0].tag);
+          recordPublishedTitle(testItem.title);
+        }
+
         sock.sendMessage(from, { react: { text: "🔔", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: `✨ *Auto-News Activated!* New updates from all sources will now instantly auto-publish to:\n\`${targetJid}\` 🚀` },
+          {
+            text: 
+`✨ *Auto-News Activated Successfully!* 🚀
+━━━━━━━━━━━━━━━━━━━━━
+📢 *Target:* \`${targetJid}\`
+📰 *Initial Post:* ${dispatched ? "🟢 Delivered right now to channel!" : "⚠️ Pending (Bot must be Channel Admin)"}
+⚡ *Monitoring:* Lankadeepa, NewsLK, BBC, The Verge, TechCrunch, NASA
+
+_New updates will auto-publish every 40s!_
+💖 *DARK-DINU MD*`
+          },
           { quoted: msg }
         );
       }
@@ -233,10 +265,9 @@ export default {
           text: 
 `🌸 ｡ﾟ•┈୨ *AUTO-NEWS GUIDE* ୧┈•ﾟ｡ 🐾
 
-  • *${pref}news auto on* ➔ Current Chat එකට On කරන්න
   • *${pref}news auto on <channel_link>* ➔ Channel එකට On කරන්න
   • *${pref}news auto off <channel_link>* ➔ Remove කරන්න
-  • *${pref}news auto list* ➔ Active Channels/Chats බලාගන්න
+  • *${pref}news auto list* ➔ Active Channels බලාගන්න
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
@@ -245,7 +276,7 @@ export default {
     }
 
     // -------------------------------------------------------------
-    // Direct Specific Category Commands
+    // Manual Command Handling
     // -------------------------------------------------------------
     const directMap = {
       "lankadeepa": NEWS_SOURCES[0],
@@ -257,10 +288,7 @@ export default {
     };
 
     let selectedSource = directMap[cmd] || (opt && directMap[opt]);
-
-    if (!selectedSource) {
-      selectedSource = NEWS_SOURCES[0]; // Default to Lankadeepa
-    }
+    if (!selectedSource) selectedSource = NEWS_SOURCES[0];
 
     sock.sendMessage(from, { react: { text: "📰", key: msg.key } }).catch(() => {});
     const item = await fetchSourceNews(selectedSource.url);
@@ -290,8 +318,9 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
 📢 *Channel Auto-Push:* \`${pref}news auto on <channel_link>\`
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-    if (item.image) {
-      return await sock.sendMessage(from, { image: { url: item.image }, caption: manualCard }, { quoted: msg });
+    const imgBuffer = await fetchImageBuffer(item.image);
+    if (imgBuffer) {
+      return await sock.sendMessage(from, { image: imgBuffer, caption: manualCard }, { quoted: msg });
     } else {
       return await sock.sendMessage(from, { text: manualCard }, { quoted: msg });
     }
