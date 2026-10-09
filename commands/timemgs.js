@@ -1,86 +1,18 @@
-import fs from "fs";
-import path from "path";
+import { cleanPhone, initializeSessionState, updateSessionDataList } from "../core/sessionManager.js";
 
-// Global In-Memory Stores
-global.scheduledTimers = global.scheduledTimers || new Map();
-global.schedulerEngineRunning = global.schedulerEngineRunning || false;
-
-const LOCAL_STORAGE_PATH = path.join(process.cwd(), "scheduled_tasks.json");
-
-// Sub-nanosecond Phone Cleaner
-function fastExtractPhone(jid = "") {
-  const atIdx = jid.indexOf("@");
-  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
-  const colonIdx = base.indexOf(":");
-  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
-}
-
-function getBotPhone(sock) {
-  return fastExtractPhone(sock.user?.id || "");
-}
-
-function loadTasksFromFile() {
-  try {
-    if (fs.existsSync(LOCAL_STORAGE_PATH)) {
-      const raw = fs.readFileSync(LOCAL_STORAGE_PATH, "utf-8");
-      const list = JSON.parse(raw);
-      if (Array.isArray(list)) {
-        list.forEach((task) => {
-          if (task.id) global.scheduledTimers.set(task.id, task);
-        });
-      }
-    }
-  } catch (_) {}
-}
-
-function saveTasksToFile() {
-  try {
-    const list = Array.from(global.scheduledTimers.values());
-    fs.writeFileSync(LOCAL_STORAGE_PATH, JSON.stringify(list, null, 2));
-  } catch (_) {}
-}
-
-async function syncTaskToDB(task, isDelete = false) {
-  try {
-    const client = global.mongoClient || global.sharedMongoClient;
-    if (client) {
-      const db = client.db("whatsapp_multi_bots");
-      const col = db.collection("scheduled_messages");
-      if (isDelete) {
-        await col.deleteOne({ id: task.id });
-      } else {
-        await col.updateOne({ id: task.id }, { $set: task }, { upsert: true });
-      }
-    }
-  } catch (_) {}
-  saveTasksToFile();
-}
-
-(async function initSchedulerStorage() {
-  loadTasksFromFile();
-  try {
-    const client = global.mongoClient || global.sharedMongoClient;
-    if (client) {
-      const db = client.db("whatsapp_multi_bots");
-      const tasks = await db.collection("scheduled_messages").find({}).toArray();
-      tasks.forEach((t) => global.scheduledTimers.set(t.id, t));
-    }
-  } catch (_) {}
-})();
+global.schedulerRunnerActive = global.schedulerRunnerActive || false;
 
 function formatTargetJid(input = "") {
   let cleaned = input.replace(/[^0-9]/g, "");
-  if (!cleaned) return null;
-  return `${cleaned}@s.whatsapp.net`;
+  return cleaned ? `${cleaned}@s.whatsapp.net` : null;
 }
 
-// ⏰ 24/7 Precision Scheduler Engine (Strict Node Matching)
-export function startGlobalSchedulerEngine(defaultSock) {
-  if (global.schedulerEngineRunning) return;
-  global.schedulerEngineRunning = true;
+export function startSchedulerDaemon(sock) {
+  if (global.schedulerRunnerActive) return;
+  global.schedulerRunnerActive = true;
 
   setInterval(async () => {
-    if (global.scheduledTimers.size === 0) return;
+    if (global.sessionStatePool.size === 0) return;
 
     const now = new Date();
     const timeStr = now.toLocaleTimeString("en-GB", {
@@ -91,40 +23,41 @@ export function startGlobalSchedulerEngine(defaultSock) {
     });
     const todayDate = now.toLocaleDateString("en-CA", { timeZone: "Asia/Colombo" });
 
-    for (const [id, task] of global.scheduledTimers.entries()) {
-      if (task.time === timeStr) {
-        if (task.lastExecutedDate === todayDate) continue;
+    // Loop through individual session memory pools
+    for (const [botPhone, sessionState] of global.sessionStatePool.entries()) {
+      const timers = sessionState.timers || [];
+      let updated = false;
 
-        task.lastExecutedDate = todayDate;
-        syncTaskToDB(task);
+      for (const t of timers) {
+        if (t.time === timeStr && t.lastExecutedDate !== todayDate) {
+          t.lastExecutedDate = todayDate;
+          updated = true;
 
-        // කමාන්ඩ් එක දැමූ අදාළ බොට්ගේ Socket එක පමණක් සොයා ගැනීම
-        let targetSocket = null;
-        const activeSockets = global.activeSockets || new Map();
+          // Find exact matching socket
+          const activeSockets = global.activeSockets || new Map();
+          let targetSocket = null;
 
-        for (const [nodeId, s] of activeSockets.entries()) {
-          const sPhone = getBotPhone(s);
-          if (sPhone === task.senderBotPhone || String(nodeId).includes(task.senderBotPhone)) {
-            targetSocket = s;
-            break;
+          for (const [, s] of activeSockets.entries()) {
+            if (cleanPhone(s.user?.id || "") === botPhone) {
+              targetSocket = s;
+              break;
+            }
+          }
+          if (!targetSocket && cleanPhone(sock.user?.id || "") === botPhone) targetSocket = sock;
+
+          if (targetSocket) {
+            try {
+              await targetSocket.sendMessage(t.targetJid, { text: t.message });
+              console.log(`[SCHEDULE SENT via +${botPhone}]: ->${t.targetJid}`);
+            } catch (e) {
+              console.error(`[SCHEDULE SEND FAILED]:`, e.message);
+            }
           }
         }
+      }
 
-        // Pool එකේ නැත්නම් කමාන්ඩ් එක run කළ instance එක fallback කරගනී
-        if (!targetSocket && getBotPhone(defaultSock) === task.senderBotPhone) {
-          targetSocket = defaultSock;
-        }
-
-        if (targetSocket) {
-          try {
-            await targetSocket.sendMessage(task.targetJid, {
-              text: task.message
-            });
-            console.log(`[SCHEDULE SENT via +${task.senderBotPhone}]: -> ${task.targetJid} at${timeStr}`);
-          } catch (err) {
-            console.error(`[SCHEDULE SEND FAILED]:`, err.message);
-          }
-        }
+      if (updated) {
+        await updateSessionDataList(botPhone, "timers", timers);
       }
     }
   }, 25000);
@@ -132,114 +65,72 @@ export function startGlobalSchedulerEngine(defaultSock) {
 
 export default {
   name: "settime",
-  aliases: ["time", "deltime", "automsg", "scheduletime"],
+  aliases: ["time", "deltime", "scheduletime"],
   category: "utility",
   description: "Schedule daily recurring messages strictly from your own bot instance",
 
   async execute({ sock, msg, from, args, body, prefix, config }) {
-    startGlobalSchedulerEngine(sock);
+    startSchedulerDaemon(sock);
+
     const pref = prefix || config?.PREFIX || ".";
     const fullBody = body.trim();
-    const currentBotPhone = getBotPhone(sock);
+    const botPhone = cleanPhone(sock.user?.id || "");
+    const session = await initializeSessionState(botPhone);
+    const timers = session.timers || [];
 
-    // 1. LIST COMMAND: .time list හෝ .listtime
-    if (fullBody.toLowerCase().includes("list") && (fullBody.includes("time") || fullBody.includes("schedule"))) {
-      // මෙම බොට් විසින් සකසන ලද ටයිමර් පමණක් ෆිල්ටර් කිරීම
-      const myTasks = Array.from(global.scheduledTimers.values()).filter(
-        (t) => t.senderBotPhone === currentBotPhone
-      );
-
-      if (myTasks.length === 0) {
-        sock.sendMessage(from, { react: { text: "💤", key: msg.key } }).catch(() => {});
+    // 1. LIST COMMAND
+    if (fullBody.toLowerCase().includes("list") && fullBody.includes("time")) {
+      if (timers.length === 0) {
         return await sock.sendMessage(
           from,
-          { text: "🌸 *No active scheduled messages found for this bot instance!* Add one using `.settime` darling~" },
+          { text: "🌸 *No active timers found for this bot instance!* Add one using `.settime` darling~" },
           { quoted: msg }
         );
       }
 
       let listText = 
-`🎀 ｡ﾟ•┈୨ *YOUR SCHEDULED MESSAGES* ୧┈•ﾟ｡ 🐾
+`🎀 ｡ﾟ•┈୨ *YOUR ACTIVE SCHEDULED TIMERS* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
-🤖 *Sender Instance:* \`+${currentBotPhone}\`\n\n`;
+🤖 *Session Node:* \`+${botPhone}\`\n\n`;
 
-      let index = 1;
-      for (const t of myTasks) {
+      timers.forEach((t, i) => {
         const phone = t.targetJid.split("@")[0];
-        listText += `  🌸 *${index}. Target:* \`+${phone}\`\n`;
-        listText += `     ⏰ *Time:* \`${t.time}\` (Asia/Colombo)\n`;
-        listText += `     💬 *Message:* "${t.message}"\n\n`;
-        index++;
-      }
+        listText += `  🌸 *${i + 1}. Target:* \`+${phone}\`\n     ⏰ *Time:* \`${t.time}\` (Asia/Colombo)\n     💬 *Message:* "${t.message}"\n\n`;
+      });
 
       listText += `━━━━━━━━━━━━━━━━━━━━━\n_To cancel: \`${pref}deltime <number>\`_\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
-      sock.sendMessage(from, { react: { text: "📋", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(from, { text: listText }, { quoted: msg });
     }
 
-    // 2. DELETE COMMAND: .deltime <phone>
+    // 2. DELETE COMMAND
     if (fullBody.toLowerCase().startsWith(`${pref}deltime`) || fullBody.toLowerCase().startsWith(`${pref}del time`)) {
       const rawParams = fullBody.replace(new RegExp(`^\\${pref}(del\\s*time|deltime)`, "i"), "").trim();
-
-      if (!rawParams) {
-        return await sock.sendMessage(
-          from,
-          { text: `🌸 *Usage:* \`${pref}deltime <phone_number>\`\n*Example:* \`${pref}deltime 94719845166\`` },
-          { quoted: msg }
-        );
-      }
-
       const targetPhone = rawParams.split(",")[0].replace(/[^0-9]/g, "");
-      let removedCount = 0;
 
-      for (const [id, t] of global.scheduledTimers.entries()) {
-        const taskPhone = t.targetJid.split("@")[0];
-        if ((taskPhone === targetPhone || id.includes(targetPhone)) && t.senderBotPhone === currentBotPhone) {
-          global.scheduledTimers.delete(id);
-          await syncTaskToDB({ id }, true);
-          removedCount++;
-        }
-      }
+      const filtered = timers.filter((t) => !t.targetJid.includes(targetPhone));
+      const removedCount = timers.length - filtered.length;
 
       if (removedCount > 0) {
+        await updateSessionDataList(botPhone, "timers", filtered);
         sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: `🧹 *Removed:* Cleared *${removedCount}* timer(s) from node \`+${currentBotPhone}\` softly!` },
+          { text: `🧹 *Removed:* Cleared *${removedCount}* timer(s) from node \`+${botPhone}\` softly!` },
           { quoted: msg }
         );
       } else {
-        return await sock.sendMessage(
-          from,
-          { text: `🌸 *No timers found* for \`+${targetPhone}\` under your bot instance!` },
-          { quoted: msg }
-        );
+        return await sock.sendMessage(from, { text: `🌸 *No timers found for* \`+${targetPhone}\`!` }, { quoted: msg });
       }
     }
 
-    // 3. SET COMMAND: .settime <number>,<msg>,<HH:mm>
+    // 3. SET COMMAND
     const content = fullBody.replace(new RegExp(`^\\${pref}(set\\s*time|settime|time)`, "i"), "").trim();
     const parts = content.split(",");
 
     if (parts.length < 3) {
-      sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        {
-          text: 
-`🌸 ｡ﾟ•┈୨ *SET TIMER GUIDE* ୧┈•ﾟ｡ 🐾
-
-  🍭 *Command:*
-  \`${pref}settime <number>,<message>,<HH:mm>\`
-
-  ✨ *Example:*
-  \`${pref}settime 94719845166,නිදියගන්නේ නැද්ද බන්. 😁,23:28\`
-
-  ⏰ *Note:* Time must be in 24-hour format (\`HH:mm\`).
-
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
-        },
+        { text: `🌸 *Usage:* \`${pref}settime <number>,<message>,<HH:mm>\`\n*Example:* \`${pref}settime 94719845166,Good Morning 🥰,06:00\`` },
         { quoted: msg }
       );
     }
@@ -252,47 +143,39 @@ export default {
     const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
     if (!targetJid || !timeRegex.test(timePart) || !messagePart) {
-      sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: "🌸 *Oopsie!* Invalid format. Please check the phone number and 24-hour time (\`HH:mm\`)." },
-        { quoted: msg }
-      );
+      return await sock.sendMessage(from, { text: "🌸 *Invalid format!* Please check the phone number and 24h time (`HH:mm`)." }, { quoted: msg });
     }
 
-    // Node-bound Unique Task ID
-    const taskId = `${currentBotPhone}_${inputPhone.replace(/[^0-9]/g, "")}_${timePart.replace(":", "")}`;
     const newTask = {
-      id: taskId,
-      senderBotPhone: currentBotPhone, // කමාන්ඩ් එක දැමූ ඔබගේ බොට්ගේ අංකය
+      id: `${botPhone}_${inputPhone.replace(/[^0-9]/g, "")}_${timePart.replace(":", "")}`,
       targetJid,
       message: messagePart,
       time: timePart,
-      createdBy: from,
       createdAt: new Date().toISOString(),
       lastExecutedDate: ""
     };
 
-    global.scheduledTimers.set(taskId, newTask);
-    await syncTaskToDB(newTask);
+    timers.push(newTask);
+    await updateSessionDataList(botPhone, "timers", timers);
 
     sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
-
-    const successCard = 
+    return await sock.sendMessage(
+      from,
+      {
+        text: 
 `🎀 ｡ﾟ•┈୨ *TIMER SCHEDULED SOFTLY* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
-  🤖 *Sending Node:* \`+${currentBotPhone}\` (Your Bot Only)
+  🤖 *Sending Node:* \`+${botPhone}\` (Locked Session)
   📱 *Delivering To:* \`+${inputPhone.replace(/[^0-9]/g, "")}\`
   ⏰ *Daily Time:* \`${timePart}\` (Asia/Colombo)
   💌 *Message:* "${messagePart}"
-  🔄 *Repeat:* Everyday Daily
 
 ━━━━━━━━━━━━━━━━━━━━━
-_This message will strictly be sent from your own bot instance at the exact minute! (˶˃ ᵕ ˂˶)_
-
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
-    return await sock.sendMessage(from, { text: successCard }, { quoted: msg });
+_This message will strictly dispatch from your session node every day! (˶˃ ᵕ ˂˶)_
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+      },
+      { quoted: msg }
+    );
   }
 };
