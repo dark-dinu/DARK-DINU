@@ -1,6 +1,15 @@
-import { downloadMediaMessage } from "@whiskeysockets/baileys";
+import { downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { Sticker, StickerTypes } from "wa-sticker-formatter";
 import axios from "axios";
+
+// Helper: Stream එක Buffer එකක් කර ගැනීම
+async function streamToBuffer(stream) {
+  const chunks = [];
+  for await (const chunk of stream) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
 
 export default {
   name: "vsticker",
@@ -16,9 +25,7 @@ export default {
     const packName = config?.STICKER_NAME || "DARK-DINU MD";
     const authorName = config?.STICKER_AUTHOR || "Heshan OFC";
 
-    // ==========================================
-    // 1. ATTP / TTP (ANIMATED TEXT STICKER)
-    // ==========================================
+    // 1. ATTP (ANIMATED TEXT STICKER)
     if (cmd === "attp" || cmd === "ttp") {
       const text = args.join(" ").trim();
       if (!text) {
@@ -32,13 +39,11 @@ export default {
       sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
 
       try {
-        // High-speed reliable ATTP API endpoint
         const attpUrl = `https://api.giftedtech.web.id/api/maker/attp?apikey=gifted&text=${encodeURIComponent(text)}`;
         const res = await axios.get(attpUrl, { responseType: "arraybuffer", timeout: 12000 }).catch(() => null);
 
         let gifBuffer = res?.data;
 
-        // Fallback endpoint if primary fails
         if (!gifBuffer) {
           const fallbackRes = await axios.get(
             `https://api-fix.onrender.com/api/maker/attp?text=${encodeURIComponent(text)}`,
@@ -51,52 +56,44 @@ export default {
           pack: packName,
           author: authorName,
           type: StickerTypes.FULL,
-          quality: 60
+          quality: 50
         });
 
         const stickerBuffer = await sticker.toBuffer();
         sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
 
-        return await sock.sendMessage(
-          from,
-          { sticker: stickerBuffer },
-          { quoted: msg }
-        );
+        return await sock.sendMessage(from, { sticker: stickerBuffer }, { quoted: msg });
       } catch (err) {
-        console.error("[ATTP ERR]:", err.message);
         sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          { text: `❌ Text sticker සෑදීමේදී දෝෂයක් ආවා: ${err.message}` },
-          { quoted: msg }
-        );
+        return await sock.sendMessage(from, { text: `❌ Text sticker සෑදීමේදී දෝෂයක් ආවා: ${err.message}` }, { quoted: msg });
       }
     }
 
-    // ==========================================
-    // 2. VIDEO / GIF TO STICKER (VSTICKER)
-    // ==========================================
-    const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-    const isQuotedVideo = quoted?.videoMessage;
-    const isDirectVideo = msg.message?.videoMessage;
-    const targetVideo = isQuotedVideo || isDirectVideo;
+    // 2. VIDEO / GIF TO STICKER (.vs / .vsticker)
+    const rawMsg = msg.message?.ephemeralMessage?.message || msg.message;
+    const quotedMsg = rawMsg?.extendedTextMessage?.contextInfo?.quotedMessage;
+    const targetMsg = quotedMsg || rawMsg;
 
-    if (!targetVideo) {
+    // Detect video or gif inside targets (handling ephemeral & viewOnce wrappers)
+    const videoObj =
+      targetMsg?.videoMessage ||
+      targetMsg?.viewOnceMessageV2?.message?.videoMessage ||
+      targetMsg?.viewOnceMessage?.message?.videoMessage;
+
+    if (!videoObj) {
       return await sock.sendMessage(
         from,
         {
-          text: `🎥 *කරුණාකර තත්පර 10කට අඩු Video හෝ GIF එකකට reply කර \`${pref}vs\` හෝ \`${pref}vsticker\` ගසන්න!*`
+          text: `🎥 *කරුණාකර තත්පර 1-9 අතර කුඩා Video හෝ GIF එකකට Reply කර \`${pref}vs\` ගසන්න!*`
         },
         { quoted: msg }
       );
     }
 
-    // Duration check (Stickers need to be under 10s to avoid WhatsApp errors)
-    const duration = targetVideo.seconds || 0;
-    if (duration > 10) {
+    if (videoObj.seconds > 10) {
       return await sock.sendMessage(
         from,
-        { text: "⚠️ Video එක තත්පර 10කට වඩා අඩු විය යුතුය!" },
+        { text: "⚠️ Video එක තත්පර 10කට වඩා අඩු විය යුතුය! (WhatsApp Animated Sticker සීමාව)" },
         { quoted: msg }
       );
     }
@@ -104,37 +101,34 @@ export default {
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
     try {
-      // Direct in-memory buffer download via Baileys native downloader
-      const mediaMessageObj = isQuotedVideo ? { message: { videoMessage: quoted.videoMessage } } : msg;
-      const mediaBuffer = await downloadMediaMessage(
-        mediaMessageObj,
-        "buffer",
-        {},
-        { logger: console }
-      );
+      // Baileys native media stream download
+      const stream = await downloadContentFromMessage(videoObj, "video");
+      const videoBuffer = await streamToBuffer(stream);
 
-      const sticker = new Sticker(mediaBuffer, {
+      if (!videoBuffer || videoBuffer.length === 0) {
+        throw new Error("Video stream download failed.");
+      }
+
+      // Convert using wa-sticker-formatter
+      const sticker = new Sticker(videoBuffer, {
         pack: packName,
         author: authorName,
         type: StickerTypes.FULL,
-        quality: 40 // Optimized quality for animated webp WhatsApp limits (under 1MB)
+        quality: 30, // Optimized to strictly keep under WhatsApp's 1MB payload limit
+        background: "transparent"
       });
 
       const stickerBuffer = await sticker.toBuffer();
-      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
 
-      await sock.sendMessage(
-        from,
-        { sticker: stickerBuffer },
-        { quoted: msg }
-      );
+      sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
+      await sock.sendMessage(from, { sticker: stickerBuffer }, { quoted: msg });
 
     } catch (err) {
-      console.error("[VSTICKER ERR]:", err.message);
+      console.error("[VSTICKER ERROR]:", err);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: `❌ Video එක sticker එකක් බවට හැරවීමේදී දෝෂයක් ආවා: ${err.message}` },
+        { text: `❌ Sticker එක හැදීමේදී දෝෂයක් ආවා: ${err.message}\n_කරුණාකර තත්පර 3-5 ක කුඩා Video හෝ GIF එකක් උත්සාහ කරන්න._` },
         { quoted: msg }
       );
     }
