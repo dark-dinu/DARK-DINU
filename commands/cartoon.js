@@ -1,14 +1,55 @@
 import axios from "axios";
 
 const API_KEY = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
-const SEARCH_API = "https://api.chamindu.site/api/v1/movies/cartoons/search";
 const INFO_API = "https://api.chamindu.site/api/v1/movies/cartoons/infodl";
 
 global.cartoonSearchSessions = global.cartoonSearchSessions || new Map();
 global.cartoonEpSessions = global.cartoonEpSessions || new Map();
 global.cartoonHooked = global.cartoonHooked || new WeakSet();
 
-// Parse R2/Direct Links prioritised for direct upload
+// 1. Direct Web Scraper for Cartoons.lk (Bypasses limited API search)
+async function searchCartoonsDirect(query) {
+  try {
+    // cartoons.lk native search endpoint
+    const searchUrl = `https://cartoons.lk/?s=${encodeURIComponent(query)}`;
+    const { data: html } = await axios.get(searchUrl, {
+      timeout: 10000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+      }
+    });
+
+    const results = [];
+    // Regular expression to extract post links and titles from WordPress layout
+    const regex = /<h[23][^>]*class="[^"]*entry-title[^"]*"[^>]*>\s*<a\s+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
+    let match;
+    while ((match = regex.exec(html)) !== null) {
+      const link = match[1];
+      const title = match[2].trim().replace(/&#8211;/g, "-").replace(/&#8217;/g, "'");
+      if (link.includes("cartoons.lk") && !results.some(r => r.link === link)) {
+        results.push({ title, link });
+      }
+      if (results.length >= 8) break;
+    }
+
+    // Fallback regex if theme is different
+    if (results.length === 0) {
+      const fallbackRegex = /<a\s+href="(https:\/\/cartoons\.lk\/[^"]+\/)"\s+rel="bookmark">([^<]+)<\/a>/gi;
+      let fbMatch;
+      while ((fbMatch = fallbackRegex.exec(html)) !== null) {
+        results.push({ title: fbMatch[2].trim(), link: fbMatch[1] });
+        if (results.length >= 8) break;
+      }
+    }
+
+    return results;
+  } catch (err) {
+    console.error("[DIRECT CARTOON SEARCH FAILED]:", err.message);
+    return [];
+  }
+}
+
+// 2. Parse Episodes from API
 function parseEpisodes(rawDownloads = []) {
   const epMap = new Map();
   rawDownloads.forEach((item) => {
@@ -31,6 +72,7 @@ function parseEpisodes(rawDownloads = []) {
   return Array.from(epMap.values()).sort((a, b) => a.epNumber - b.epNumber);
 }
 
+// 3. Fetch Full Info using Chamindu Infodl API
 async function fetchAndSendDetails(sock, from, cartoonUrl, originalMsg) {
   sock.sendMessage(from, { react: { text: "⏳", key: originalMsg.key } }).catch(() => {});
 
@@ -59,18 +101,18 @@ async function fetchAndSendDetails(sock, from, cartoonUrl, originalMsg) {
 
 `;
 
-    episodes.slice(0, 20).forEach((ep) => {
+    episodes.slice(0, 15).forEach((ep) => {
       card += `  • *${ep.epNumber}* ➔ Episode ${ep.epNumber}\n`;
     });
 
-    if (episodes.length > 20) {
-      card += `\n_...තවත් Episodes ${episodes.length - 20} ක් ඇත._\n`;
+    if (episodes.length > 15) {
+      card += `\n_...තවත් Episodes ${episodes.length - 15} ක් ඇත._\n`;
     }
 
     card += 
 `━━━━━━━━━━━━━━━━━━━━━
-💬 *Episode Number එක (1, 2, 3...) Reply කරන්න.*
-_Video File එක කෙලින්ම Chat එකට Upload වනු ඇත!_ 📥
+💬 *Episode එකේ අංකය (1, 2, 3...) Reply කරන්න.*
+_Video Document එක කෙලින්ම එවනු ඇත!_ 📥
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
     sock.sendMessage(from, { react: { text: "🎬", key: originalMsg.key } }).catch(() => {});
@@ -91,6 +133,7 @@ _Video File එක කෙලින්ම Chat එකට Upload වනු ඇත!
   }
 }
 
+// 4. Interactive Reply Listener
 function hookCartoonInteractive(sock) {
   if (!sock || global.cartoonHooked.has(sock)) return;
   global.cartoonHooked.add(sock);
@@ -115,12 +158,12 @@ function hookCartoonInteractive(sock) {
       if (searchSession.from === from && chosenNum >= 1 && chosenNum <= searchSession.results.length) {
         global.cartoonSearchSessions.delete(quotedId);
         const selected = searchSession.results[chosenNum - 1];
-        await fetchAndSendDetails(sock, from, selected.link || selected.url, m);
+        await fetchAndSendDetails(sock, from, selected.link, m);
         return;
       }
     }
 
-    // STEP 2: Episode Video Direct Upload
+    // STEP 2: Episode Video Upload
     if (global.cartoonEpSessions.has(quotedId)) {
       const epSession = global.cartoonEpSessions.get(quotedId);
       if (epSession.from === from && chosenNum >= 1 && chosenNum <= epSession.episodes.length) {
@@ -128,21 +171,19 @@ function hookCartoonInteractive(sock) {
         const targetVideoUrl = ep.streamLink || ep.gdriveLink;
 
         if (!targetVideoUrl) {
-          return await sock.sendMessage(from, { text: "💔 මෙම Episode එක සඳහා direct video link එකක් හමු නොවීය." }, { quoted: m });
+          return await sock.sendMessage(from, { text: "💔 මෙම Episode එකට download link එකක් හමු නොවීය." }, { quoted: m });
         }
 
-        // Upload progress reactions & alert
         sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
         const statusMsg = await sock.sendMessage(
           from,
-          { text: `🚀 *Uploading Episode ${chosenNum}...*\n_ෆයිල් එක විශාල බැවින් (200MB+) WhatsApp වෙත upload වීමට තත්පර කිහිපයක් ගතවේ, රැඳී සිටින්න..._` },
+          { text: `🚀 *Uploading Episode ${chosenNum}...*\n_වීඩියෝව chat එකට upload වෙමින් පවතී, සුළු මොහොතක් රැඳී සිටින්න..._` },
           { quoted: m }
         );
 
         try {
           const fileName = `${epSession.title.replace(/[^a-zA-Z0-9 ]/g, "").slice(0, 30)} - E${chosenNum}.mkv`;
 
-          // Send directly as Document (Works seamlessly up to 2GB without local server buffering)
           await sock.sendMessage(
             from,
             {
@@ -160,11 +201,10 @@ function hookCartoonInteractive(sock) {
           }
 
         } catch (uploadErr) {
-          console.error("[VIDEO UPLOAD ERR]:", uploadErr.message);
           sock.sendMessage(from, { react: { text: "⚠️", key: m.key } }).catch(() => {});
           await sock.sendMessage(
             from,
-            { text: `⚠️ Video එක auto upload කිරීමට නොහැකි විය (File Size Limit). කෙලින්ම download කරගන්න ලින්ක් එක මෙන්න:\n\n🔗 ${targetVideoUrl}` },
+            { text: `⚠️ Video එක auto upload වීමට නොහැකි විය. Direct link එක:\n\n🔗 ${targetVideoUrl}` },
             { quoted: m }
           );
         }
@@ -177,7 +217,7 @@ export default {
   name: "cartoon",
   aliases: ["cartoondl", "ben10", "cartoons"],
   category: "download",
-  description: "Search and directly download Sinhala dubbed cartoon video files",
+  description: "Search and download Sinhala dubbed cartoon video files",
 
   async execute({ sock, msg, from, args, prefix, config: appConfig }) {
     hookCartoonInteractive(sock);
@@ -188,7 +228,7 @@ export default {
     if (!query) {
       return await sock.sendMessage(
         from,
-        { text: `🌸 *භාවිතය:* \`${pref}cartoon <කාටූන් නම>\`\n*උදාහරණ:* \`${pref}cartoon ben 10\`` },
+        { text: `🌸 *භාවිතය:* \`${pref}cartoon <කාටූන් නම>\`\n*උදාහරණ:* \`${pref}cartoon avatar\` හෝ \`${pref}cartoon scooby\`` },
         { quoted: msg }
       );
     }
@@ -199,47 +239,53 @@ export default {
 
     sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
 
-    try {
-      const searchUrl = `${SEARCH_API}?q=${encodeURIComponent(query)}&api_key=${API_KEY}`;
-      const { data: res } = await axios.get(searchUrl, { timeout: 15000 });
-      const results = res?.data || res?.result || res?.results || [];
+    // Try Cartoons.lk Direct Search
+    let results = await searchCartoonsDirect(query);
 
-      if (!results || results.length === 0) {
-        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(from, { text: `💔 \`"${query}"\` නමින් කාටූන් හමු නොවීය.` }, { quoted: msg });
-      }
+    // Fallback: If direct search fails, try chamindu search API
+    if (results.length === 0) {
+      try {
+        const { data: res } = await axios.get(`https://api.chamindu.site/api/v1/movies/cartoons/search?q=${encodeURIComponent(query)}&api_key=${API_KEY}`, { timeout: 10000 });
+        const apiData = res?.data || res?.result || [];
+        if (Array.isArray(apiData) && apiData.length > 0) {
+          results = apiData.map(i => ({ title: i.title || i.name, link: i.link || i.url }));
+        }
+      } catch (_) {}
+    }
 
-      let searchCard = 
+    if (results.length === 0) {
+      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(from, { text: `💔 \`"${query}"\` නමින් cartoons.lk හි කිසිදු කාටූන් එකක් සොයාගත නොහැකි විය.` }, { quoted: msg });
+    }
+
+    let searchCard = 
 `🎬 ｡ﾟ•┈୨ *CARTOON SEARCH RESULTS* ୧┈•ﾟ｡ 🔍
 ━━━━━━━━━━━━━━━━━━━━━
 
 🔍 *Search:* \`${query}\`
-📦 *Found:* ${results.length} Cartoons
+📦 *Found:* ${results.length} Matches
 
 `;
 
-      results.slice(0, 10).forEach((item, idx) => {
-        searchCard += `  *${idx + 1}.* ${item.title || item.name || "Cartoon"}\n`;
-      });
+    results.forEach((item, idx) => {
+      searchCard += `  *${idx + 1}.* ${item.title}\n`;
+    });
 
-      searchCard += 
+    searchCard += 
 `━━━━━━━━━━━━━━━━━━━━━
-💬 *Reply with the number (1-${Math.min(results.length, 10)}) to view episodes!*
+💬 *කැමති කාටූන් එකේ අංකය (1-${results.length}) Reply කරන්න!*
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
-      const sentMsg = await sock.sendMessage(from, { text: searchCard }, { quoted: msg });
+    sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
+    const sentMsg = await sock.sendMessage(from, { text: searchCard }, { quoted: msg });
 
-      if (sentMsg?.key?.id) {
-        global.cartoonSearchSessions.set(sentMsg.key.id, {
-          from,
-          results: results.slice(0, 10),
-          time: Date.now()
-        });
-        setTimeout(() => global.cartoonSearchSessions.delete(sentMsg.key.id), 300000);
-      }
-    } catch (err) {
-      sock.sendMessage(from, { text: `⚠️ සෙවීමේදී දෝෂයක් සිදු විය: ${err.message}` }, { quoted: msg });
+    if (sentMsg?.key?.id) {
+      global.cartoonSearchSessions.set(sentMsg.key.id, {
+        from,
+        results,
+        time: Date.now()
+      });
+      setTimeout(() => global.cartoonSearchSessions.delete(sentMsg.key.id), 300000);
     }
   }
 };
