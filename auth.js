@@ -1,29 +1,43 @@
 import { proto, initAuthCreds, BufferJSON } from "@whiskeysockets/baileys";
 
 export async function useMongoDBAuthState(collection) {
+  const localCache = new Map();
+
   const writeData = async (data, id) => {
     try {
-      return await collection.replaceOne(
+      localCache.set(id, data);
+      await collection.replaceOne(
         { _id: id },
         { _id: id, data: JSON.stringify(data, BufferJSON.replacer) },
         { upsert: true }
       );
     } catch (e) {
-      console.error("Write error:", e);
+      console.error(`[AUTH WRITE ERR - ${id}]:`, e.message);
     }
   };
 
   const readData = async (id) => {
     try {
+      if (localCache.has(id)) return localCache.get(id);
       const doc = await collection.findOne({ _id: id });
-      if (!doc || !doc.data) return null;
-      return JSON.parse(doc.data, BufferJSON.reviver);
+      if (!doc?.data) return null;
+      const parsed = JSON.parse(doc.data, BufferJSON.reviver);
+      localCache.set(id, parsed);
+      return parsed;
     } catch {
       return null;
     }
   };
 
+  const removeData = async (id) => {
+    try {
+      localCache.delete(id);
+      await collection.deleteOne({ _id: id });
+    } catch (_) {}
+  };
+
   const creds = (await readData("creds")) || initAuthCreds();
+  localCache.set("creds", creds);
 
   return {
     state: {
@@ -31,19 +45,38 @@ export async function useMongoDBAuthState(collection) {
       keys: {
         get: async (type, ids) => {
           const data = {};
-          const keysToFetch = ids.map((id) => `${type}-${id}`);
-          const docs = await collection.find({ _id: { $in: keysToFetch } }).toArray();
+          const missingIds = [];
 
-          for (const doc of docs) {
-            try {
-              let value = JSON.parse(doc.data, BufferJSON.reviver);
-              if (type === "app-state-sync-key" && value) {
-                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+          for (const id of ids) {
+            const key = `${type}-${id}`;
+            if (localCache.has(key)) {
+              let val = localCache.get(key);
+              if (type === "app-state-sync-key" && val) {
+                val = proto.Message.AppStateSyncKeyData.fromObject(val);
               }
-              const id = doc._id.replace(`${type}-`, "");
-              data[id] = value;
-            } catch {}
+              data[id] = val;
+            } else {
+              missingIds.push({ id, key });
+            }
           }
+
+          if (missingIds.length > 0) {
+            const keysToFetch = missingIds.map(m => m.key);
+            const docs = await collection.find({ _id: { $in: keysToFetch } }).toArray();
+
+            for (const doc of docs) {
+              try {
+                let value = JSON.parse(doc.data, BufferJSON.reviver);
+                localCache.set(doc._id, value);
+                if (type === "app-state-sync-key" && value) {
+                  value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                }
+                const id = doc._id.replace(`${type}-`, "");
+                data[id] = value;
+              } catch (_) {}
+            }
+          }
+
           return data;
         },
         set: async (data) => {
@@ -53,6 +86,7 @@ export async function useMongoDBAuthState(collection) {
               const value = data[category][id];
               const key = `${category}-${id}`;
               if (value) {
+                localCache.set(key, value);
                 operations.push({
                   replaceOne: {
                     filter: { _id: key },
@@ -61,10 +95,9 @@ export async function useMongoDBAuthState(collection) {
                   }
                 });
               } else {
+                localCache.delete(key);
                 operations.push({
-                  deleteOne: {
-                    filter: { _id: key }
-                  }
+                  deleteOne: { filter: { _id: key } }
                 });
               }
             }
@@ -75,6 +108,12 @@ export async function useMongoDBAuthState(collection) {
         }
       }
     },
-    saveCreds: () => writeData(creds, "creds")
+    saveCreds: () => writeData(creds, "creds"),
+    clearSession: async () => {
+      try {
+        localCache.clear();
+        await collection.drop().catch(() => {});
+      } catch (_) {}
+    }
   };
 }
