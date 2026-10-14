@@ -5,66 +5,144 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>DARK-DINU OFC // CHANNEL REACT ENGINE</title>
   
+  <link rel="icon" type="image/jpeg" href="https://files.catbox.moe/s1q558.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700;800&family=JetBrains+Mono:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
 
   <style>
     :root {
       --bg: #050609;
-      --card-bg: #0d0f16;
-      --card-border: rgba(255, 45, 85, 0.22);
+      --card-bg: rgba(13, 16, 25, 0.88);
+      --card-border: rgba(255, 45, 85, 0.25);
       --card-border-subtle: rgba(255, 255, 255, 0.08);
       --accent-pink: #ff2d55;
-      --accent-pink-glow: rgba(255, 45, 85, 0.35);
+      --accent-pink-glow: rgba(255, 45, 85, 0.38);
       --accent-cyan: #00f0ff;
+      --accent-cyan-glow: rgba(0, 240, 255, 0.25);
+      --accent-emerald: #10b981;
       --text-main: #f8fafc;
       --text-muted: #94a3b8;
+      --text-dim: #475569;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
-    body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 16px; position: relative; }
-    .ambient-glow-1 { position: fixed; top: -100px; left: 50%; transform: translateX(-50%); width: 500px; height: 350px; background: radial-gradient(circle, rgba(255, 45, 85, 0.2) 0%, transparent 70%); pointer-events: none; z-index: 0; filter: blur(50px); }
+    body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px; position: relative; overflow-x: hidden; }
+    
+    .bg-grid { position: fixed; inset: 0; background-image: linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 32px 32px; pointer-events: none; z-index: 0; }
+    .ambient-glow-1 { position: fixed; top: -120px; left: 50%; transform: translateX(-50%); width: 520px; height: 380px; background: radial-gradient(circle, rgba(255, 45, 85, 0.22) 0%, transparent 70%); pointer-events: none; z-index: 0; filter: blur(55px); }
 
     .modal-box {
-      width: 100%; max-width: 440px; background: var(--card-bg); border: 1px solid var(--card-border);
-      border-radius: 26px; padding: 26px 22px; position: relative; z-index: 10; box-shadow: 0 15px 45px rgba(0, 0, 0, 0.7);
+      width: 100%; max-width: 460px; background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 28px; padding: 26px 22px; position: relative; z-index: 10; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75); backdrop-filter: blur(20px);
     }
 
-    .daily-limit-badge { display: flex; align-items: center; justify-content: space-between; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.25); border-radius: 12px; padding: 8px 12px; margin-bottom: 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .head-brand { display: flex; align-items: center; gap: 10px; }
+    .brand-logo { width: 34px; height: 34px; border-radius: 9px; object-fit: cover; border: 1.5px solid var(--accent-pink); box-shadow: 0 0 12px var(--accent-pink-glow); }
+    .head-title { font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 800; color: #fff; }
+
+    .daily-limit-badge {
+      display: flex; align-items: center; justify-content: space-between;
+      background: linear-gradient(90deg, rgba(0, 240, 255, 0.08), rgba(255, 45, 85, 0.08));
+      border: 1px solid rgba(0, 240, 255, 0.22); border-radius: 14px; padding: 10px 14px; margin-bottom: 16px;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    }
+    .daily-limit-val { font-weight: 800; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px; font-size: 13px; }
+
     .input-wrapper { position: relative; margin: 12px 0 16px 0; }
-    .input-wrapper i { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #475569; font-size: 14px; }
-    input[type="text"] { width: 100%; background: rgba(6, 7, 10, 0.85); border: 1px solid var(--card-border-subtle); border-radius: 14px; padding: 15px 16px 15px 44px; font-size: 14px; font-family: 'JetBrains Mono', monospace; color: #fff; outline: none; }
-    input:focus { border-color: var(--accent-pink); box-shadow: 0 0 20px var(--accent-pink-glow); }
+    .input-wrapper i { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--text-dim); font-size: 14px; }
+    input[type="text"] {
+      width: 100%; background: rgba(6, 7, 10, 0.85); border: 1px solid var(--card-border-subtle); border-radius: 14px;
+      padding: 15px 16px 15px 44px; font-size: 14px; font-family: 'JetBrains Mono', monospace; color: #fff; outline: none; transition: 0.25s;
+    }
+    input[type="text"]:focus { border-color: var(--accent-pink); box-shadow: 0 0 20px var(--accent-pink-glow); }
 
-    .btn-submit { width: 100%; padding: 15px; border-radius: 14px; border: none; background: linear-gradient(135deg, var(--accent-pink) 0%, #d81b43 100%); color: #fff; font-size: 13px; font-weight: 800; cursor: pointer; box-shadow: 0 6px 25px var(--accent-pink-glow); display: flex; align-items: center; justify-content: center; gap: 8px; }
-    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-submit {
+      width: 100%; padding: 15px; border-radius: 14px; border: none; background: linear-gradient(135deg, var(--accent-pink) 0%, #d81b43 100%);
+      color: #fff; font-size: 13px; font-weight: 800; cursor: pointer; box-shadow: 0 6px 25px var(--accent-pink-glow);
+      display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.25s;
+    }
+    .btn-submit:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 8px 30px var(--accent-pink-glow); }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; filter: grayscale(1); }
 
-    .emoji-picker-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 14px 0 20px 0; }
-    .emoji-item { aspect-ratio: 1; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--card-border-subtle); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; user-select: none; }
-    .emoji-item.selected { background: rgba(255, 45, 85, 0.25); border-color: var(--accent-pink); box-shadow: 0 0 12px var(--accent-pink-glow); }
+    /* Category Navigation Tabs */
+    .cat-nav-tabs { display: flex; gap: 6px; margin: 14px 0 12px 0; overflow-x: auto; padding-bottom: 4px; }
+    .cat-nav-tabs::-webkit-scrollbar { display: none; }
+    .cat-pill {
+      padding: 6px 12px; border-radius: 10px; font-size: 11px; font-weight: 700;
+      background: rgba(255, 255, 255, 0.04); border: 1px solid var(--card-border-subtle); color: var(--text-muted);
+      cursor: pointer; white-space: nowrap; transition: 0.2s; font-family: 'JetBrains Mono', monospace;
+    }
+    .cat-pill.active { background: var(--accent-pink); color: #fff; border-color: var(--accent-pink); box-shadow: 0 0 12px var(--accent-pink-glow); }
+
+    /* Emoji Grids Container */
+    .emoji-picker-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 6px 0 16px 0; }
+    .emoji-item {
+      aspect-ratio: 1; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--card-border-subtle);
+      border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 21px;
+      cursor: pointer; user-select: none; transition: 0.2s;
+    }
+    .emoji-item:hover { background: rgba(255, 45, 85, 0.15); border-color: var(--accent-pink); transform: scale(1.08); }
+    .emoji-item.selected { background: rgba(255, 45, 85, 0.3); border-color: var(--accent-pink); box-shadow: 0 0 14px var(--accent-pink-glow); transform: scale(1.05); }
+
+    /* Live Selected Queue Bar */
+    .selected-tray {
+      background: rgba(6, 7, 10, 0.6); border: 1px dashed var(--card-border-subtle); border-radius: 12px;
+      padding: 10px 12px; margin-bottom: 16px; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .tray-emojis { display: flex; gap: 6px; flex-wrap: wrap; font-size: 18px; }
+    .btn-clear-selection { background: none; border: none; color: var(--text-dim); font-size: 11px; font-weight: 700; cursor: pointer; }
+    .btn-clear-selection:hover { color: var(--accent-pink); }
+
+    /* Success Cyber Modal */
+    .success-overlay {
+      position: absolute; inset: 0; background: rgba(5, 6, 9, 0.95); backdrop-filter: blur(14px);
+      border-radius: 26px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 24px; text-align: center; gap: 14px; opacity: 0; pointer-events: none; transition: 0.35s ease; z-index: 50;
+    }
+    .success-overlay.active { opacity: 1; pointer-events: all; }
+    .success-icon-wrap {
+      width: 64px; height: 64px; border-radius: 50%; background: rgba(16, 185, 129, 0.15);
+      border: 2px solid var(--accent-emerald); display: flex; align-items: center; justify-content: center;
+      color: var(--accent-emerald); font-size: 26px; box-shadow: 0 0 25px rgba(16, 185, 129, 0.4); animation: pulse 1.8s infinite;
+    }
+    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
   </style>
 </head>
 <body>
 
+  <div class="bg-grid"></div>
   <div class="ambient-glow-1"></div>
 
   <div class="modal-box">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
-      <h3 style="font-size:16px; font-weight:800; color:#fff;"><i class="fa-solid fa-icons" style="color: var(--accent-pink); margin-right:6px;"></i> Channel React Tool</h3>
-      <a href="/" style="color:var(--text-muted); text-decoration:none;"><i class="fa-solid fa-xmark"></i></a>
+    
+    <!-- Top Header -->
+    <div class="modal-head">
+      <div class="head-brand">
+        <img class="brand-logo" src="https://files.catbox.moe/s1q558.jpg" alt="Logo">
+        <div>
+          <h3 class="head-title">CHANNEL REACT</h3>
+          <p style="font-size: 9px; font-family:'JetBrains Mono'; color:var(--accent-cyan); font-weight:800; letter-spacing:1px;">MULTI-DEVICE BOT CLUSTER</p>
+        </div>
+      </div>
+      <a href="/" style="color:var(--text-muted); font-size: 16px; text-decoration:none;"><i class="fa-solid fa-xmark"></i></a>
     </div>
 
+    <!-- Live Daily Limit Badge -->
     <div class="daily-limit-badge">
-      <span><i class="fa-regular fa-clock"></i> DAILY REACT LIMIT:</span>
-      <div style="font-weight:800; color:var(--accent-cyan);"><i class="fa-solid fa-bolt"></i> <span id="dailyLimitText">10/10</span></div>
+      <span><i class="fa-regular fa-clock" style="margin-right:4px;"></i> DAILY REACT LIMIT:</span>
+      <div class="daily-limit-val" id="limitBadgeContainer">
+        <i class="fa-solid fa-bolt"></i> <span id="dailyLimitText">10/10</span>
+      </div>
     </div>
 
-    <!-- Step 1: Link Input -->
+    <!-- Step 1: Target Link Form -->
     <div id="step1Box">
-      <p style="font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;">
-        Enter the target WhatsApp Channel <b>Post Link</b> (e.g. .../channel/code/123):
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;">
+        Enter the target WhatsApp Channel <b>Post Link</b> (Click Post &gt; Copy Link):
       </p>
       <div class="input-wrapper">
         <i class="fa-solid fa-link"></i>
@@ -75,32 +153,59 @@
       </button>
     </div>
 
-    <!-- Step 2: Emoji Selection & Confirmation -->
+    <!-- Step 2: Categorized Emoji Picker (10 Emojis Allowed) -->
     <div id="step2Box" style="display: none;">
+      
       <div style="display: flex; justify-content: space-between; align-items: center;">
-        <span style="font-size: 12px; font-weight: 700; color: #fff;">Select Emojis (Max 5)</span>
-        <span style="font-size:11px; font-weight:700; color:var(--accent-pink);" id="emojiCountBadge">0 / 5 Selected</span>
+        <span style="font-size: 12px; font-weight: 800; color: #fff;">Choose Up to 10 Emojis:</span>
+        <span style="font-size:11px; font-weight:800; color:var(--accent-pink); font-family:'JetBrains Mono';" id="emojiCountBadge">0 / 10 Selected</span>
       </div>
 
-      <div class="emoji-picker-grid">
-        <div class="emoji-item" onclick="toggleEmoji(this, '❤️')">❤️</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '🔥')">🔥</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '👍')">👍</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '😂')">😂</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '😮')">😮</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '🎉')">🎉</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '👏')">👏</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '💯')">💯</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '⚡')">⚡</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '🚀')">🚀</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '😍')">😍</div>
-        <div class="emoji-item" onclick="toggleEmoji(this, '💎')">💎</div>
+      <!-- Category Filter Tabs -->
+      <div class="cat-nav-tabs">
+        <div class="cat-pill active" onclick="switchCategory('popular')">🔥 POPULAR</div>
+        <div class="cat-pill" onclick="switchCategory('reactions')">❤️ REACTIONS</div>
+        <div class="cat-pill" onclick="switchCategory('cyber')">⚡ ENERGY</div>
+        <div class="cat-pill" onclick="switchCategory('badges')">💎 BADGES</div>
       </div>
 
+      <!-- Emoji Grids (Divided by Categories) -->
+      <div class="emoji-picker-grid" id="emojiGrid">
+        <!-- Rendered dynamically by category -->
+      </div>
+
+      <!-- Live Selection Queue Tray -->
+      <div class="selected-tray">
+        <div class="tray-emojis" id="selectedTray"><span style="font-size:11px; color:var(--text-dim);">No emojis selected yet...</span></div>
+        <button class="btn-clear-selection" onclick="clearSelectedEmojis()">CLEAR</button>
+      </div>
+
+      <!-- Action Buttons -->
       <div style="display: flex; gap: 8px;">
-        <button class="btn-submit" style="background: rgba(255,255,255,0.06); box-shadow: none; flex: 1;" onclick="backToStep1()">Back</button>
-        <button id="confirmReactBtn" class="btn-submit" style="flex: 2;" onclick="confirmAndSendReactions()"><i class="fa-solid fa-check"></i> CONFIRM & REACT</button>
+        <button class="btn-submit" style="background: rgba(255,255,255,0.06); box-shadow: none; flex: 1;" onclick="backToStep1()">
+          Back
+        </button>
+        <button id="confirmReactBtn" class="btn-submit" style="flex: 2;" onclick="confirmAndSendReactions()">
+          <i class="fa-solid fa-check"></i> CONFIRM & REACT
+        </button>
       </div>
+    </div>
+
+    <!-- Step 3: Success Screen Overlay -->
+    <div class="success-overlay" id="successBox">
+      <div class="success-icon-wrap">
+        <i class="fa-solid fa-check"></i>
+      </div>
+      <h3 style="font-family:'Space Grotesk'; font-size:18px; font-weight:800; color:#fff;">REACTIONS DEPLOYED!</h3>
+      <p style="font-size: 12px; color: var(--text-muted); line-height: 1.5; max-width: 320px;" id="successMsgText">
+        Reactions have been broadcasted across all connected bot cluster instances.
+      </p>
+      <div style="font-family:'JetBrains Mono'; font-size:12px; color:var(--accent-cyan);" id="successRemainBadge">
+        Remaining Daily Runs: 09/10
+      </div>
+      <button class="btn-submit" style="width: auto; padding: 11px 24px; margin-top: 6px;" onclick="resetWorkflow()">
+        DONE & RETURN
+      </button>
     </div>
 
     <div style="text-align: center; margin-top: 18px;">
@@ -109,23 +214,112 @@
   </div>
 
   <script>
+    /* ========================================================
+       1. Emoji Sets Partitioned by Categories
+       ======================================================== */
+    const emojiCatalog = {
+      popular: ['❤️', '🔥', '👍', '😂', '😮', '🎉', '👏', '💯', '⚡', '🚀', '😍', '💎'],
+      reactions: ['🥰', '😎', '🫡', '🙏', '✨', '💖', '🤯', '😭', '🤩', '🥳', '👀', '🤙'],
+      cyber: ['⚡', '🚀', '🛰️', '🔥', '💥', '🛸', '🤖', '💀', '👾', '🌟', '🛡️', '⚙️'],
+      badges: ['💎', '👑', '🥇', '🏆', '💯', '🎯', '💫', '🔑', '⭐', '🏷️', '🥂', '🔮']
+    };
+
+    let activeCategory = 'popular';
+    let selectedEmojis = [];
+
+    function renderEmojiGrid() {
+      const grid = document.getElementById('emojiGrid');
+      const emojis = emojiCatalog[activeCategory] || [];
+      grid.innerHTML = emojis.map(e => `
+        <div class="emoji-item ${selectedEmojis.includes(e) ? 'selected' : ''}" onclick="toggleEmoji(this, '${e}')">${e}</div>
+      `).join('');
+    }
+
+    function switchCategory(cat) {
+      activeCategory = cat;
+      document.querySelectorAll('.cat-pill').forEach(p => p.classList.remove('active'));
+      event.target.classList.add('active');
+      renderEmojiGrid();
+    }
+
+    function toggleEmoji(el, emoji) {
+      const idx = selectedEmojis.indexOf(emoji);
+      if (idx > -1) {
+        selectedEmojis.splice(idx, 1);
+        el.classList.remove('selected');
+      } else {
+        if (selectedEmojis.length >= 10) {
+          return alert('You can select a maximum of 10 emojis!');
+        }
+        selectedEmojis.push(emoji);
+        el.classList.add('selected');
+      }
+      updateSelectedTray();
+    }
+
+    function updateSelectedTray() {
+      document.getElementById('emojiCountBadge').innerText = selectedEmojis.length + ' / 10 Selected';
+      const tray = document.getElementById('selectedTray');
+      if (selectedEmojis.length === 0) {
+        tray.innerHTML = '<span style="font-size:11px; color:var(--text-dim);">No emojis selected yet...</span>';
+      } else {
+        tray.innerHTML = selectedEmojis.map(e => `<span>${e}</span>`).join(' ');
+      }
+    }
+
+    function clearSelectedEmojis() {
+      selectedEmojis = [];
+      document.querySelectorAll('.emoji-item.selected').forEach(e => e.classList.remove('selected'));
+      updateSelectedTray();
+    }
+
+    /* ========================================================
+       2. Strict 10/10 Daily Limit Logic
+       ======================================================== */
     const MAX_DAILY_LIMIT = 10;
+
+    function getTodayKey() {
+      const d = new Date();
+      return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+    }
+
     function getRemainingLimit() {
-      const today = new Date().toDateString();
-      if (localStorage.getItem('react_limit_date') !== today) {
+      const today = getTodayKey();
+      const savedDate = localStorage.getItem('react_limit_date');
+
+      if (savedDate !== today) {
         localStorage.setItem('react_limit_date', today);
         localStorage.setItem('react_limit_count', MAX_DAILY_LIMIT.toString());
         return MAX_DAILY_LIMIT;
       }
-      return parseInt(localStorage.getItem('react_limit_count') || '10', 10);
+
+      const count = parseInt(localStorage.getItem('react_limit_count'), 10);
+      return isNaN(count) ? MAX_DAILY_LIMIT : count;
     }
 
     function updateLimitUI() {
       const rem = getRemainingLimit();
       const badge = document.getElementById('dailyLimitText');
-      if (badge) badge.innerText = (rem < 10 ? '0' + rem : rem) + '/10';
+      if (badge) {
+        badge.innerText = (rem < 10 ? '0' + rem : rem) + '/10';
+        badge.style.color = rem === 0 ? 'var(--accent-pink)' : 'var(--accent-cyan)';
+      }
+      
       const confirmBtn = document.getElementById('confirmReactBtn');
-      if (confirmBtn) confirmBtn.disabled = rem <= 0;
+      const step1Btn = document.getElementById('step1NextBtn');
+      if (rem <= 0) {
+        if (confirmBtn) confirmBtn.disabled = true;
+        if (step1Btn) {
+          step1Btn.disabled = true;
+          step1Btn.innerHTML = '<span>DAILY LIMIT REACHED (00/10)</span>';
+        }
+      } else {
+        if (confirmBtn) confirmBtn.disabled = false;
+        if (step1Btn) {
+          step1Btn.disabled = false;
+          step1Btn.innerHTML = '<span>CONTINUE TO EMOJIS</span> <i class="fa-solid fa-arrow-right"></i>';
+        }
+      }
     }
 
     function decrementLimit() {
@@ -137,42 +331,63 @@
       updateLimitUI();
     }
 
-    let selectedEmojis = [];
+    /* ========================================================
+       3. Wizard Flow Controls
+       ======================================================== */
     function backToStep1() {
       document.getElementById('step2Box').style.display = 'none';
       document.getElementById('step1Box').style.display = 'block';
     }
 
     function proceedToEmojiStep() {
-      if (getRemainingLimit() <= 0) return alert('Your daily limit of 10/10 reactions has been reached!');
+      if (getRemainingLimit() <= 0) {
+        return alert('Your daily limit of 10/10 reactions has been reached for today!');
+      }
+
       const link = document.getElementById('targetPostLink').value.trim();
       if (!link || !link.includes('whatsapp.com/channel/')) {
         return alert('Please enter a valid WhatsApp Channel Post Link!');
       }
+
       document.getElementById('step1Box').style.display = 'none';
       document.getElementById('step2Box').style.display = 'block';
+      renderEmojiGrid();
+      updateSelectedTray();
     }
 
-    function toggleEmoji(el, emoji) {
-      const idx = selectedEmojis.indexOf(emoji);
-      if (idx > -1) {
-        selectedEmojis.splice(idx, 1);
-        el.classList.remove('selected');
-      } else {
-        if (selectedEmojis.length >= 5) return alert('You can select a maximum of 5 emojis!');
-        selectedEmojis.push(emoji);
-        el.classList.add('selected');
-      }
-      document.getElementById('emojiCountBadge').innerText = selectedEmojis.length + ' / 5 Selected';
+    /* Web Audio Sound Synthesizer */
+    function playSuccessTone() {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+        osc.frequency.setValueAtTime(880.00, audioCtx.currentTime + 0.1); // A5
+        gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.4);
+      } catch (_) {}
     }
 
+    /* ========================================================
+       4. Dispatch Reactions to Backend API
+       ======================================================== */
     async function confirmAndSendReactions() {
-      if (getRemainingLimit() <= 0) return alert('Daily reaction limit reached!');
+      if (getRemainingLimit() <= 0) {
+        return alert('Daily reaction limit reached! Please try again tomorrow.');
+      }
+
       const link = document.getElementById('targetPostLink').value.trim();
-      if (selectedEmojis.length === 0) return alert('Please select at least one emoji!');
+      if (selectedEmojis.length === 0) {
+        return alert('Please select at least one emoji!');
+      }
 
       const btn = document.getElementById('confirmReactBtn');
-      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> FIRING REACTIONS...';
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> DISPATCHING BATCH...';
       btn.disabled = true;
 
       try {
@@ -181,20 +396,35 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ postLink: link, emojis: selectedEmojis })
         });
+
         const d = await res.json();
         if (d.status || res.ok) {
           decrementLimit();
-          alert('Reactions deployed successfully! Remaining runs: ' + getRemainingLimit() + '/10');
-          window.location.href = '/';
+          const rem = getRemainingLimit();
+
+          // Trigger Sound & Confetti
+          playSuccessTone();
+          if (window.confetti) {
+            confetti({ particleCount: 75, spread: 65, origin: { y: 0.6 } });
+          }
+
+          // Show Cyber Success Modal
+          document.getElementById('successRemainBadge').innerText = 'Remaining Daily Runs: ' + (rem < 10 ? '0' + rem : rem) + '/10';
+          document.getElementById('successBox').classList.add('active');
         } else {
-          alert('Failed: ' + (d.error || 'Server error.'));
+          alert('Failed to send reactions: ' + (d.error || 'Server error.'));
         }
       } catch {
-        alert('Server connection error. Please try again.');
+        alert('Server connection error. Please verify cluster status.');
       } finally {
         btn.innerHTML = '<i class="fa-solid fa-check"></i> CONFIRM & REACT';
         updateLimitUI();
       }
+    }
+
+    function resetWorkflow() {
+      document.getElementById('successBox').classList.remove('active');
+      window.location.href = '/';
     }
 
     updateLimitUI();
