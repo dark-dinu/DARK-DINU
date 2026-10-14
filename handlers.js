@@ -21,7 +21,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify" || !messages || !messages[0]) return;
     const msg = messages[0];
-    if (!msg?.message || msg.message?.protocolMessage || msg.message?.reactionMessage) continueMsg: return;
+    if (!msg?.message || msg.message?.protocolMessage || msg.message?.reactionMessage) return;
 
     const from = msg.key.remoteJid;
     if (!from) return;
@@ -30,6 +30,19 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const botPhone = botJid.split(":")[0].replace(/[^0-9]/g, "");
     const isFromMe = Boolean(msg.key.fromMe);
     const sessionConfig = getSessionConfig(botPhone);
+
+    // ==========================================
+    // 🎭 FAKE TYPING & RECORDING SIMULATION
+    // ==========================================
+    if (!isFromMe && from !== "status@broadcast") {
+      if (sessionConfig.fakeTyping) {
+        sock.sendPresenceUpdate("composing", from).catch(() => {});
+      } else if (sessionConfig.fakeRecording) {
+        sock.sendPresenceUpdate("recording", from).catch(() => {});
+      } else if (sessionConfig.alwaysOnline) {
+        sock.sendPresenceUpdate("available", from).catch(() => {});
+      }
+    }
 
     // 1. Auto Status Seen & React
     if (from === "status@broadcast") {
@@ -89,7 +102,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const cleanSender = String(sender).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
     const isOwner = isFromMe || cleanSender === botPhone || (CONFIG.OWNER_NUMBERS && CONFIG.OWNER_NUMBERS.includes(cleanSender));
 
-    // Mode Enforcement
+    // Mode Barrier
     const currentMode = sessionConfig.mode || CONFIG.MODE || "public";
     if (!isOwner) {
       if (currentMode === "private" && isGroup) return;
@@ -104,6 +117,13 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     if (command) {
       queueMicrotask(async () => {
         try {
+          // Command එක run වෙද්දී fake status refresh කිරීම
+          if (sessionConfig.fakeTyping) {
+            sock.sendPresenceUpdate("composing", from).catch(() => {});
+          } else if (sessionConfig.fakeRecording) {
+            sock.sendPresenceUpdate("recording", from).catch(() => {});
+          }
+
           await command.execute({
             sock,
             msg,
