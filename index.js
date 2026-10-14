@@ -16,7 +16,6 @@ import { setupMessageHandlers } from "./handlers.js";
 import CONFIG from "./config.js";
 import { cleanPhone, initializeSessionState } from "./core/sessionManager.js";
 import { attachSettingsEngine } from "./commands/setting.js";
-import { renderDashboardHtml } from "./dashboard.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +28,9 @@ const app = express();
 const PORT = Number(CONFIG.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve Static Frontend Assets from public folder
+app.use(express.static(path.join(__dirname, "public")));
 
 const msgRetryCounterCache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
 global.activeSockets = global.activeSockets || new Map();
@@ -65,34 +67,39 @@ async function loadCommands() {
   console.log(`✨ Loaded ${commands.size} commands & aliases into fast-memory!`);
 }
 
-// ================= Web Routes =================
+// ================= Modular Web Pages Routes =================
+// 1. Main Dashboard
 app.get("/", (req, res) => {
-  res.send(renderDashboardHtml(CONFIG.BOT_NAME));
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-// 1. Guaranteed Logo Image Delivery Route
+// 2. Separate Pairing Web Page
+app.get("/pair-web", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "pair.html"));
+});
+
+// 3. Separate Channel React Web Page
+app.get("/react", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "react.html"));
+});
+
+// 4. Guaranteed Logo Image Delivery Route
 app.get("/logo.jpg", (req, res) => {
-  const localLogo = path.join(process.cwd(), "logo.jpg");
+  const localLogo = path.join(__dirname, "logo.jpg");
   if (fs.existsSync(localLogo)) {
     return res.sendFile(localLogo);
   }
   return res.redirect("https://files.catbox.moe/k315x4.jpg");
 });
 
-// 2. Real-time Live Stats & Dynamic Waveform History API
+// ================= Live Backend APIs =================
+// 5. Diagnostics & Smooth Spline History API
 app.get("/api/stats", (req, res) => {
   const count = activeSockets.size;
   const mem = process.memoryUsage();
   const up = Math.floor(process.uptime());
   const h = Math.floor(up / 3600), m = Math.floor((up % 3600) / 60), s = up % 60;
 
-  const nodes = [];
-  for (const [sId, sock] of activeSockets.entries()) {
-    const rawNumber = (sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-    nodes.push({ sessionId: sId, number: rawNumber ? `+${rawNumber}` : "Connecting..." });
-  }
-
-  // Generate dynamic 15-node historical spline curve based on actual online bots
   const historyPoints = [];
   const base = Math.max(count, 1);
   for (let i = 0; i < 15; i++) {
@@ -106,21 +113,18 @@ app.get("/api/stats", (req, res) => {
     peakCount: count > 0 ? count + 3 : 0,
     avgCount: count > 0 ? Math.max(1, Math.round(count * 0.92)) : 0,
     history: historyPoints,
-    nodes,
-    commandsCount: commands.size,
     uptime: `${h}h ${m}m ${s}s`,
     memory: `${(mem.rss / 1024 / 1024).toFixed(1)} MB`
   });
 });
 
-// 3. Instant WhatsApp Channel Reaction Trigger API
+// 6. Direct Channel Reaction Engine Endpoint
 app.post("/api/channel-react", async (req, res) => {
   const { postLink, emojis } = req.body;
   if (!postLink || !Array.isArray(emojis) || emojis.length === 0) {
     return res.status(400).json({ status: false, error: "Post link and at least one emoji are required." });
   }
 
-  // Extract Newsletter code and serverId from Post Link
   const match = postLink.trim().match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]+)(?:\/(\d+))?/i);
   if (!match) {
     return res.status(400).json({ status: false, error: "Invalid WhatsApp Channel Post Link." });
@@ -134,7 +138,7 @@ app.post("/api/channel-react", async (req, res) => {
   }
 
   if (activeSockets.size === 0) {
-    return res.status(503).json({ status: false, error: "No active bot nodes are online right now to dispatch reactions." });
+    return res.status(503).json({ status: false, error: "No active bot nodes are online right now." });
   }
 
   try {
@@ -150,7 +154,6 @@ app.post("/api/channel-react", async (req, res) => {
       newsletterJid = `${channelCode}@newsletter`;
     }
 
-    // Parallel fire reactions across active bot cluster
     const sockets = Array.from(activeSockets.values());
     for (const sock of sockets) {
       for (const emoji of emojis) {
@@ -180,11 +183,34 @@ app.post("/api/channel-react", async (req, res) => {
   }
 });
 
+// Pairing Code Generator Endpoint
+app.get("/pair", async (req, res) => {
+  let phone = req.query.phone?.replace(/[^0-9]/g, "");
+  if (!phone) return res.status(400).json({ error: "Phone number required" });
+  if (!db) return res.status(503).json({ error: "Database initializing. Retry shortly." });
+
+  const sessionId = `bot_${phone}`;
+  try {
+    const authCollection = db.collection(sessionId);
+    await authCollection.drop().catch(() => {});
+
+    const sock = await startBotSocket(sessionId, authCollection);
+    if (!sock) throw new Error("Socket initialization failed");
+
+    await delay(3000);
+    const code = await sock.requestPairingCode(phone);
+    return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
+  } catch (err) {
+    console.error(`Pairing failed for ${phone}:`, err.message);
+    return res.status(500).json({ error: "Pairing code failed. Retry in 5s." });
+  }
+});
+
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "OK", activeBots: activeSockets.size });
 });
 
-// ================= Central Socket Launcher =================
+// Central Socket Launcher
 async function startBotSocket(sessionId, authCollection) {
   try {
     const { state, saveCreds, clearSession } = await useMongoDBAuthState(authCollection);
@@ -196,7 +222,7 @@ async function startBotSocket(sessionId, authCollection) {
       logger: pino({ level: "fatal" }),
       printQRInTerminal: false,
       msgRetryCounterCache,
-      browser: ["Mac OS", "Safari", "17.0"], // Safari Pairing Handshake
+      browser: ["Mac OS", "Safari", "17.0"],
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
       keepAliveIntervalMs: 25000,
@@ -228,7 +254,6 @@ async function startBotSocket(sessionId, authCollection) {
         activeSockets.delete(sessionId);
         const code = lastDisconnect?.error?.output?.statusCode;
 
-        // Restart Required (515) Handshake Reconnect
         if (code === DisconnectReason.restartRequired || (code !== DisconnectReason.loggedOut && sock.authState?.creds?.registered)) {
           setTimeout(() => startBotSocket(sessionId, authCollection), 2500);
           return;
@@ -250,29 +275,6 @@ async function startBotSocket(sessionId, authCollection) {
     return null;
   }
 }
-
-// Pairing Endpoint
-app.get("/pair", async (req, res) => {
-  let phone = req.query.phone?.replace(/[^0-9]/g, "");
-  if (!phone) return res.status(400).json({ error: "Phone number required" });
-  if (!db) return res.status(503).json({ error: "Database initializing. Retry shortly." });
-
-  const sessionId = `bot_${phone}`;
-  try {
-    const authCollection = db.collection(sessionId);
-    await authCollection.drop().catch(() => {});
-
-    const sock = await startBotSocket(sessionId, authCollection);
-    if (!sock) throw new Error("Socket initialization failed");
-
-    await delay(3000);
-    const code = await sock.requestPairingCode(phone);
-    return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
-  } catch (err) {
-    console.error(`Pairing failed for ${phone}:`, err.message);
-    return res.status(500).json({ error: "Pairing code failed. Retry in 5s." });
-  }
-});
 
 // Server Boot & DB Multi-Session Wakeup
 app.listen(PORT, "0.0.0.0", async () => {
