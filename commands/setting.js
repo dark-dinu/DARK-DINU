@@ -1,3 +1,5 @@
+import fs from "fs";
+import path from "path";
 import { cleanPhone, initializeSessionState, updateSessionConfig, getSessionConfig } from "../core/sessionManager.js";
 
 // ==========================================
@@ -12,6 +14,15 @@ function checkAuthorization(sock, msg, from, botPhone) {
   const senderJid = msg.key.participant || msg.participant || from || "";
   const cleanSender = cleanPhone(senderJid);
   return cleanSender === botPhone || DEV_NUMBERS.has(cleanSender);
+}
+
+// Logo image loader helper (Local logo.jpg or Cloud CDN Fallback)
+function getLogoPayload() {
+  const localLogoPath = path.join(process.cwd(), "logo.jpg");
+  if (fs.existsSync(localLogoPath)) {
+    return { image: fs.readFileSync(localLogoPath) };
+  }
+  return { image: { url: "https://files.catbox.moe/k315x4.jpg" } };
 }
 
 // ==========================================
@@ -85,7 +96,7 @@ export function attachSettingsEngine(sock) {
 }
 
 // ==========================================
-// 3. SELECTION DISPATCHER & TOGGLE ENGINE
+// 3. ACTION DISPATCHER & TOGGLE ENGINE
 // ==========================================
 async function handleSettingAction(sock, from, botPhone, actionKey, value, quotedMsg) {
   let feedback = "";
@@ -99,7 +110,7 @@ async function handleSettingAction(sock, from, botPhone, actionKey, value, quote
 
     case "antiSend":
       await updateSessionConfig(botPhone, "antiSend", value);
-      feedback = `🛡️ *Anti-Send Engine:* \`${value.toUpperCase()}\` ලෙස සකසන ලදී.`;
+      feedback = `🛡️ *Anti-Send:* \`${value.toUpperCase()}\` ලෙස සකසන ලදී.`;
       break;
 
     case "statusEmoji":
@@ -124,7 +135,6 @@ async function handleSettingAction(sock, from, botPhone, actionKey, value, quote
       break;
 
     default:
-      // Automatic Boolean Toggle (ON -> OFF / OFF -> ON)
       const currentState = Boolean(currentCfg[actionKey]);
       const nextState = value !== undefined ? value : !currentState;
       await updateSessionConfig(botPhone, actionKey, nextState);
@@ -143,9 +153,8 @@ export default {
   name: "setting",
   aliases: ["settings", "mode", "botmode", "antisend", "config", "presence"],
   category: "owner",
-  description: "100% interactive number-selection settings manager",
+  description: "Visual session-locked control panel",
 
-  // 🛑 Interactive Number Reply Engine
   async onReply({ sock, msg, from, body, quotedStanzaId }) {
     if (!global.settingSessions.has(quotedStanzaId)) return false;
 
@@ -157,38 +166,37 @@ export default {
     const rawChoice = body.trim();
     const choice = rawChoice.toLowerCase();
 
-    // Map of All Actions via Numbers
     const actionMap = {
-      // 1. 🎯 Bot Mode
+      // 1. Bot Mode
       "1.1": { key: "mode", val: "public" },
       "1.2": { key: "mode", val: "private" },
       "1.3": { key: "mode", val: "group" },
       "1.4": { key: "mode", val: "inbox" },
 
-      // 2. 🛡️ Security & Privacy
+      // 2. Security & Calls
       "2.1": { key: "antiDelete" },
       "2.2": { key: "antiCall" },
 
-      // 3. 👁️ Status Engine
+      // 3. Status Utilities
       "3.1": { key: "statusSeen" },
       "3.2": { key: "statusReact" },
 
-      // 4. 🎭 Fake Presence
+      // 4. Fake Presence
       "4.1": { key: "fakePresence", val: "typing" },
       "4.2": { key: "fakePresence", val: "recording" },
       "4.3": { key: "fakePresence", val: "off" },
 
-      // 5. 🚫 Anti-Send Eraser
+      // 5. Anti-Send Eraser
       "5.1": { key: "antiSend", val: "all" },
       "5.2": { key: "antiSend", val: "me" },
       "5.3": { key: "antiSend", val: "from" },
       "5.4": { key: "antiSend", val: "off" },
 
-      // 6. 🤖 Automation
+      // 6. Automation
       "6.1": { key: "autoReply" },
       "6.2": { key: "welcomeCard" },
 
-      // 7. 💖 Status React Emoji Quick Select
+      // 7. Status React Emoji
       "7.1": { key: "statusEmoji", val: "💖" },
       "7.2": { key: "statusEmoji", val: "✨" },
       "7.3": { key: "statusEmoji", val: "🔥" },
@@ -196,7 +204,6 @@ export default {
       "7.5": { key: "statusEmoji", val: "🥀" }
     };
 
-    // Custom Emoji (e.g. reply "7.6 ❤️")
     if (choice.startsWith("7.6")) {
       const parts = rawChoice.split(/\s+/);
       const customEmoji = parts[1] || "💖";
@@ -229,7 +236,6 @@ export default {
       );
     }
 
-    // Direct Quick Command Bypasses (Fallback)
     const fullBody = (body || "").trim().slice(pref.length).trim();
     const cmd = fullBody.split(/\s+/)[0].toLowerCase();
     const opt = args[0]?.toLowerCase()?.trim();
@@ -238,7 +244,7 @@ export default {
     if (cmd === "antisend" && opt) return await handleSettingAction(sock, from, botPhone, "antiSend", opt, msg);
 
     // ==========================================
-    // 5. CLEAN NUMBER-BASED MODULAR DASHBOARD
+    // 5. CLEAN BRANDED DASHBOARD (LOGO + CARD)
     // ==========================================
     sock.sendMessage(from, { react: { text: "🎛️", key: msg.key } }).catch(() => {});
 
@@ -251,8 +257,8 @@ export default {
    🎛️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆
 ╚═════════════════════════════╝
 
-📱 *Session:* \`+${botPhone}\`
-⚡ *Storage:* \`MongoDB Atlas (Persistent)\`
+📱 *Session ID:* \`+${botPhone}\`
+⚡ *Core Engine:* \`24/7 Multi-Device v3.5\`
 
 ╭───〔 1. 🎯 𝐁𝐎𝐓 𝐌𝐎𝐃𝐄 〕
 ├ 📌 *Current:* \`${settings.mode ? settings.mode.toUpperCase() : "PUBLIC"}\`
@@ -264,13 +270,13 @@ export default {
 ╰─────────────────────────────
 
 ╭───〔 2. 🛡️ 𝐒𝐄𝐂𝐔𝐑𝐈𝐓𝐘 & 𝐂𝐀𝐋𝐋𝐒 〕
-│ [ 2.1 ] 🗑️ Anti-Delete  : ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"} (Toggle)
-│ [ 2.2 ] 📵 Anti-Call    : ${settings.antiCall ? "🟢 ON" : "🔴 OFF"} (Toggle)
+│ [ 2.1 ] 🗑️ Anti-Delete  : ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"}
+│ [ 2.2 ] 📵 Anti-Call    : ${settings.antiCall ? "🟢 ON" : "🔴 OFF"}
 ╰─────────────────────────────
 
 ╭───〔 3. 👁️ 𝐒𝐓𝐀𝐓𝐔𝐒 𝐄𝐍𝐆𝐈𝐍𝐄 〕
-│ [ 3.1 ] 👁️ Status Seen  : ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"} (Toggle)
-│ [ 3.2 ] 💖 Status React : ${settings.statusReact ? "🟢 ON" : "🔴 OFF"} (Toggle)
+│ [ 3.1 ] 👁️ Status Seen  : ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"}
+│ [ 3.2 ] 💖 Status React : ${settings.statusReact ? "🟢 ON" : "🔴 OFF"}
 ╰─────────────────────────────
 
 ╭───〔 4. 🎭 𝐅𝐀𝐊𝐄 𝐏𝐑𝐄𝐒𝐄𝐍𝐂𝐄 〕
@@ -291,11 +297,11 @@ export default {
 ╰─────────────────────────────
 
 ╭───〔 6. 🤖 𝐀𝐔𝐓𝐎𝐌𝐀𝐓𝐈𝐎𝐍 〕
-│ [ 6.1 ] 💬 Auto-Reply   : ${settings.autoReply ? "🟢 ON" : "🔴 OFF"} (Toggle)
-│ [ 6.2 ] 💌 Welcome Card : ${settings.welcomeCard ? "🟢 ON" : "🔴 OFF"} (Toggle)
+│ [ 6.1 ] 💬 Auto-Reply   : ${settings.autoReply ? "🟢 ON" : "🔴 OFF"}
+│ [ 6.2 ] 💌 Welcome Card : ${settings.welcomeCard ? "🟢 ON" : "🔴 OFF"}
 ╰─────────────────────────────
 
-╭───〔 7. 💖 𝐒𝐓𝐀𝐓𝐔𝐒 𝐑𝐄𝐀𝐂𝐓 𝐄𝐌𝐎喜 〕
+╭───〔 7. 💖 𝐒𝐓𝐀𝐓𝐔𝐒 𝐑𝐄𝐀𝐂𝐓 𝐄𝐌𝐎𝐉𝐈 〕
 ├ 📌 *Current:* [ ${settings.statusEmoji || "💖"} ]
 │
 │ [ 7.1 ] 💖 Pink Heart
@@ -311,7 +317,11 @@ export default {
 
 👑 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-    const sent = await sock.sendMessage(from, { text: dashboardCard }, { quoted: msg });
+    const logoPayload = getLogoPayload();
+    const sent = await sock.sendMessage(from, {
+      ...logoPayload,
+      caption: dashboardCard
+    }, { quoted: msg });
 
     if (sent?.key?.id) {
       global.settingSessions.set(sent.key.id, {
