@@ -3,11 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>DARK-DINU OFC //  NEW WEB 2026</title>
+  <title>DARK-DINU OFC // CYBER CORE ECOSYSTEM</title>
   
-  <!-- Favicon -->
-  <link rel="icon" type="image/jpeg" href="https://files.catbox.moe/s1q558.jpg">
-
+  <link rel="icon" type="image/jpeg" href="/logo.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700;800&family=JetBrains+Mono:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -28,279 +26,39 @@
       --text-dim: #475569;
     }
 
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: 'Plus Jakarta Sans', sans-serif;
-      -webkit-tap-highlight-color: transparent;
-      scroll-behavior: smooth;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; scroll-behavior: smooth; }
+    body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; overflow-x: hidden; display: flex; flex-direction: column; align-items: center; position: relative; }
+    .bg-grid { position: fixed; inset: 0; background-image: linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 32px 32px; pointer-events: none; z-index: 0; }
+    .ambient-glow-1 { position: fixed; top: -150px; left: 50%; transform: translateX(-50%); width: 520px; height: 360px; background: radial-gradient(circle, rgba(255, 45, 85, 0.2) 0%, transparent 70%); pointer-events: none; z-index: 0; filter: blur(50px); }
 
-    body {
-      background-color: var(--bg);
-      color: var(--text-main);
-      min-height: 100vh;
-      overflow-x: hidden;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      position: relative;
-    }
+    .wrapper { width: 100%; max-width: 520px; padding: 16px 18px 80px 18px; display: flex; flex-direction: column; gap: 24px; position: relative; z-index: 10; }
 
-    .bg-grid {
-      position: fixed;
-      inset: 0;
-      background-image: 
-        linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-      background-size: 32px 32px;
-      pointer-events: none;
-      z-index: 0;
-    }
+    .navbar { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: rgba(16, 18, 27, 0.65); border: 1px solid var(--card-border-subtle); border-radius: 18px; backdrop-filter: blur(16px); box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4); }
+    .brand-group { display: flex; align-items: center; gap: 12px; }
+    .brand-icon-box { width: 44px; height: 44px; border-radius: 12px; padding: 2px; background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan)); box-shadow: 0 0 16px var(--accent-pink-glow); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .brand-icon-box img { width: 100%; height: 100%; border-radius: 10px; object-fit: cover; display: block; background: #111; }
+    .brand-text h2 { font-size: 14px; font-weight: 800; letter-spacing: 0.5px; color: #fff; }
+    .brand-text p { font-size: 9px; font-weight: 800; letter-spacing: 1.5px; color: var(--accent-cyan); text-transform: uppercase; margin-top: 1px; }
 
-    .ambient-glow-1 {
-      position: fixed;
-      top: -150px;
-      left: 50%;
-      transform: translateX(-50%);
-      width: 520px;
-      height: 360px;
-      background: radial-gradient(circle, rgba(255, 45, 85, 0.2) 0%, transparent 70%);
-      pointer-events: none;
-      z-index: 0;
-      filter: blur(50px);
-    }
+    .nav-actions { display: flex; align-items: center; gap: 8px; }
+    .btn-nav-launch { display: inline-flex; align-items: center; gap: 6px; background: rgba(255, 45, 85, 0.12); border: 1px solid rgba(255, 45, 85, 0.35); color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 12px; font-weight: 700; text-decoration: none; transition: 0.25s; }
+    .btn-nav-launch:hover { background: var(--accent-pink); box-shadow: 0 0 15px var(--accent-pink-glow); }
+    .menu-trigger { width: 40px; height: 40px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--card-border-subtle); border-radius: 10px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #fff; font-size: 15px; }
 
-    .wrapper {
-      width: 100%;
-      max-width: 520px;
-      padding: 16px 18px 80px 18px;
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-      position: relative;
-      z-index: 10;
-    }
+    .hero-card { background: linear-gradient(145deg, rgba(20, 24, 36, 0.85), rgba(10, 11, 16, 0.75)); border: 1px solid var(--card-border-subtle); border-radius: 24px; padding: 26px 22px; backdrop-filter: blur(20px); position: relative; overflow: hidden; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5); }
+    .hero-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent-pink), var(--accent-cyan), transparent); }
+    .badge-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #10b981; font-size: 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
+    .pulse-dot { width: 6px; height: 6px; border-radius: 50%; background: #10b981; box-shadow: 0 0 8px #10b981; animation: pulse 1.8s infinite; }
+    @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(0.85); } }
 
-    .navbar {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 12px 16px;
-      background: rgba(16, 18, 27, 0.65);
-      border: 1px solid var(--card-border-subtle);
-      border-radius: 18px;
-      backdrop-filter: blur(16px);
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
-    }
+    .hero-title { font-family: 'Space Grotesk', sans-serif; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; line-height: 1.15; color: #fff; margin-bottom: 8px; }
+    .hero-title span { background: linear-gradient(135deg, var(--accent-pink) 0%, #ff758c 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero-desc { font-size: 13px; line-height: 1.6; color: var(--text-muted); margin-bottom: 20px; }
+    .social-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .social-btn { height: 44px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--card-border-subtle); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #fff; text-decoration: none; font-size: 15px; gap: 3px; transition: 0.25s; }
+    .social-btn span { font-size: 9px; font-weight: 700; color: var(--text-muted); }
 
-    .brand-group {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .brand-icon-box {
-      width: 44px;
-      height: 44px;
-      border-radius: 12px;
-      padding: 2px;
-      background: linear-gradient(135deg, var(--accent-pink), var(--accent-cyan));
-      box-shadow: 0 0 16px var(--accent-pink-glow);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-    }
-
-    .brand-icon-box img {
-      width: 100%;
-      height: 100%;
-      border-radius: 10px;
-      object-fit: cover;
-      display: block;
-      background: #111;
-    }
-
-    .brand-text h2 {
-      font-size: 14px;
-      font-weight: 800;
-      letter-spacing: 0.5px;
-      color: #fff;
-    }
-
-    .brand-text p {
-      font-size: 9px;
-      font-weight: 800;
-      letter-spacing: 1.5px;
-      color: var(--accent-cyan);
-      text-transform: uppercase;
-      margin-top: 1px;
-    }
-
-    .nav-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .btn-nav-launch {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      background: rgba(255, 45, 85, 0.12);
-      border: 1px solid rgba(255, 45, 85, 0.35);
-      color: #fff;
-      padding: 8px 14px;
-      border-radius: 10px;
-      font-size: 12px;
-      font-weight: 700;
-      text-decoration: none;
-      transition: 0.25s;
-    }
-
-    .btn-nav-launch:hover {
-      background: var(--accent-pink);
-      box-shadow: 0 0 15px var(--accent-pink-glow);
-    }
-
-    .menu-trigger {
-      width: 40px;
-      height: 40px;
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid var(--card-border-subtle);
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      color: #fff;
-      font-size: 15px;
-      transition: 0.25s;
-    }
-
-    .hero-card {
-      background: linear-gradient(145deg, rgba(20, 24, 36, 0.85), rgba(10, 11, 16, 0.75));
-      border: 1px solid var(--card-border-subtle);
-      border-radius: 24px;
-      padding: 26px 22px;
-      backdrop-filter: blur(20px);
-      position: relative;
-      overflow: hidden;
-      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-    }
-
-    .hero-card::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      right: 0;
-      height: 2px;
-      background: linear-gradient(90deg, transparent, var(--accent-pink), var(--accent-cyan), transparent);
-    }
-
-    .badge-status {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 4px 10px;
-      border-radius: 20px;
-      background: rgba(16, 185, 129, 0.1);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      color: #10b981;
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-      margin-bottom: 12px;
-    }
-
-    .pulse-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #10b981;
-      box-shadow: 0 0 8px #10b981;
-      animation: pulse 1.8s infinite;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.4; transform: scale(0.85); }
-    }
-
-    .hero-title {
-      font-family: 'Space Grotesk', sans-serif;
-      font-size: 28px;
-      font-weight: 800;
-      letter-spacing: -0.5px;
-      line-height: 1.15;
-      color: #fff;
-      margin-bottom: 8px;
-    }
-
-    .hero-title span {
-      background: linear-gradient(135deg, var(--accent-pink) 0%, #ff758c 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .hero-desc {
-      font-size: 13px;
-      line-height: 1.6;
-      color: var(--text-muted);
-      margin-bottom: 20px;
-    }
-
-    .social-row {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 8px;
-    }
-
-    .social-btn {
-      height: 44px;
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--card-border-subtle);
-      border-radius: 12px;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: #fff;
-      text-decoration: none;
-      font-size: 15px;
-      gap: 3px;
-      transition: 0.25s;
-    }
-
-    .social-btn span {
-      font-size: 9px;
-      font-weight: 700;
-      color: var(--text-muted);
-    }
-
-    .social-btn:hover {
-      border-color: var(--accent-pink);
-      background: rgba(255, 45, 85, 0.1);
-      transform: translateY(-2px);
-    }
-
-    .diagnostics-panel {
-      background: linear-gradient(170deg, #101119 0%, #08090d 100%);
-      border: 1px solid rgba(255, 45, 85, 0.22);
-      border-radius: 26px;
-      padding: 24px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      position: relative;
-      box-shadow: 0 15px 45px rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(16px);
-    }
-
+    .diagnostics-panel { background: linear-gradient(170deg, #101119 0%, #08090d 100%); border: 1px solid rgba(255, 45, 85, 0.22); border-radius: 26px; padding: 24px 20px; display: flex; flex-direction: column; gap: 16px; position: relative; box-shadow: 0 15px 45px rgba(0, 0, 0, 0.6); backdrop-filter: blur(16px); }
     .diag-head { display: flex; flex-direction: column; gap: 4px; }
     .diag-tag { font-size: 10px; font-weight: 800; letter-spacing: 1.5px; color: var(--accent-pink); text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
     .diag-tag .red-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent-pink); box-shadow: 0 0 10px var(--accent-pink); animation: pulse 1.5s infinite; }
@@ -371,7 +129,7 @@
   <div class="drawer" id="drawer">
     <div class="drawer-head">
       <div style="display:flex; align-items:center; gap:8px;">
-        <img src="https://files.catbox.moe/s1q558.jpg" style="width:26px; height:26px; border-radius:6px; object-fit:cover;" alt="Logo">
+        <img src="/logo.jpg" style="width:26px; height:26px; border-radius:6px; object-fit:cover;" alt="Logo">
         <h3 style="color:#fff; font-size:14px; font-weight:800;">DIGITAL SUITE</h3>
       </div>
       <div style="cursor:pointer; color:#fff;" onclick="toggleMenu()"><i class="fa-solid fa-xmark"></i></div>
@@ -401,7 +159,7 @@
     <nav class="navbar">
       <div class="brand-group">
         <div class="brand-icon-box">
-          <img src="https://files.catbox.moe/s1q558.jpg" alt="DARK-DINU Logo">
+          <img src="/logo.jpg" alt="DARK-DINU Logo">
         </div>
         <div class="brand-text">
           <h2>DARK-DINU OFC</h2>
