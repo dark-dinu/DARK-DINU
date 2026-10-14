@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>DARK-DINU OFC // CHANNEL REACT ENGINE</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700;800&family=JetBrains+Mono:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <style>
+    :root {
+      --bg: #050609;
+      --card-bg: #0d0f16;
+      --card-border: rgba(255, 45, 85, 0.22);
+      --card-border-subtle: rgba(255, 255, 255, 0.08);
+      --accent-pink: #ff2d55;
+      --accent-pink-glow: rgba(255, 45, 85, 0.35);
+      --accent-cyan: #00f0ff;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
+    body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 16px; position: relative; }
+    .ambient-glow-1 { position: fixed; top: -100px; left: 50%; transform: translateX(-50%); width: 500px; height: 350px; background: radial-gradient(circle, rgba(255, 45, 85, 0.2) 0%, transparent 70%); pointer-events: none; z-index: 0; filter: blur(50px); }
+
+    .modal-box {
+      width: 100%; max-width: 440px; background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 26px; padding: 26px 22px; position: relative; z-index: 10; box-shadow: 0 15px 45px rgba(0, 0, 0, 0.7);
+    }
+
+    .daily-limit-badge { display: flex; align-items: center; justify-content: space-between; background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.25); border-radius: 12px; padding: 8px 12px; margin-bottom: 16px; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
+    .input-wrapper { position: relative; margin: 12px 0 16px 0; }
+    .input-wrapper i { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #475569; font-size: 14px; }
+    input[type="text"] { width: 100%; background: rgba(6, 7, 10, 0.85); border: 1px solid var(--card-border-subtle); border-radius: 14px; padding: 15px 16px 15px 44px; font-size: 14px; font-family: 'JetBrains Mono', monospace; color: #fff; outline: none; }
+    input:focus { border-color: var(--accent-pink); box-shadow: 0 0 20px var(--accent-pink-glow); }
+
+    .btn-submit { width: 100%; padding: 15px; border-radius: 14px; border: none; background: linear-gradient(135deg, var(--accent-pink) 0%, #d81b43 100%); color: #fff; font-size: 13px; font-weight: 800; cursor: pointer; box-shadow: 0 6px 25px var(--accent-pink-glow); display: flex; align-items: center; justify-content: center; gap: 8px; }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .emoji-picker-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin: 14px 0 20px 0; }
+    .emoji-item { aspect-ratio: 1; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--card-border-subtle); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 20px; cursor: pointer; user-select: none; }
+    .emoji-item.selected { background: rgba(255, 45, 85, 0.25); border-color: var(--accent-pink); box-shadow: 0 0 12px var(--accent-pink-glow); }
+  </style>
+</head>
+<body>
+
+  <div class="ambient-glow-1"></div>
+
+  <div class="modal-box">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <h3 style="font-size:16px; font-weight:800; color:#fff;"><i class="fa-solid fa-icons" style="color: var(--accent-pink); margin-right:6px;"></i> Channel React Tool</h3>
+      <a href="/" style="color:var(--text-muted); text-decoration:none;"><i class="fa-solid fa-xmark"></i></a>
+    </div>
+
+    <div class="daily-limit-badge">
+      <span><i class="fa-regular fa-clock"></i> DAILY REACT LIMIT:</span>
+      <div style="font-weight:800; color:var(--accent-cyan);"><i class="fa-solid fa-bolt"></i> <span id="dailyLimitText">10/10</span></div>
+    </div>
+
+    <!-- Step 1: Link Input -->
+    <div id="step1Box">
+      <p style="font-size: 12px; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;">
+        Enter the target WhatsApp Channel <b>Post Link</b> (e.g. .../channel/code/123):
+      </p>
+      <div class="input-wrapper">
+        <i class="fa-solid fa-link"></i>
+        <input type="text" id="targetPostLink" placeholder="https://whatsapp.com/channel/.../123" autocomplete="off">
+      </div>
+      <button id="step1NextBtn" class="btn-submit" onclick="proceedToEmojiStep()">
+        <span>CONTINUE TO EMOJIS</span> <i class="fa-solid fa-arrow-right"></i>
+      </button>
+    </div>
+
+    <!-- Step 2: Emoji Selection & Confirmation -->
+    <div id="step2Box" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <span style="font-size: 12px; font-weight: 700; color: #fff;">Select Emojis (Max 5)</span>
+        <span style="font-size:11px; font-weight:700; color:var(--accent-pink);" id="emojiCountBadge">0 / 5 Selected</span>
+      </div>
+
+      <div class="emoji-picker-grid">
+        <div class="emoji-item" onclick="toggleEmoji(this, '❤️')">❤️</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '🔥')">🔥</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '👍')">👍</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '😂')">😂</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '😮')">😮</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '🎉')">🎉</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '👏')">👏</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '💯')">💯</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '⚡')">⚡</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '🚀')">🚀</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '😍')">😍</div>
+        <div class="emoji-item" onclick="toggleEmoji(this, '💎')">💎</div>
+      </div>
+
+      <div style="display: flex; gap: 8px;">
+        <button class="btn-submit" style="background: rgba(255,255,255,0.06); box-shadow: none; flex: 1;" onclick="backToStep1()">Back</button>
+        <button id="confirmReactBtn" class="btn-submit" style="flex: 2;" onclick="confirmAndSendReactions()"><i class="fa-solid fa-check"></i> CONFIRM & REACT</button>
+      </div>
+    </div>
+
+    <div style="text-align: center; margin-top: 18px;">
+      <a href="/" style="font-size: 12px; color: var(--text-muted); text-decoration: none;"><i class="fa-solid fa-arrow-left"></i> Back to Dashboard</a>
+    </div>
+  </div>
+
+  <script>
+    const MAX_DAILY_LIMIT = 10;
+    function getRemainingLimit() {
+      const today = new Date().toDateString();
+      if (localStorage.getItem('react_limit_date') !== today) {
+        localStorage.setItem('react_limit_date', today);
+        localStorage.setItem('react_limit_count', MAX_DAILY_LIMIT.toString());
+        return MAX_DAILY_LIMIT;
+      }
+      return parseInt(localStorage.getItem('react_limit_count') || '10', 10);
+    }
+
+    function updateLimitUI() {
+      const rem = getRemainingLimit();
+      const badge = document.getElementById('dailyLimitText');
+      if (badge) badge.innerText = (rem < 10 ? '0' + rem : rem) + '/10';
+      const confirmBtn = document.getElementById('confirmReactBtn');
+      if (confirmBtn) confirmBtn.disabled = rem <= 0;
+    }
+
+    function decrementLimit() {
+      let rem = getRemainingLimit();
+      if (rem > 0) {
+        rem--;
+        localStorage.setItem('react_limit_count', rem.toString());
+      }
+      updateLimitUI();
+    }
+
+    let selectedEmojis = [];
+    function backToStep1() {
+      document.getElementById('step2Box').style.display = 'none';
+      document.getElementById('step1Box').style.display = 'block';
+    }
+
+    function proceedToEmojiStep() {
+      if (getRemainingLimit() <= 0) return alert('Your daily limit of 10/10 reactions has been reached!');
+      const link = document.getElementById('targetPostLink').value.trim();
+      if (!link || !link.includes('whatsapp.com/channel/')) {
+        return alert('Please enter a valid WhatsApp Channel Post Link!');
+      }
+      document.getElementById('step1Box').style.display = 'none';
+      document.getElementById('step2Box').style.display = 'block';
+    }
+
+    function toggleEmoji(el, emoji) {
+      const idx = selectedEmojis.indexOf(emoji);
+      if (idx > -1) {
+        selectedEmojis.splice(idx, 1);
+        el.classList.remove('selected');
+      } else {
+        if (selectedEmojis.length >= 5) return alert('You can select a maximum of 5 emojis!');
+        selectedEmojis.push(emoji);
+        el.classList.add('selected');
+      }
+      document.getElementById('emojiCountBadge').innerText = selectedEmojis.length + ' / 5 Selected';
+    }
+
+    async function confirmAndSendReactions() {
+      if (getRemainingLimit() <= 0) return alert('Daily reaction limit reached!');
+      const link = document.getElementById('targetPostLink').value.trim();
+      if (selectedEmojis.length === 0) return alert('Please select at least one emoji!');
+
+      const btn = document.getElementById('confirmReactBtn');
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> FIRING REACTIONS...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/channel-react', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ postLink: link, emojis: selectedEmojis })
+        });
+        const d = await res.json();
+        if (d.status || res.ok) {
+          decrementLimit();
+          alert('Reactions deployed successfully! Remaining runs: ' + getRemainingLimit() + '/10');
+          window.location.href = '/';
+        } else {
+          alert('Failed: ' + (d.error || 'Server error.'));
+        }
+      } catch {
+        alert('Server connection error. Please try again.');
+      } finally {
+        btn.innerHTML = '<i class="fa-solid fa-check"></i> CONFIRM & REACT';
+        updateLimitUI();
+      }
+    }
+
+    updateLimitUI();
+  </script>
+</body>
+</html>
