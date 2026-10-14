@@ -42,25 +42,33 @@ function readLocalBackup(botPhone) {
   return null;
 }
 
-// Default Schema
-const DEFAULT_CONFIG = {
-  mode: "public",
-  antiDelete: true,
-  statusSeen: true,
-  statusReact: true,
-  statusEmoji: "💖",
-  antiSend: "off",
-  antiCall: false,
-  autoReply: true,
-  welcomeCard: true
+// 🛡️ Comprehensive Default Schema (All Modern Features)
+export const DEFAULT_CONFIG = {
+  mode: "public",             // 'public' | 'private' | 'group' | 'inbox'
+  antiDelete: true,           // Recover deleted messages
+  antiViewOnce: true,         // Recover view-once media
+  antiSendDest: "me",         // 'me' (Private Inbox) | 'from' (Current Chat)
+  antiCall: true,             // Auto reject incoming calls
+  statusSeen: true,           // Auto mark statuses as viewed
+  statusReact: true,          // Auto react to statuses
+  statusEmoji: "💖",          // Custom status reaction emoji
+  alwaysOnline: false,        // Keep WhatsApp 24/7 available status
+  autoVoice: false,           // Auto voice note response engine
+  autoReply: true,            // Auto reply triggers
+  autoSeen: false,            // Auto read chat messages
+  autoReact: false,           // Auto emoji react to chat messages
+  welcomeCard: true,          // Group member join banner
+  fakeTyping: false,          // Continuous typing presence simulation
+  fakeRecording: false,       // Continuous audio recording presence simulation
+  antiSend: "off"             // 'me' | 'from' | 'all' | 'off'
 };
 
-// 1. Session Init & Load (Bot Socket Connect වෙද්දී Run වෙන කොටස)
+// 1. Session Init & Load (Boots seamlessly on socket startup)
 export async function initializeSessionState(rawPhone) {
   const botPhone = cleanPhone(rawPhone);
   if (!botPhone) return null;
 
-  // RAM Pool එකේ කලින්ම තියෙනවද බැලීම
+  // Read instantly from fast RAM Cache
   if (global.sessionStatePool.has(botPhone)) {
     return global.sessionStatePool.get(botPhone);
   }
@@ -73,7 +81,7 @@ export async function initializeSessionState(rawPhone) {
     customReplies: []
   };
 
-  // 1st Priority: MongoDB Load
+  // 1st Priority: Database Cluster Load
   let loaded = false;
   try {
     const db = getDbInstance();
@@ -81,7 +89,8 @@ export async function initializeSessionState(rawPhone) {
       const col = db.collection("bot_sessions_v2");
       const record = await col.findOne({ _id: String(botPhone) });
       if (record) {
-        defaultState.config = { ...defaultState.config, ...record.config };
+        // Merge defaults to automatically inject newly added keys into legacy sessions
+        defaultState.config = { ...DEFAULT_CONFIG, ...(record.config || {}) };
         defaultState.timers = record.timers || [];
         defaultState.channelPosts = record.channelPosts || [];
         defaultState.customReplies = record.customReplies || [];
@@ -90,8 +99,6 @@ export async function initializeSessionState(rawPhone) {
         await col.insertOne({ _id: String(botPhone), ...defaultState, createdAt: new Date() });
         loaded = true;
       }
-    } else {
-      console.warn(`[SESSION WARNING]: MongoDB not ready for +${botPhone}, trying local backup...`);
     }
   } catch (err) {
     console.error(`[SESSION DB ERR - +${botPhone}]:`, err.message);
@@ -101,7 +108,7 @@ export async function initializeSessionState(rawPhone) {
   if (!loaded) {
     const local = readLocalBackup(botPhone);
     if (local) {
-      defaultState.config = { ...defaultState.config, ...local.config };
+      defaultState.config = { ...DEFAULT_CONFIG, ...(local.config || {}) };
       defaultState.timers = local.timers || [];
       defaultState.channelPosts = local.channelPosts || [];
       defaultState.customReplies = local.customReplies || [];
@@ -113,7 +120,7 @@ export async function initializeSessionState(rawPhone) {
   return defaultState;
 }
 
-// 2. Atomic Config Modifier (Settings වෙනස් කරපු සැණින් Save වීම)
+// 2. Atomic Config Modifier (Immediate RAM update + Background Mongo write)
 export async function updateSessionConfig(rawPhone, key, value) {
   const botPhone = cleanPhone(rawPhone);
   if (!botPhone) return;
@@ -139,7 +146,7 @@ export async function updateSessionConfig(rawPhone, key, value) {
   }
 }
 
-// 3. Fast Config Getter
+// 3. Fast In-Memory Config Getter (O(1) Ultra-Low Latency)
 export function getSessionConfig(rawPhone) {
   const botPhone = cleanPhone(rawPhone);
   const state = global.sessionStatePool.get(botPhone);
