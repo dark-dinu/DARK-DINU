@@ -1,72 +1,25 @@
-import fs from "fs";
-import path from "path";
-import os from "os";
-import { exec } from "child_process";
 import axios from "axios";
 import ytSearch from "yt-search";
-import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { delay } from "@whiskeysockets/baileys";
-
-let ffmpegPath = "ffmpeg";
-try {
-  ffmpegPath = ffmpegInstaller?.path || "ffmpeg";
-} catch (_) {
-  ffmpegPath = "ffmpeg";
-}
 
 const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 global.channelJidCache = global.channelJidCache || new Map();
 
-function safeUnlink(filePath) {
-  try {
-    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch (_) {}
-}
-
-// ── Native Buffer Downloader with 20MB Safety Cap ──
+// ── Native Buffer Downloader with 25MB Safety Cap ──
 async function downloadBuffer(url) {
   try {
     const res = await axios.get(url, {
       responseType: "arraybuffer",
       headers: { "User-Agent": UA },
-      timeout: 35000,
-      maxContentLength: 20 * 1024 * 1024
+      timeout: 40000,
+      maxContentLength: 25 * 1024 * 1024
     });
     return Buffer.from(res.data);
   } catch {
     return null;
   }
-}
-
-// ── FFmpeg WhatsApp Voice Note (OGG Opus) Converter ──
-function convertToWhatsAppVoice(inputBuffer) {
-  return new Promise((resolve) => {
-    const tempId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
-    const tempInput = path.join(os.tmpdir(), `in_${tempId}.mp3`);
-    const tempOutput = path.join(os.tmpdir(), `out_${tempId}.opus`);
-
-    fs.writeFile(tempInput, inputBuffer, (err) => {
-      if (err) return resolve({ buffer: inputBuffer, isOpus: false });
-
-      const cmd = `"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 64k -vbr on -compression_level 10 -ar 48000 -ac 1 "${tempOutput}"`;
-
-      exec(cmd, (error) => {
-        safeUnlink(tempInput);
-
-        if (!error && fs.existsSync(tempOutput)) {
-          try {
-            const outBuf = fs.readFileSync(tempOutput);
-            safeUnlink(tempOutput);
-            return resolve({ buffer: outBuf, isOpus: true });
-          } catch (_) {}
-        }
-
-        resolve({ buffer: inputBuffer, isOpus: false });
-      });
-    });
-  });
 }
 
 // ── Ultra-Fast YouTube Search Engine ──
@@ -88,7 +41,7 @@ async function searchYouTube(query) {
   }
 }
 
-// ── Chamindu API Stream Link Resolver (Multiple Endpoints) ──
+// ── Chamindu API Stream Link Resolver ──
 async function getAudioDownloadUrl(videoUrl) {
   const enc = encodeURIComponent(videoUrl);
   const endpoints = [
@@ -120,7 +73,7 @@ export default {
   name: "csong",
   aliases: ["channelsong", "cvoice", "cplay"],
   category: "channel",
-  description: "Post song card & voice audio to WhatsApp Channel",
+  description: "Post song card & crisp playable audio to WhatsApp Channel",
 
   async execute({ sock, msg, from, args, config }) {
     const botName = config?.BOT_NAME || "DARK-DINU MD";
@@ -131,13 +84,12 @@ export default {
       return await sock.sendMessage(
         from,
         {
-          text: `⚠️ *Usage:*\n*.csong <channel_link> , <song_name>*\n\n*Example:*\n.csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V , sadawathiye`
+          text: `⚠️ *භාවිතය:*\n*.csong <channel_link> , <song_name>*\n\n*උදාහරණ:*\n.csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V , sadawathiye`
         },
         { quoted: msg }
       );
     }
 
-    // Link සහ සින්දුවේ නම වෙන් කරගැනීම (අගට post IDs /755 ආවත් clean කරගනී)
     const linkMatch = fullText.match(/https?:\/\/(?:www\.)?whatsapp\.com\/channel\/[a-zA-Z0-9_\-\/]+/i);
     let channelLink = "";
     let songName = "";
@@ -157,7 +109,7 @@ export default {
       return await sock.sendMessage(from, { text: "⚠️ කරුණාකර සින්දුවේ නම ලබාදෙන්න!" }, { quoted: msg });
     }
 
-    // Invite code එක පිරිසිදුව ලබා ගැනීම
+    // Invite code එක පමණක් නිවැරදිව වෙන් කරගැනීම (Post IDs අයින් කරයි)
     let inviteCode = channelLink.split("whatsapp.com/channel/")[1]?.split(/[\/?#]/)[0]?.trim();
     if (!inviteCode) {
       return await sock.sendMessage(from, { text: "❌ වලංගු WhatsApp Channel Link එකක් ලබාදෙන්න!" }, { quoted: msg });
@@ -168,15 +120,14 @@ export default {
     try {
       // 1. Channel JID එක ලබා ගැනීම
       let channelJid = global.channelJidCache.get(inviteCode);
-      let channelMeta = null;
 
       if (!channelJid) {
         try {
-          channelMeta = await Promise.race([
+          const meta = await Promise.race([
             sock.newsletterMetadata("invite", inviteCode),
             new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000))
           ]);
-          channelJid = channelMeta?.id;
+          channelJid = meta?.id;
           if (channelJid) global.channelJidCache.set(inviteCode, channelJid);
         } catch (e) {
           console.error("[CSONG NEWSLETTER ERROR]:", e.message);
@@ -187,8 +138,8 @@ export default {
         channelJid = `${inviteCode}@newsletter`;
       }
 
-      if (!channelJid.includes("@")) {
-        channelJid = `${channelJid}@newsletter`;
+      if (!channelJid.includes("@newsletter")) {
+        channelJid = `${channelJid.split("@")[0]}@newsletter`;
       }
 
       // 2. YouTube Search
@@ -205,16 +156,18 @@ export default {
         return await sock.sendMessage(from, { text: "❌ Audio stream link එක ලබාගැනීමට නොහැකි විය." }, { quoted: msg });
       }
 
-      const rawBuffer = await downloadBuffer(audioUrl);
-      if (!rawBuffer || rawBuffer.length < 5000) {
+      // 4. Audio සහ Thumbnail Buffers බාගත කිරීම
+      const [rawAudioBuffer, imgBuffer] = await Promise.all([
+        downloadBuffer(audioUrl),
+        downloadBuffer(video.thumbnail)
+      ]);
+
+      if (!rawAudioBuffer || rawAudioBuffer.length < 5000) {
         react("❌");
         return await sock.sendMessage(from, { text: "❌ Audio file එක download කරගැනීම අසාර්ථක විය." }, { quoted: msg });
       }
 
-      // 4. Voice Note බවට Convert කිරීම
-      const voice = await convertToWhatsAppVoice(rawBuffer);
-
-      // 5. Card Caption
+      // 5. Card Caption සැකසීම
       const cardCaption = 
 `🥰⃝🎶 *“ ${video.title} ”*
 
@@ -224,36 +177,37 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
 
 | 🎶 *${botName}*`;
 
-      // 6. Channel එකට Thumbnail Card එක යැවීම
-      if (video.thumbnail) {
+      // 6. Channel එකට Image Buffer එක සමඟ Card එක යැවීම
+      if (imgBuffer) {
         await sock.sendMessage(channelJid, {
-          image: { url: video.thumbnail },
+          image: imgBuffer,
           caption: cardCaption
         });
       } else {
         await sock.sendMessage(channelJid, { text: cardCaption });
       }
 
-      // Message 2 එකපාර යැවීමෙන් drop වීම වැළැක්වීමට delay එකක්
-      await delay(1500);
+      // Channel Rate Limit මඟහැරීමට තත්පර 2ක පරතරයක්
+      await delay(2000);
 
-      // 7. Channel එකට Audio/Voice Note එක යැවීම
+      // 7. Channel එකට Playable Standard Audio එක යැවීම (PTT ඉවත් කර ඇත)
       await sock.sendMessage(channelJid, {
-        audio: voice.buffer,
-        mimetype: voice.isOpus ? "audio/ogg; codecs=opus" : "audio/mp4",
-        ptt: true
+        audio: rawAudioBuffer,
+        mimetype: "audio/mp4",
+        fileName: `${video.title.replace(/[^a-zA-Z0-9 ]/g, "")}.mp3`,
+        ptt: false
       });
 
       react("✅");
       return await sock.sendMessage(
         from,
         {
-          text: `✅ *"${video.title}"*\nChannel එකට Voice Note එකක් ලෙස සාර්ථකව Post කරන ලදී! 🎙️🔥`
+          text: `✅ *"${video.title}"*\nChannel එකට සාර්ථකව Post කරන ලදී! 🎶✨`
         },
         { quoted: msg }
       );
     } catch (err) {
-      console.error("[CSONG MAIN ERROR]:", err.message);
+      console.error("[CSONG MAIN ERROR]:", err);
       react("❌");
       return await sock.sendMessage(
         from,
