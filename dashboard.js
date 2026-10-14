@@ -1,348 +1,727 @@
-export function renderDashboardHtml(botName = "DARK-DINU MD") {
+export function renderDashboardHtml(botName = "DARK-DINU OFC") {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>${botName} // CLOUD ECOSYSTEM</title>
+  <title>${botName} // DIGITAL SYSTEMS</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800;900&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@600;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #030712;
-      --card-bg: rgba(15, 23, 42, 0.75);
-      --border: rgba(255, 255, 255, 0.08);
-      --accent-red: #ff0044;
+      --bg: #07070a;
+      --card-bg: #0f1015;
+      --card-border: rgba(255, 255, 255, 0.07);
+      --accent-pink: #ff2d55;
+      --accent-pink-glow: rgba(255, 45, 85, 0.25);
       --accent-cyan: #00f0ff;
-      --accent-purple: #8b5cf6;
-      --accent-emerald: #10b981;
-      --text-main: #f8fafc;
-      --text-sub: #94a3b8;
+      --text-main: #ffffff;
+      --text-muted: #8e8e99;
+      --text-dim: #555562;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
     body {
       background-color: var(--bg);
-      background-image: 
-        radial-gradient(at 0% 0%, rgba(255, 0, 68, 0.15) 0px, transparent 50%),
-        radial-gradient(at 100% 100%, rgba(0, 240, 255, 0.12) 0px, transparent 50%),
-        radial-gradient(at 50% 50%, rgba(139, 92, 246, 0.06) 0px, transparent 50%);
-      color: var(--text-main); min-height: 100vh; padding: 20px 16px 60px; display: flex; flex-direction: column; align-items: center; overflow-x: hidden;
+      color: var(--text-main);
+      min-height: 100vh;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-bottom: 60px;
     }
-    .container { width: 100%; max-width: 900px; display: flex; flex-direction: column; gap: 20px; position: relative; }
-    
-    /* Top Bar */
-    .header-bar {
-      display: flex; justify-content: space-between; align-items: center; background: var(--card-bg);
-      backdrop-filter: blur(20px); border: 1px solid var(--border); border-radius: 20px; padding: 14px 20px; position: relative; z-index: 50;
-    }
-    .logo-area { display: flex; align-items: center; gap: 12px; }
-    .logo-img { width: 42px; height: 42px; border-radius: 12px; border: 2px solid var(--accent-red); object-fit: cover; }
-    .logo-text h1 { font-family: 'Orbitron', sans-serif; font-size: 17px; color: #fff; letter-spacing: 1px; }
-    .logo-text p { font-size: 10px; color: var(--accent-cyan); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
 
-    /* Animated Hamburger Menu Button */
-    .menu-btn {
-      background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border); border-radius: 12px;
-      width: 44px; height: 44px; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 5px; cursor: pointer; transition: 0.3s;
+    /* Ambient Background Glow */
+    .glow-top {
+      position: absolute;
+      top: -120px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 480px;
+      height: 280px;
+      background: radial-gradient(circle, rgba(255, 45, 85, 0.15) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
     }
-    .menu-btn:hover { background: rgba(255, 0, 68, 0.15); border-color: var(--accent-red); }
-    .menu-line { width: 20px; height: 2px; background: #fff; border-radius: 2px; transition: 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-    .menu-btn.open .line1 { transform: translateY(7px) rotate(45deg); background: var(--accent-red); }
-    .menu-btn.open .line2 { opacity: 0; transform: translateX(-10px); }
-    .menu-btn.open .line3 { transform: translateY(-7px) rotate(-45deg); background: var(--accent-red); }
 
-    /* Sliding Drawer / Sidebar */
-    .sidebar-overlay {
-      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(6px);
-      z-index: 90; opacity: 0; pointer-events: none; transition: 0.35s ease;
+    .wrapper {
+      width: 100%;
+      max-width: 520px;
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+      position: relative;
+      z-index: 10;
     }
-    .sidebar-overlay.active { opacity: 1; pointer-events: all; }
-    .sidebar {
-      position: fixed; top: 0; right: -360px; width: 340px; height: 100vh; background: #070a16;
-      border-left: 1px solid var(--border); z-index: 100; padding: 30px 22px; display: flex; flex-direction: column; gap: 24px;
-      transition: 0.4s cubic-bezier(0.16, 1, 0.3, 1); box-shadow: -15px 0 40px rgba(0, 0, 0, 0.8); overflow-y: auto;
-    }
-    .sidebar.active { right: 0; }
-    .sidebar-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; }
-    .sidebar-title { font-family: 'Orbitron'; font-size: 15px; color: var(--accent-cyan); font-weight: 800; letter-spacing: 1px; }
 
-    /* Welcome Banner */
-    .welcome-card {
-      background: linear-gradient(135deg, rgba(255, 0, 68, 0.15), rgba(0, 240, 255, 0.08));
-      border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; padding: 22px 20px; display: flex; flex-direction: column; gap: 8px; position: relative; overflow: hidden;
+    /* Navbar Header */
+    .navbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 8px;
     }
-    .welcome-badge {
-      display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 800;
-      color: var(--accent-emerald); background: rgba(16, 185, 129, 0.12); padding: 4px 10px; border-radius: 20px; width: fit-content; text-transform: uppercase;
-    }
-    .welcome-title { font-family: 'Orbitron'; font-size: 18px; font-weight: 800; color: #fff; }
-    .welcome-desc { font-size: 12px; color: var(--text-sub); line-height: 1.5; }
 
-    /* Stats Grid */
-    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
-    .stat-card {
-      background: var(--card-bg); backdrop-filter: blur(16px); border: 1px solid var(--border); border-radius: 16px; padding: 18px;
-      position: relative; overflow: hidden; display: flex; flex-direction: column; gap: 4px;
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 14px;
     }
-    .stat-card::after { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, var(--accent-red), transparent); }
-    .stat-title { font-size: 10px; color: var(--text-sub); text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; }
-    .stat-value { font-family: 'Orbitron', sans-serif; font-size: 24px; font-weight: 900; color: #fff; margin: 4px 0; }
-    .stat-badge { font-size: 11px; color: var(--accent-cyan); font-family: 'JetBrains Mono', monospace; }
 
-    /* Main Grid Split */
-    .main-split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    @media (max-width: 768px) { .main-split { grid-template-columns: 1fr; } }
-    .glass-box {
-      background: var(--card-bg); backdrop-filter: blur(20px); border: 1px solid var(--border); border-radius: 22px; padding: 24px 20px; display: flex; flex-direction: column; gap: 14px;
+    .brand-icon {
+      width: 42px;
+      height: 42px;
+      background: #14141b;
+      border: 1px solid rgba(255, 45, 85, 0.4);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px var(--accent-pink-glow);
     }
-    .box-head { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
-    .box-title { font-family: 'Orbitron', sans-serif; font-size: 14px; color: #fff; letter-spacing: 1px; }
 
-    /* Inputs & Buttons */
+    .brand-icon img {
+      width: 26px;
+      height: 26px;
+      border-radius: 6px;
+      object-fit: cover;
+    }
+
+    .brand-text h2 {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: 0.8px;
+      color: #fff;
+      text-transform: uppercase;
+    }
+
+    .brand-text p {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-launch {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 45, 85, 0.12);
+      border: 1px solid rgba(255, 45, 85, 0.35);
+      color: #fff;
+      padding: 9px 16px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: 0.25s;
+      cursor: pointer;
+    }
+
+    .btn-launch:hover {
+      background: var(--accent-pink);
+      border-color: var(--accent-pink);
+    }
+
+    .menu-trigger {
+      width: 42px;
+      height: 42px;
+      background: #14141b;
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      transition: 0.25s;
+    }
+
+    .menu-trigger span {
+      width: 18px;
+      height: 2px;
+      background: #fff;
+      border-radius: 2px;
+      transition: 0.3s;
+    }
+
+    /* Hero Section */
+    .hero-section {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      margin-top: 10px;
+    }
+
+    .hero-title {
+      font-size: 32px;
+      font-weight: 900;
+      letter-spacing: -0.5px;
+      line-height: 1.1;
+      color: #ffffff;
+    }
+
+    .hero-title span {
+      color: var(--accent-pink);
+    }
+
+    .hero-desc {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    /* Social Icons Row */
+    .social-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 4px;
+    }
+
+    .social-btn {
+      width: 48px;
+      height: 48px;
+      background: #111218;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      text-decoration: none;
+      font-size: 18px;
+      transition: 0.25s;
+    }
+
+    .social-btn:hover {
+      border-color: var(--accent-pink);
+      background: rgba(255, 45, 85, 0.1);
+      transform: translateY(-2px);
+    }
+
+    /* Section Headers */
+    .section-title {
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: 1.8px;
+      color: #fff;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+
+    /* Modules List View */
+    .modules-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .module-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      padding: 16px 18px;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: 0.25s ease;
+      text-decoration: none;
+      color: #fff;
+    }
+
+    .module-item:hover {
+      border-color: rgba(255, 45, 85, 0.4);
+      background: #14151e;
+      transform: translateX(4px);
+    }
+
+    .module-icon {
+      font-size: 18px;
+      color: var(--text-muted);
+    }
+
+    .module-label {
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.2px;
+    }
+
+    /* Interactive Pairing Card Drawer */
+    .tool-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .tool-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .tool-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: 0.5px;
+    }
+
+    .tool-tag {
+      font-size: 10px;
+      font-weight: 800;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-pink);
+      background: rgba(255, 45, 85, 0.12);
+      padding: 3px 8px;
+      border-radius: 6px;
+    }
+
     input {
-      width: 100%; background: rgba(3, 7, 18, 0.7); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px;
-      padding: 14px 16px; font-size: 14px; font-family: 'JetBrains Mono', monospace; color: #fff; outline: none; transition: 0.25s;
+      width: 100%;
+      background: #090a0f;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 15px 18px;
+      font-size: 15px;
+      font-family: 'JetBrains Mono', monospace;
+      color: #fff;
+      outline: none;
+      transition: 0.25s;
     }
-    input:focus { border-color: var(--accent-red); box-shadow: 0 0 14px rgba(255, 0, 68, 0.25); }
-    .btn-action {
-      width: 100%; padding: 14px; border-radius: 12px; border: none; background: linear-gradient(135deg, var(--accent-red), #aa0030);
-      color: #fff; font-family: 'Orbitron', sans-serif; font-size: 12px; font-weight: 700; letter-spacing: 1px; cursor: pointer; transition: 0.25s;
+
+    input:focus {
+      border-color: var(--accent-pink);
+      box-shadow: 0 0 15px var(--accent-pink-glow);
     }
-    .btn-action:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(255, 0, 68, 0.4); }
-    .btn-action:disabled { opacity: 0.6; cursor: not-allowed; }
 
-    #codeBox { display: none; background: rgba(0, 240, 255, 0.05); border: 1px dashed var(--accent-cyan); border-radius: 14px; padding: 14px; text-align: center; }
-    .code-display { font-family: 'JetBrains Mono', monospace; font-size: 26px; font-weight: 900; color: var(--accent-cyan); letter-spacing: 4px; margin: 6px 0; }
-    .btn-copy { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.15); color: #fff; padding: 8px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; width: 100%; }
-
-    /* Privacy Protected Nodes */
-    .nodes-list { display: flex; flex-direction: column; gap: 8px; max-height: 250px; overflow-y: auto; }
-    .node-item { display: flex; justify-content: space-between; align-items: center; background: rgba(3, 7, 18, 0.5); border: 1px solid var(--border); padding: 12px 14px; border-radius: 12px; }
-    .node-ident { display: flex; align-items: center; gap: 10px; }
-    .node-icon { width: 30px; height: 30px; background: rgba(255, 0, 68, 0.1); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
-    .node-id { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 700; color: #fff; }
-    .node-tag { font-size: 10px; color: var(--accent-cyan); }
-    .node-badge { background: rgba(16, 185, 129, 0.15); color: var(--accent-emerald); padding: 4px 8px; border-radius: 6px; font-size: 10px; font-weight: 700; font-family: 'JetBrains Mono'; }
-
-    /* Sidebar Suite Sections */
-    .tool-section { display: flex; flex-direction: column; gap: 10px; }
-    .tool-title { font-size: 12px; font-weight: 700; color: #fff; text-transform: uppercase; letter-spacing: 1px; display: flex; align-items: center; gap: 6px; }
-    .tool-desc { font-size: 11px; color: var(--text-sub); line-height: 1.4; }
-    .btn-tool {
-      width: 100%; padding: 12px; border-radius: 10px; border: 1px solid rgba(0, 240, 255, 0.3); background: rgba(0, 240, 255, 0.08);
-      color: var(--accent-cyan); font-family: 'Orbitron'; font-size: 11px; font-weight: 700; cursor: pointer; transition: 0.25s;
+    .btn-submit {
+      width: 100%;
+      padding: 15px;
+      border-radius: 12px;
+      border: none;
+      background: var(--accent-pink);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      box-shadow: 0 5px 20px rgba(255, 45, 85, 0.35);
+      transition: 0.25s;
     }
-    .btn-tool:hover { background: var(--accent-cyan); color: #000; }
 
-    .footer { text-align: center; font-size: 12px; color: var(--text-sub); margin-top: 10px; }
-    .footer span { color: #fff; font-weight: 600; }
+    .btn-submit:hover:not(:disabled) {
+      opacity: 0.95;
+      transform: translateY(-2px);
+    }
+
+    .btn-submit:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #codeDisplayBox {
+      display: none;
+      background: #090a0f;
+      border: 1px dashed var(--accent-pink);
+      border-radius: 12px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    .code-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 28px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: 4px;
+      margin: 6px 0;
+    }
+
+    .btn-copy-code {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--card-border);
+      color: #fff;
+      padding: 9px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    /* Live Cluster Metrics Badge */
+    .cluster-live-box {
+      background: #111218;
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .cluster-info-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--text-muted);
+      font-weight: 700;
+    }
+
+    .cluster-info-val {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 18px;
+      font-weight: 800;
+      color: var(--accent-pink);
+      margin-top: 3px;
+    }
+
+    /* Connect Section (Footer Meta) */
+    .connect-section {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 8px;
+    }
+
+    .connect-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 14px;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-weight: 500;
+    }
+
+    .connect-icon {
+      color: var(--accent-pink);
+      font-size: 16px;
+    }
+
+    /* Animated Slide-in Sidebar (Menu Drawer) */
+    .drawer-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: 0.35s ease;
+    }
+
+    .drawer-overlay.active {
+      opacity: 1;
+      pointer-events: all;
+    }
+
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: -360px;
+      width: 320px;
+      height: 100vh;
+      background: #0c0d12;
+      border-left: 1px solid var(--card-border);
+      z-index: 110;
+      padding: 30px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      transition: 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: -15px 0 40px rgba(0, 0, 0, 0.8);
+      overflow-y: auto;
+    }
+
+    .drawer.active {
+      right: 0;
+    }
+
+    .drawer-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 15px;
+    }
+
+    .drawer-head h3 {
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      color: #fff;
+    }
+
+    .btn-close {
+      cursor: pointer;
+      color: var(--text-muted);
+      font-size: 20px;
+    }
+
+    .btn-drawer-tool {
+      width: 100%;
+      padding: 13px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 45, 85, 0.3);
+      background: rgba(255, 45, 85, 0.08);
+      color: var(--accent-pink);
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: 0.25s;
+    }
+
+    .btn-drawer-tool:hover {
+      background: var(--accent-pink);
+      color: #fff;
+    }
   </style>
 </head>
 <body>
 
-  <!-- Drawer Menu Backdrop -->
-  <div class="sidebar-overlay" id="overlay" onclick="toggleMenu()"></div>
+  <div class="glow-top"></div>
 
-  <!-- Animated Sidebar Drawer -->
-  <div class="sidebar" id="sidebar">
-    <div class="sidebar-head">
-      <span class="sidebar-title">⚡ CLUSTER SUITE</span>
-      <div style="cursor:pointer; color:#fff; font-size:18px;" onclick="toggleMenu()">✕</div>
+  <!-- Drawer Menu Overlay -->
+  <div class="drawer-overlay" id="overlay" onclick="toggleMenu()"></div>
+
+  <!-- Drawer Sidebar -->
+  <div class="drawer" id="drawer">
+    <div class="drawer-head">
+      <h3>DIGITAL SUITE</h3>
+      <div class="btn-close" onclick="toggleMenu()">✕</div>
     </div>
 
-    <!-- Tool 1: Channel React Suite -->
-    <div class="tool-section">
-      <div class="tool-title">💖 AUTO CHANNEL REACT</div>
-      <p class="tool-desc">ඔබේ WhatsApp Channel එකට වැටෙන සියලුම Posts වලට cluster එකෙන්ම instant auto reactions ලබාගන්න.</p>
-      <input type="text" id="reactChannelLink" placeholder="https://whatsapp.com/channel/..." autocomplete="off">
-      <button class="btn-tool" onclick="triggerChannelTool('react')">ACTIVATE REACTIONS</button>
+    <!-- Tool A: Channel React Tool -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 12px; font-weight: 800; color: #fff; text-transform: uppercase;">⚡ Auto Channel React</div>
+      <p style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">WhatsApp Channel Link එක ලබා දී cluster reactions activate කරගන්න.</p>
+      <input type="text" id="reactLink" placeholder="https://whatsapp.com/channel/..." autocomplete="off">
+      <button class="btn-drawer-tool" onclick="runChannelTool('react')">ACTIVATE REACTIONS</button>
     </div>
 
-    <hr style="border: 0; border-top: 1px solid var(--border);">
+    <hr style="border: 0; border-top: 1px solid var(--card-border);">
 
-    <!-- Tool 2: Channel Follower Booster -->
-    <div class="tool-section">
-      <div class="tool-title">📢 CHANNEL FOLLOWER SYNC</div>
-      <p class="tool-desc">Cluster එකේ සිටින සියලුම Active Botsලා එකවර ඔබගේ Channel එක follow කරවන්න.</p>
-      <input type="text" id="followChannelLink" placeholder="https://whatsapp.com/channel/..." autocomplete="off">
-      <button class="btn-tool" style="border-color: rgba(255, 0, 68, 0.3); background: rgba(255, 0, 68, 0.08); color: var(--accent-red);" onclick="triggerChannelTool('follow')">FOLLOW WITH ALL BOTS</button>
+    <!-- Tool B: Channel Follower Booster -->
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="font-size: 12px; font-weight: 800; color: #fff; text-transform: uppercase;">📢 Multi-Follow Engine</div>
+      <p style="font-size: 11px; color: var(--text-muted); line-height: 1.5;">Cluster එකේ සිටින සියලුම botsලා එකවර channel එක follow කරවන්න.</p>
+      <input type="text" id="followLink" placeholder="https://whatsapp.com/channel/..." autocomplete="off">
+      <button class="btn-drawer-tool" style="background: rgba(255,255,255,0.06); border-color: var(--card-border); color: #fff;" onclick="runChannelTool('follow')">FOLLOW WITH ALL BOTS</button>
     </div>
 
-    <hr style="border: 0; border-top: 1px solid var(--border);">
-
-    <!-- Ecosystem Info -->
-    <div style="font-size: 11px; color: var(--text-sub); line-height: 1.6;">
-      🔒 <b>Privacy Shield:</b> Connected bot credentials and phone numbers are encrypted with SHA-256 session isolation.
+    <div style="margin-top: auto; font-size: 11px; color: var(--text-dim); text-align: center;">
+      Built & Engineered by Dinidu Heshan
     </div>
   </div>
 
-  <div class="container">
-    
-    <!-- Top Header -->
-    <div class="header-bar">
-      <div class="logo-area">
-        <img class="logo-img" src="https://files.catbox.moe/k315x4.jpg" alt="Logo">
-        <div class="logo-text">
-          <h1>${botName}</h1>
-          <p>Next-Gen Multi-Device Portal</p>
+  <div class="wrapper">
+
+    <!-- Top Navbar -->
+    <nav class="navbar">
+      <div class="brand-group">
+        <div class="brand-icon">
+          <img src="https://files.catbox.moe/k315x4.jpg" alt="Icon">
+        </div>
+        <div class="brand-text">
+          <h2>DARK-DINU OFC</h2>
+          <p>DIGITAL SYSTEMS</p>
         </div>
       </div>
+
+      <div class="nav-actions">
+        <a class="btn-launch" href="#pairingSection">
+          Launch Bot ↗
+        </a>
+        <div class="menu-trigger" onclick="toggleMenu()">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Hero Title -->
+    <section class="hero-section">
+      <h1 class="hero-title">DARK-DINU <span>OFC</span></h1>
+      <p class="hero-desc">
+        Empowering the digital future with cutting-edge Web Development, AI solutions, and next-generation intelligent bots.
+      </p>
+
+      <!-- Social Links -->
+      <div class="social-row">
+        <a class="social-btn" href="https://wa.me/94719845166" target="_blank" title="WhatsApp">💬</a>
+        <a class="social-btn" href="https://facebook.com" target="_blank" title="Facebook">📘</a>
+        <a class="social-btn" href="https://youtube.com" target="_blank" title="YouTube">📺</a>
+      </div>
+    </section>
+
+    <!-- Modules List -->
+    <section>
+      <div class="section-title">MODULES</div>
+      <div class="modules-list">
+        <div class="module-item" onclick="document.getElementById('pairingSection').scrollIntoView({behavior:'smooth'})">
+          <div class="module-icon">🤖</div>
+          <div class="module-label">Bot Studio</div>
+        </div>
+        <div class="module-item" onclick="toggleMenu()">
+          <div class="module-icon">⚡</div>
+          <div class="module-label">Digital Services</div>
+        </div>
+        <div class="module-item" onclick="alert('Session isolation and dynamic cluster modes are pre-configured.')">
+          <div class="module-icon">⚙️</div>
+          <div class="module-label">Settings</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pairing Module (Bot Studio) -->
+    <section id="pairingSection">
+      <div class="section-title">BOT STUDIO // ACCESS</div>
+      <div class="tool-card">
+        <div class="tool-head">
+          <div class="tool-title">Instant Node Linking</div>
+          <div class="tool-tag">SAFARI CORE</div>
+        </div>
+        <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5;">
+          Country code සහිත WhatsApp අංකය ඇතුළත් කර pairing code එක ලබාගන්න.
+        </p>
+
+        <input type="tel" id="userPhone" placeholder="e.g. 94712345678" autocomplete="off">
+        <button id="genBtn" class="btn-submit" onclick="requestPairCode()">GET PAIRING CODE</button>
+
+        <div id="codeDisplayBox">
+          <div style="font-size: 10px; color: var(--accent-pink); font-weight: 800; letter-spacing: 1px;">PAIRING CODE</div>
+          <div class="code-val" id="codeVal">--------</div>
+          <button class="btn-copy-code" id="copyCodeBtn" onclick="copyCode()">Copy Pairing Code</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live Cluster Monitor -->
+    <section>
+      <div class="cluster-live-box">
+        <div>
+          <div class="cluster-info-title">Active Cloud Instances</div>
+          <div class="cluster-info-val" id="activeBotsCount">0 Sockets</div>
+        </div>
+        <div style="text-align: right;">
+          <div class="cluster-info-title">Runtime Latency</div>
+          <div style="font-family: 'JetBrains Mono'; font-size: 14px; color: #10b981; font-weight: 700; margin-top: 5px;">~18ms Optimal</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Connect Meta Footer -->
+    <section class="connect-section">
+      <div class="section-title">CONNECT</div>
       
-      <!-- Right Hamburger Button -->
-      <div class="menu-btn" id="menuBtn" onclick="toggleMenu()">
-        <div class="menu-line line1"></div>
-        <div class="menu-line line2"></div>
-        <div class="menu-line line3"></div>
-      </div>
-    </div>
-
-    <!-- Official Welcome Card -->
-    <div class="welcome-card">
-      <div class="welcome-badge">✦ Official Cloud Network 2026</div>
-      <h2 class="welcome-title">WELCOME TO DARK-DINU CLUSTER</h2>
-      <p class="welcome-desc">High-speed multi-device WhatsApp automation suite with privacy protection, persistent memory, and automated cluster routing.</p>
-    </div>
-
-    <!-- Stats Grid -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <span class="stat-title">Active Sockets</span>
-        <span class="stat-value" id="activeCount">0</span>
-        <span class="stat-badge">Encrypted Nodes</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-title">System Uptime</span>
-        <span class="stat-value" id="uptime">0s</span>
-        <span class="stat-badge">Continuous Runtime</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-title">Engine Latency</span>
-        <span class="stat-value" style="color: var(--accent-emerald);">~24ms</span>
-        <span class="stat-badge">Ultra-Fast Pipeline</span>
-      </div>
-      <div class="stat-card">
-        <span class="stat-title">Memory Allocation</span>
-        <span class="stat-value" id="ramUsage">0 MB</span>
-        <span class="stat-badge">Zero Leak RSS</span>
-      </div>
-    </div>
-
-    <!-- Main Grid -->
-    <div class="main-split">
-      
-      <!-- Pairing Box -->
-      <div class="glass-box">
-        <div class="box-head">
-          <span class="box-title">⚡ PAIR NEW INSTANCE</span>
-          <span style="font-size: 10px; color: var(--accent-cyan); font-weight: 700;">SAFARI ENGINE</span>
-        </div>
-        <p style="font-size: 12px; color: var(--text-sub);">Country code සහිත WhatsApp අංකය ඇතුළත් කරන්න (e.g. 947xxxxxxxx).</p>
-        <input type="tel" id="phoneNumber" placeholder="94712345678" autocomplete="off">
-        <button id="pairBtn" class="btn-action" onclick="requestPairCode()">GET PAIRING CODE</button>
-        
-        <div id="codeBox">
-          <div style="font-size: 10px; color: var(--accent-cyan); font-weight: 700;">PAIRING CODE</div>
-          <div id="displayCode" class="code-display">--------</div>
-          <button id="copyBtn" class="btn-copy" onclick="copyCode()">Copy Code</button>
-        </div>
+      <div class="connect-item">
+        <div class="connect-icon">&lt;&gt;</div>
+        <div>Designed by DARK-DINU OFC</div>
       </div>
 
-      <!-- Anonymous Privacy Protected Nodes -->
-      <div class="glass-box">
-        <div class="box-head">
-          <span class="box-title">🛡️ CLUSTER INSTANCES</span>
-          <span id="nodeLiveCount" style="font-size: 10px; color: var(--accent-emerald); font-weight: 700;">0 NODES</span>
-        </div>
-        <p style="font-size: 12px; color: var(--text-sub);">Active instances are masked for privacy & security protection.</p>
-        
-        <div class="nodes-list" id="nodesContainer">
-          <div style="text-align: center; color: var(--text-sub); font-size: 12px; padding: 15px;">Scanning cluster...</div>
-        </div>
+      <a class="connect-item" href="mailto:heshan@devofc.top">
+        <div class="connect-icon">✉</div>
+        <div>heshan@devofc.top</div>
+      </a>
+
+      <a class="connect-item" href="tel:+94719845166">
+        <div class="connect-icon">📞</div>
+        <div>+94 71 984 5166</div>
+      </a>
+
+      <div class="connect-item">
+        <div class="connect-icon">📍</div>
+        <div>Sri Lanka</div>
       </div>
+    </section>
 
-    </div>
-
-    <div class="footer">Architected & Maintained by <span>Dinidu Heshan</span> • 24/7 Engine</div>
   </div>
 
   <script>
-    // Hamburger Toggle
     function toggleMenu() {
-      const btn = document.getElementById('menuBtn');
-      const sidebar = document.getElementById('sidebar');
-      const overlay = document.getElementById('overlay');
-      btn.classList.toggle('open');
-      sidebar.classList.toggle('active');
-      overlay.classList.toggle('active');
+      document.getElementById('drawer').classList.toggle('active');
+      document.getElementById('overlay').classList.toggle('active');
     }
 
-    // Real-Time Stats & Masked Nodes Polling
     async function syncStats() {
       try {
         const res = await fetch('/api/stats');
         const data = await res.json();
-        document.getElementById('activeCount').innerText = data.activeCount;
-        document.getElementById('uptime').innerText = data.uptime;
-        document.getElementById('ramUsage').innerText = data.memory;
-        document.getElementById('nodeLiveCount').innerText = data.activeCount + ' NODES ONLINE';
-
-        const list = document.getElementById('nodesContainer');
-        if (data.nodes && data.nodes.length > 0) {
-          list.innerHTML = data.nodes.map((n, idx) => \`
-            <div class="node-item">
-              <div class="node-ident">
-                <div class="node-icon">🤖</div>
-                <div>
-                  <div class="node-id">\${n.maskedNumber}</div>
-                  <div class="node-tag">Node Tag: CLUSTER-\${String(idx + 1).padStart(2, '0')}</div>
-                </div>
-              </div>
-              <span class="node-badge">🟢 SECURED</span>
-            </div>
-          \`).join('');
-        } else {
-          list.innerHTML = '<div style="text-align:center;color:var(--text-sub);font-size:12px;padding:15px;">No active instances. Link one using pairing portal!</div>';
-        }
+        document.getElementById('activeBotsCount').innerText = data.activeCount + ' Sockets';
       } catch (_) {}
     }
     setInterval(syncStats, 3500);
     syncStats();
 
-    // Pairing Request
     async function requestPairCode() {
-      const p = document.getElementById('phoneNumber').value.trim().replace(/[^0-9]/g, '');
-      const btn = document.getElementById('pairBtn');
-      const box = document.getElementById('codeBox');
-      const codeEl = document.getElementById('displayCode');
-      if (!p || p.length < 10) return alert('කරුණාකර නිවැරදි අංකයක් ඇතුළත් කරන්න!');
-      btn.innerText = 'GENERATING CODE...'; btn.disabled = true;
+      const p = document.getElementById('userPhone').value.trim().replace(/[^0-9]/g, '');
+      const btn = document.getElementById('genBtn');
+      const box = document.getElementById('codeDisplayBox');
+      const codeEl = document.getElementById('codeVal');
+
+      if (!p || p.length < 10) return alert('කරුණාකර වලංගු WhatsApp අංකයක් ඇතුළත් කරන්න!');
+      
+      btn.innerText = 'GENERATING CODE...';
+      btn.disabled = true;
+
       try {
         const res = await fetch('/pair?phone=' + p);
         const data = await res.json();
         if (data.code) {
-          codeEl.innerText = data.code; box.style.display = 'block'; btn.innerText = 'CODE READY!';
+          codeEl.innerText = data.code;
+          box.style.display = 'block';
+          btn.innerText = 'CODE READY!';
           if (navigator.clipboard) navigator.clipboard.writeText(data.code.replace(/-/g, ''));
         } else {
-          alert(data.error || 'Failed'); btn.innerText = 'GET PAIRING CODE'; btn.disabled = false;
+          alert(data.error || 'Failed');
+          btn.innerText = 'GET PAIRING CODE';
+          btn.disabled = false;
         }
       } catch {
-        alert('Server unreachable'); btn.innerText = 'GET PAIRING CODE'; btn.disabled = false;
+        alert('Server unreachable');
+        btn.innerText = 'GET PAIRING CODE';
+        btn.disabled = false;
       }
     }
 
     function copyCode() {
-      const c = document.getElementById('displayCode').innerText.replace(/-/g, '');
+      const c = document.getElementById('codeVal').innerText.replace(/-/g, '');
       navigator.clipboard.writeText(c);
-      document.getElementById('copyBtn').innerText = '✓ COPIED!';
-      setTimeout(() => document.getElementById('copyBtn').innerText = 'Copy Code', 2000);
+      document.getElementById('copyCodeBtn').innerText = '✓ COPIED!';
+      setTimeout(() => document.getElementById('copyCodeBtn').innerText = 'Copy Pairing Code', 2000);
     }
 
-    // Trigger Channel React / Follow from Web
-    async function triggerChannelTool(action) {
-      const inputEl = document.getElementById(action === 'react' ? 'reactChannelLink' : 'followChannelLink');
-      const link = inputEl.value.trim();
-      if (!link) return alert('කරුණාකර WhatsApp Channel Link එක ඇතුළත් කරන්න!');
+    async function runChannelTool(action) {
+      const link = document.getElementById(action === 'react' ? 'reactLink' : 'followLink').value.trim();
+      if (!link) return alert('කරුණාකර Channel Link එක ඇතුළත් කරන්න!');
       
       try {
         const res = await fetch('/api/channel', {
@@ -350,16 +729,15 @@ export function renderDashboardHtml(botName = "DARK-DINU MD") {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ action, link })
         });
-        const data = await res.json();
-        if (data.status) {
-          alert('✅ ' + data.message);
-          inputEl.value = '';
+        const d = await res.json();
+        if (d.status) {
+          alert('✅ ' + d.message);
           toggleMenu();
         } else {
-          alert('❌ ' + (data.error || 'Failed to process request!'));
+          alert('❌ ' + (d.error || 'Failed'));
         }
       } catch {
-        alert('Server communication error!');
+        alert('Server error!');
       }
     }
   </script>
