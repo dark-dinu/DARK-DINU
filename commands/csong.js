@@ -2,7 +2,6 @@ import yts from "yt-search";
 import axios from "axios";
 import { delay } from "@whiskeysockets/baileys";
 
-// Global In-Memory Newsletter JID Cache
 global.channelJidCache = global.channelJidCache || new Map();
 
 export default {
@@ -30,7 +29,7 @@ export default {
   \`${pref}csong <channel_link> , <song_name>\`
 
   ✨ *Example:*
-  \`${pref}csong https://whatsapp.com/channel/0029VaXXXXX , kuweniye\`
+  \`${pref}csong https://whatsapp.com/channel/0029VbTXBMICVfnpV20wI27 , kuweniye\`
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`
           },
@@ -38,24 +37,27 @@ export default {
         );
       }
 
-      const channelLink = fullText.slice(0, firstComma).trim();
+      let channelLink = fullText.slice(0, firstComma).trim();
       const songName = fullText.slice(firstComma + 1).trim();
 
+      // ලින්ක් එකේ අගට /755 වගේ post IDs තිබ්බොත් ඒවා clear කර invite code එක පමණක් ගැනීම
       const inviteMatch = channelLink.match(/whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/);
-      const inviteCode = inviteMatch ? inviteMatch[1] : null;
+      let inviteCode = inviteMatch ? inviteMatch[1] : null;
+      if (inviteCode && inviteCode.includes("/")) {
+        inviteCode = inviteCode.split("/")[0];
+      }
 
       if (!inviteCode || !songName) {
         return await sock.sendMessage(
           from,
-          { text: "🌸 *Oopsie!* Please provide a valid channel link and a song title sweetheart~ ✨" },
+          { text: "🌸 *Oops!* Please provide a valid channel link and a song title sweetheart~ ✨" },
           { quoted: msg }
         );
       }
 
-      // Microsecond React
-      sock.sendMessage(from, { react: { text: "🎶", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // 1. Channel JID Extraction & Validation
+      // 1. Channel JID හරියටම Resolve කරගැනීම
       let channelJid = global.channelJidCache.get(inviteCode);
       let channelMeta = null;
 
@@ -68,39 +70,16 @@ export default {
           channelJid = channelMeta?.id;
           if (channelJid) global.channelJidCache.set(inviteCode, channelJid);
         } catch (e) {
-          return await sock.sendMessage(
-            from,
-            { text: `🌸 *Could not access channel metadata:* ${e.message}` },
-            { quoted: msg }
-          );
+          console.error("[CSONG META ERR]:", e.message);
         }
       }
 
       if (!channelJid) {
-        return await sock.sendMessage(
-          from,
-          { text: "🌸 *Channel not found!* Make sure the invite link is active, honey~" },
-          { quoted: msg }
-        );
+        channelJid = `${inviteCode}@newsletter`;
       }
 
-      // Safe JID Format ensuring @newsletter domain
       if (!channelJid.includes("@newsletter")) {
         channelJid = `${channelJid}@newsletter`;
-      }
-
-      // Role Verification
-      if (channelMeta) {
-        const role = channelMeta.viewer_metadata?.role || "GUEST";
-        if (role !== "ADMIN" && role !== "OWNER") {
-          return await sock.sendMessage(
-            from,
-            {
-              text: `🎀 *Admin Required:* I am not an admin in this channel darling! (Status: \`${role}\`). Please promote my number to post softly~`
-            },
-            { quoted: msg }
-          );
-        }
       }
 
       // 2. YouTube Search
@@ -114,7 +93,7 @@ export default {
         );
       }
 
-      // 3. Audio Stream Resolution
+      // 3. Audio Download API
       const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
       let audioDownloadUrl = null;
 
@@ -135,27 +114,26 @@ export default {
       if (!audioDownloadUrl) {
         return await sock.sendMessage(
           from,
-          { text: "🌸 *Oops!* YouTube Downloader API is currently unreachable. Please provide an updated API key or endpoint!" },
+          { text: "🌸 *Oops!* Audio download API is currently busy. Please try again shortly." },
           { quoted: msg }
         );
       }
 
-      // 4. Parallel Download Image & Raw Audio Stream
+      // 4. Download Audio & Thumbnail Buffers
       const [audioRes, imgRes] = await Promise.all([
         axios.get(audioDownloadUrl, { responseType: "arraybuffer", timeout: 45000 }),
-        axios.get(video.thumbnail, { responseType: "arraybuffer", timeout: 12000 })
+        axios.get(video.thumbnail, { responseType: "arraybuffer", timeout: 15000 })
       ]);
 
       const rawAudioBuffer = Buffer.from(audioRes.data);
       const imgBuffer = Buffer.from(imgRes.data);
 
-      // Cute Pastel Channel Caption
       const cardCaption = 
 `🎀 ｡ﾟ•┈୨ *NOW PLAYING* ୧┈•ﾟ｡ 🐾
 
   🎵 *Track:* ${video.title}
   ⏳ *Duration:* ${video.timestamp || "3:30"}
-  🎧 *Format:* High-Quality Audio Stream
+  🎧 *Format:* High-Definition Audio
 
   ◁◁   ❚❚   ▷▷  0:00 ───●─ ${video.timestamp || "3:30"}
 
@@ -163,19 +141,18 @@ export default {
 🎧 _Plug in your headphones for sweet acoustic vibes~_
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      // 5. Send Card to Channel
+      // 5. Send Image to Channel
       await sock.sendMessage(channelJid, {
         image: imgBuffer,
         caption: cardCaption
       });
 
-      // Stagger delay between image and audio
-      await delay(1500);
+      await delay(2000);
 
-      // 6. Send Clean Standard Audio to Channel (Channels accept audio/mpeg seamlessly)
+      // 6. Send Clean Audio Stream (audio/mpeg direct compatible with Newsletters)
       await sock.sendMessage(channelJid, {
         audio: rawAudioBuffer,
-        mimetype: "audio/mp4",
+        mimetype: "audio/mpeg",
         fileName: `${video.title.replace(/[^a-zA-Z0-9 ]/g, "")}.mp3`
       });
 
@@ -193,7 +170,7 @@ export default {
       sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `🌸 *Glitch detected:* ${err.message || "Failed to post song softly"}` },
+        { text: `🌸 *Glitch detected:* ${err.message || "Failed to post to channel"}` },
         { quoted: msg }
       ).catch(() => {});
     }
