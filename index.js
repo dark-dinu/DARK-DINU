@@ -70,7 +70,16 @@ app.get("/react", (req, res) => res.sendFile(path.join(__dirname, "public", "rea
 app.get("/commands", (req, res) => res.sendFile(path.join(__dirname, "public", "commands.html")));
 app.get("/status", (req, res) => res.sendFile(path.join(__dirname, "public", "status.html")));
 
+// Guaranteed logo.jpg Route (Checks local first, then falls back safely)
 app.get("/logo.jpg", (req, res) => {
+  const localLogoPublic = path.join(__dirname, "public", "logo.jpg");
+  const localLogoRoot = path.join(__dirname, "logo.jpg");
+
+  if (fs.existsSync(localLogoPublic)) {
+    return res.sendFile(localLogoPublic);
+  } else if (fs.existsSync(localLogoRoot)) {
+    return res.sendFile(localLogoRoot);
+  }
   return res.redirect("https://files.catbox.moe/s1q558.jpg");
 });
 
@@ -131,11 +140,11 @@ app.get("/api/commands", (req, res) => {
   res.json(list);
 });
 
-// 3. Ultra-Fast Sequential Channel React Worker API
+// 3. ALL-ACTIVE-BOTS Sequential Reaction Engine (No Timeout & Order Preserved)
 app.post("/api/channel-react", async (req, res) => {
   const { postLink, emojis } = req.body;
   if (!postLink || !Array.isArray(emojis) || emojis.length === 0) {
-    return res.status(400).json({ status: false, error: "Post link and at least one emoji are required." });
+    return res.status(400).json({ status: false, error: "Post link and emojis required." });
   }
 
   const match = postLink.trim().match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]+)(?:\/(\d+))?/i);
@@ -143,8 +152,8 @@ app.post("/api/channel-react", async (req, res) => {
 
   const channelCode = match[1];
   const serverId = match[2];
-  if (!serverId) return res.status(400).json({ status: false, error: "Please provide the specific post link (Click post > Copy link)." });
-  if (activeSockets.size === 0) return res.status(503).json({ status: false, error: "No active bot nodes are online right now." });
+  if (!serverId) return res.status(400).json({ status: false, error: "Post specific link is required (Click Post > Copy link)." });
+  if (activeSockets.size === 0) return res.status(503).json({ status: false, error: "No active bot nodes online right now." });
 
   try {
     const firstSock = activeSockets.values().next().value;
@@ -158,41 +167,43 @@ app.post("/api/channel-react", async (req, res) => {
     }
     if (!newsletterJid) newsletterJid = `${channelCode}@newsletter`;
 
-    // 1. Connection Timeout වළක්වා ගැනීමට ක්ෂණිකව Web Response එක ලබා දීම
+    // 1. Send immediate response to prevent frontend timeout error
     res.json({
       status: true,
-      message: "Reactions queued successfully! Dispatching in sequential order across the cluster."
+      message: `Full Cluster Reaction wave started! All ${activeSockets.size} bots deploying in sequence.`
     });
 
-    // 2. Background Task: තෝරාගත් Emojis පිළිවෙළට Bot Nodes හරහා යැවීම
+    // 2. Background Task: ALL BOTS deploy EACH EMOJI in exact order
     (async () => {
       const sockets = Array.from(activeSockets.values()).filter(s => s?.user?.id);
       if (sockets.length === 0) return;
 
-      console.log(`[REACT DISPATCH] Initiating ${emojis.length} emojis to ${newsletterJid}/${serverId} via ${sockets.length} nodes.`);
+      console.log(`[CLUSTER REACT] ${sockets.length} bots deploying ${emojis.length} emojis to ${newsletterJid}/${serverId}`);
 
-      for (let i = 0; i < emojis.length; i++) {
-        const emoji = emojis[i];
-        const targetSock = sockets[i % sockets.length];
+      for (let eIdx = 0; eIdx < emojis.length; eIdx++) {
+        const emoji = emojis[eIdx];
 
-        try {
-          if (typeof targetSock.newsletterReactMessage === "function") {
-            await targetSock.newsletterReactMessage(newsletterJid, serverId, emoji);
-          } else if (typeof targetSock.query === "function") {
-            await targetSock.query({
-              tag: "message",
-              attrs: { to: newsletterJid, type: "reaction", server_id: String(serverId) },
-              content: [{ tag: "reaction", attrs: { code: emoji } }]
-            });
+        // All bots react with current emoji in exact sequence
+        for (let bIdx = 0; bIdx < sockets.length; bIdx++) {
+          const sock = sockets[bIdx];
+          try {
+            if (typeof sock.newsletterReactMessage === "function") {
+              await sock.newsletterReactMessage(newsletterJid, serverId, emoji);
+            } else if (typeof sock.query === "function") {
+              await sock.query({
+                tag: "message",
+                attrs: { to: newsletterJid, type: "reaction", server_id: String(serverId) },
+                content: [{ tag: "reaction", attrs: { code: emoji } }]
+              });
+            }
+          } catch (err) {
+            console.error(`[!] Node ${sock.user?.id} react error:`, err.message);
           }
-        } catch (err) {
-          console.error(`[!] Failed reaction with node ${targetSock.user?.id}:`, err.message);
+          await delay(200); // Prevents WhatsApp rate limiting
         }
-
-        // WhatsApp Rate Limits මඟහැර පිළිවෙළ තහවුරු කිරීමට තත්පර 0.5ක පරතරයක්
-        await delay(500);
+        await delay(400); // Short break between emoji sets
       }
-      console.log(`✨ All ${emojis.length} reactions deployed successfully in order.`);
+      console.log(`🔥 All ${sockets.length} bots finished reacting with all ${emojis.length} emojis!`);
     })().catch(err => console.error("[REACT WORKER ERR]:", err.message));
 
   } catch (err) {
