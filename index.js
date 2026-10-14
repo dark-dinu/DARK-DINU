@@ -70,7 +70,7 @@ app.get("/react", (req, res) => res.sendFile(path.join(__dirname, "public", "rea
 app.get("/commands", (req, res) => res.sendFile(path.join(__dirname, "public", "commands.html")));
 app.get("/status", (req, res) => res.sendFile(path.join(__dirname, "public", "status.html")));
 
-// Guaranteed logo.jpg Route (Checks local first, then falls back safely)
+// Logo direct route
 app.get("/logo.jpg", (req, res) => {
   const localLogoPublic = path.join(__dirname, "public", "logo.jpg");
   const localLogoRoot = path.join(__dirname, "logo.jpg");
@@ -140,11 +140,11 @@ app.get("/api/commands", (req, res) => {
   res.json(list);
 });
 
-// 3. ALL-ACTIVE-BOTS Sequential Reaction Engine (No Timeout & Order Preserved)
+// 3. Proportional & Mixed Reactions Dispatcher
 app.post("/api/channel-react", async (req, res) => {
   const { postLink, emojis } = req.body;
   if (!postLink || !Array.isArray(emojis) || emojis.length === 0) {
-    return res.status(400).json({ status: false, error: "Post link and emojis required." });
+    return res.status(400).json({ status: false, error: "Post link and at least one emoji are required." });
   }
 
   const match = postLink.trim().match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]+)(?:\/(\d+))?/i);
@@ -152,8 +152,8 @@ app.post("/api/channel-react", async (req, res) => {
 
   const channelCode = match[1];
   const serverId = match[2];
-  if (!serverId) return res.status(400).json({ status: false, error: "Post specific link is required (Click Post > Copy link)." });
-  if (activeSockets.size === 0) return res.status(503).json({ status: false, error: "No active bot nodes online right now." });
+  if (!serverId) return res.status(400).json({ status: false, error: "Specific post link required (Click Post > Copy link)." });
+  if (activeSockets.size === 0) return res.status(503).json({ status: false, error: "No active bot nodes are online right now." });
 
   try {
     const firstSock = activeSockets.values().next().value;
@@ -167,43 +167,42 @@ app.post("/api/channel-react", async (req, res) => {
     }
     if (!newsletterJid) newsletterJid = `${channelCode}@newsletter`;
 
-    // 1. Send immediate response to prevent frontend timeout error
+    // 1. Browser timeout වැළැක්වීමට ක්ෂණික OK response එක යවයි
     res.json({
       status: true,
-      message: `Full Cluster Reaction wave started! All ${activeSockets.size} bots deploying in sequence.`
+      message: `Reactions wave dispatched! Distributing ${emojis.length} emojis proportionally across ${activeSockets.size} bots.`
     });
 
-    // 2. Background Task: ALL BOTS deploy EACH EMOJI in exact order
+    // 2. Background Task: Botsලා ඉන්න ප්‍රමාණයට Emojis බෙදා හැරීම (Proportional Mixed Distribution)
     (async () => {
       const sockets = Array.from(activeSockets.values()).filter(s => s?.user?.id);
       if (sockets.length === 0) return;
 
-      console.log(`[CLUSTER REACT] ${sockets.length} bots deploying ${emojis.length} emojis to ${newsletterJid}/${serverId}`);
+      console.log(`[MIXED REACT ENGINE] Distributing ${emojis.length} emojis across ${sockets.length} active bot nodes.`);
 
-      for (let eIdx = 0; eIdx < emojis.length; eIdx++) {
-        const emoji = emojis[eIdx];
+      // Active botsලා ප්‍රමාණයට emojis ටික round-robin ආකාරයට assign කිරීම
+      for (let i = 0; i < sockets.length; i++) {
+        const sock = sockets[i];
+        const assignedEmoji = emojis[i % emojis.length];
 
-        // All bots react with current emoji in exact sequence
-        for (let bIdx = 0; bIdx < sockets.length; bIdx++) {
-          const sock = sockets[bIdx];
-          try {
-            if (typeof sock.newsletterReactMessage === "function") {
-              await sock.newsletterReactMessage(newsletterJid, serverId, emoji);
-            } else if (typeof sock.query === "function") {
-              await sock.query({
-                tag: "message",
-                attrs: { to: newsletterJid, type: "reaction", server_id: String(serverId) },
-                content: [{ tag: "reaction", attrs: { code: emoji } }]
-              });
-            }
-          } catch (err) {
-            console.error(`[!] Node ${sock.user?.id} react error:`, err.message);
+        try {
+          if (typeof sock.newsletterReactMessage === "function") {
+            await sock.newsletterReactMessage(newsletterJid, serverId, assignedEmoji);
+          } else if (typeof sock.query === "function") {
+            await sock.query({
+              tag: "message",
+              attrs: { to: newsletterJid, type: "reaction", server_id: String(serverId) },
+              content: [{ tag: "reaction", attrs: { code: assignedEmoji } }]
+            });
           }
-          await delay(200); // Prevents WhatsApp rate limiting
+        } catch (err) {
+          console.error(`[!] Failed reaction with node ${sock.user?.id}:`, err.message);
         }
-        await delay(400); // Short break between emoji sets
+
+        // WhatsApp Rate Limit එකට හසු නොවීමට සහ පිළිවෙළට වැටීමට තත්පර 0.2ක gap එකක්
+        await delay(200);
       }
-      console.log(`🔥 All ${sockets.length} bots finished reacting with all ${emojis.length} emojis!`);
+      console.log(`✨ Balanced mixed reactions deployed successfully across ${sockets.length} bot nodes!`);
     })().catch(err => console.error("[REACT WORKER ERR]:", err.message));
 
   } catch (err) {
