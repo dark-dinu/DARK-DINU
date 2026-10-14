@@ -1,19 +1,42 @@
+import fs from "fs";
+import path from "path";
+import os from "os";
+import { exec } from "child_process";
 import axios from "axios";
 import ytSearch from "yt-search";
-import { delay } from "@whiskeysockets/baileys";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { 
+  delay, 
+  generateWAMessageFromContent, 
+  prepareWAMessageMedia, 
+  proto 
+} from "@whiskeysockets/baileys";
+
+let ffmpegPath = "ffmpeg";
+try {
+  ffmpegPath = ffmpegInstaller?.path || "ffmpeg";
+} catch (_) {
+  ffmpegPath = "ffmpeg";
+}
 
 const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 global.channelJidCache = global.channelJidCache || new Map();
 
-// ── Native Buffer Downloader with 25MB Safety Cap ──
+function safeUnlink(filePath) {
+  try {
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  } catch (_) {}
+}
+
+// ── Native Buffer Downloader ──
 async function downloadBuffer(url) {
   try {
     const res = await axios.get(url, {
       responseType: "arraybuffer",
       headers: { "User-Agent": UA },
-      timeout: 40000,
+      timeout: 35000,
       maxContentLength: 25 * 1024 * 1024
     });
     return Buffer.from(res.data);
@@ -84,12 +107,13 @@ export default {
       return await sock.sendMessage(
         from,
         {
-          text: `⚠️ *භාවිතය:*\n*.csong <channel_link> , <song_name>*\n\n*උදාහරණ:*\n.csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V , sadawathiye`
+          text: `⚠️ *Usage:*\n*.csong <channel_link> , <song_name>*\n\n*Example:*\n.csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V , sadawathiye`
         },
         { quoted: msg }
       );
     }
 
+    // Link & Song Parser
     const linkMatch = fullText.match(/https?:\/\/(?:www\.)?whatsapp\.com\/channel\/[a-zA-Z0-9_\-\/]+/i);
     let channelLink = "";
     let songName = "";
@@ -109,7 +133,6 @@ export default {
       return await sock.sendMessage(from, { text: "⚠️ කරුණාකර සින්දුවේ නම ලබාදෙන්න!" }, { quoted: msg });
     }
 
-    // Invite code එක පමණක් නිවැරදිව වෙන් කරගැනීම (Post IDs අයින් කරයි)
     let inviteCode = channelLink.split("whatsapp.com/channel/")[1]?.split(/[\/?#]/)[0]?.trim();
     if (!inviteCode) {
       return await sock.sendMessage(from, { text: "❌ වලංගු WhatsApp Channel Link එකක් ලබාදෙන්න!" }, { quoted: msg });
@@ -118,7 +141,7 @@ export default {
     react("⏳");
 
     try {
-      // 1. Channel JID එක ලබා ගැනීම
+      // 1. Channel JID හරියටම Resolve කරගැනීම
       let channelJid = global.channelJidCache.get(inviteCode);
 
       if (!channelJid) {
@@ -134,13 +157,8 @@ export default {
         }
       }
 
-      if (!channelJid) {
-        channelJid = `${inviteCode}@newsletter`;
-      }
-
-      if (!channelJid.includes("@newsletter")) {
-        channelJid = `${channelJid.split("@")[0]}@newsletter`;
-      }
+      if (!channelJid) channelJid = `${inviteCode}@newsletter`;
+      if (!channelJid.includes("@newsletter")) channelJid = `${channelJid.split("@")[0]}@newsletter`;
 
       // 2. YouTube Search
       const video = await searchYouTube(songName);
@@ -156,7 +174,7 @@ export default {
         return await sock.sendMessage(from, { text: "❌ Audio stream link එක ලබාගැනීමට නොහැකි විය." }, { quoted: msg });
       }
 
-      // 4. Audio සහ Thumbnail Buffers බාගත කිරීම
+      // 4. Download Media Buffers
       const [rawAudioBuffer, imgBuffer] = await Promise.all([
         downloadBuffer(audioUrl),
         downloadBuffer(video.thumbnail)
@@ -167,7 +185,6 @@ export default {
         return await sock.sendMessage(from, { text: "❌ Audio file එක download කරගැනීම අසාර්ථක විය." }, { quoted: msg });
       }
 
-      // 5. Card Caption සැකසීම
       const cardCaption = 
 `🥰⃝🎶 *“ ${video.title} ”*
 
@@ -175,37 +192,72 @@ export default {
 
 Use Headphones For Best Experience.... 🧚‍♀️🎵
 
-| 🎶 *${botName}*`;
+| ☘️ *${botName}*`;
 
-      // 6. Channel එකට Image Buffer එක සමඟ Card එක යැවීම
-      if (imgBuffer) {
-        await sock.sendMessage(channelJid, {
-          image: imgBuffer,
-          caption: cardCaption
-        });
-      } else {
-        await sock.sendMessage(channelJid, { text: cardCaption });
-      }
+      // ===============================================================
+      // 5. NEWSLETTER DIRECT BROADCAST ENGINE (Guaranteed Channel Post)
+      // ===============================================================
 
-      // Channel Rate Limit මඟහැරීමට තත්පර 2ක පරතරයක්
+      // A. Prepare & Upload Image to WhatsApp Media Server
+      const imageMedia = await prepareWAMessageMedia(
+        { image: imgBuffer },
+        { upload: sock.waUploadToServer }
+      );
+
+      const imageMsg = generateWAMessageFromContent(
+        channelJid,
+        {
+          imageMessage: {
+            ...imageMedia.imageMessage,
+            caption: cardCaption
+          }
+        },
+        {}
+      );
+
+      // Relay Message directly to Newsletter
+      await sock.relayMessage(channelJid, imageMsg.message, {
+        messageId: imageMsg.key.id
+      });
+
       await delay(2000);
 
-      // 7. Channel එකට Playable Standard Audio එක යැවීම (PTT ඉවත් කර ඇත)
-      await sock.sendMessage(channelJid, {
-        audio: rawAudioBuffer,
-        mimetype: "audio/mp4",
-        fileName: `${video.title.replace(/[^a-zA-Z0-9 ]/g, "")}.mp3`,
-        ptt: false
+      // B. Prepare & Upload Audio to WhatsApp Media Server
+      const audioMedia = await prepareWAMessageMedia(
+        {
+          audio: rawAudioBuffer,
+          mimetype: "audio/mp4",
+          ptt: false
+        },
+        { upload: sock.waUploadToServer }
+      );
+
+      const audioMsg = generateWAMessageFromContent(
+        channelJid,
+        {
+          audioMessage: {
+            ...audioMedia.audioMessage,
+            mimetype: "audio/mp4",
+            ptt: false
+          }
+        },
+        {}
+      );
+
+      // Relay Audio Message directly to Newsletter
+      await sock.relayMessage(channelJid, audioMsg.message, {
+        messageId: audioMsg.key.id
       });
 
       react("✅");
       return await sock.sendMessage(
         from,
         {
-          text: `✅ *"${video.title}"*\nChannel එකට සාර්ථකව Post කරන ලදී! 🎶✨`
+          text: `✅ *"${video.title}"*\nChannel එකට Image Card එක සහ Audio එක සාර්ථකව Post කරන ලදී! 🎙️🔥`
         },
         { quoted: msg }
       );
+
     } catch (err) {
       console.error("[CSONG MAIN ERROR]:", err);
       react("❌");
