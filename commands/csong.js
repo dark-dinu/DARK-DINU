@@ -1,68 +1,15 @@
 import yts from "yt-search";
 import axios from "axios";
-import fs from "fs";
-import path from "path";
-import os from "os";
-import { exec } from "child_process";
-import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
-
-let ffmpegPath = "ffmpeg";
-try {
-  ffmpegPath = ffmpegInstaller?.path || "ffmpeg";
-} catch (_) {
-  ffmpegPath = "ffmpeg";
-}
+import { delay } from "@whiskeysockets/baileys";
 
 // Global In-Memory Newsletter JID Cache
 global.channelJidCache = global.channelJidCache || new Map();
-
-// Static Safe Unlink
-function safeUnlink(filePath) {
-  try {
-    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch (_) {}
-}
-
-// Low-Latency Opus Converter
-function convertToOpusVoice(inputBuffer) {
-  return new Promise((resolve) => {
-    const tempId = `${Date.now()}_${(Math.random() * 1e9) | 0}`;
-    const tempInput = path.join(os.tmpdir(), `in_${tempId}.mp3`);
-    const tempOutput = path.join(os.tmpdir(), `out_${tempId}.ogg`);
-
-    fs.writeFile(tempInput, inputBuffer, (err) => {
-      if (err) return resolve(inputBuffer);
-
-      const cmd = `"${ffmpegPath}" -y -i "${tempInput}" -c:a libopus -b:a 64k -ar 48000 -ac 1 "${tempOutput}"`;
-
-      exec(cmd, (execErr) => {
-        safeUnlink(tempInput);
-        if (execErr) return resolve(inputBuffer);
-
-        fs.readFile(tempOutput, (readErr, outBuf) => {
-          safeUnlink(tempOutput);
-          if (readErr || !outBuf) return resolve(inputBuffer);
-          resolve(outBuf);
-        });
-      });
-    });
-  });
-}
-
-// Fast Waveform Generator (Bitwise byte allocation)
-function getFastWaveform() {
-  const bars = new Uint8Array(64);
-  for (let i = 0; i < 64; i++) {
-    bars[i] = ((Math.random() * 65) | 0) + 15;
-  }
-  return bars;
-}
 
 export default {
   name: "csong",
   aliases: ["channelsong", "cplay"],
   category: "channel",
-  description: "Post cute song card & voice audio to WhatsApp Channel",
+  description: "Post song card & crisp audio to WhatsApp Channel",
 
   async execute({ sock, msg, from, args, config }) {
     const pref = config?.PREFIX || ".";
@@ -108,7 +55,7 @@ export default {
       // Microsecond React
       sock.sendMessage(from, { react: { text: "🎶", key: msg.key } }).catch(() => {});
 
-      // 1. Channel JID & Role Validation
+      // 1. Channel JID Extraction & Validation
       let channelJid = global.channelJidCache.get(inviteCode);
       let channelMeta = null;
 
@@ -116,7 +63,7 @@ export default {
         try {
           channelMeta = await Promise.race([
             sock.newsletterMetadata("invite", inviteCode),
-            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 7000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000))
           ]);
           channelJid = channelMeta?.id;
           if (channelJid) global.channelJidCache.set(inviteCode, channelJid);
@@ -137,8 +84,9 @@ export default {
         );
       }
 
-      if (!channelJid.endsWith("@newsletter")) {
-        channelJid = `${channelJid.replace(/[^0-9]/g, "")}@newsletter`;
+      // Safe JID Format ensuring @newsletter domain
+      if (!channelJid.includes("@newsletter")) {
+        channelJid = `${channelJid}@newsletter`;
       }
 
       // Role Verification
@@ -166,7 +114,7 @@ export default {
         );
       }
 
-      // 3. Audio Download API
+      // 3. Audio Stream Resolution
       const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
       let audioDownloadUrl = null;
 
@@ -187,22 +135,19 @@ export default {
       if (!audioDownloadUrl) {
         return await sock.sendMessage(
           from,
-          { text: "🌸 *Oops!* Could not fetch audio stream right now, honey~" },
+          { text: "🌸 *Oops!* YouTube Downloader API is currently unreachable. Please provide an updated API key or endpoint!" },
           { quoted: msg }
         );
       }
 
-      // 4. Parallel Stream Download
+      // 4. Parallel Download Image & Raw Audio Stream
       const [audioRes, imgRes] = await Promise.all([
-        axios.get(audioDownloadUrl, { responseType: "arraybuffer", timeout: 40000 }),
-        axios.get(video.thumbnail, { responseType: "arraybuffer", timeout: 10000 })
+        axios.get(audioDownloadUrl, { responseType: "arraybuffer", timeout: 45000 }),
+        axios.get(video.thumbnail, { responseType: "arraybuffer", timeout: 12000 })
       ]);
 
       const rawAudioBuffer = Buffer.from(audioRes.data);
       const imgBuffer = Buffer.from(imgRes.data);
-
-      // 5. Convert to High-Quality PTT Opus
-      const finalVoiceBuffer = await convertToOpusVoice(rawAudioBuffer);
 
       // Cute Pastel Channel Caption
       const cardCaption = 
@@ -210,7 +155,7 @@ export default {
 
   🎵 *Track:* ${video.title}
   ⏳ *Duration:* ${video.timestamp || "3:30"}
-  🎧 *Audio:* 48kHz Crisp PTT Voice
+  🎧 *Format:* High-Quality Audio Stream
 
   ◁◁   ❚❚   ▷▷  0:00 ───●─ ${video.timestamp || "3:30"}
 
@@ -218,17 +163,20 @@ export default {
 🎧 _Plug in your headphones for sweet acoustic vibes~_
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      // 6. Send Card & Voice in Staggered Sequence to Channel
+      // 5. Send Card to Channel
       await sock.sendMessage(channelJid, {
         image: imgBuffer,
         caption: cardCaption
       });
 
+      // Stagger delay between image and audio
+      await delay(1500);
+
+      // 6. Send Clean Standard Audio to Channel (Channels accept audio/mpeg seamlessly)
       await sock.sendMessage(channelJid, {
-        audio: finalVoiceBuffer,
-        mimetype: "audio/ogg; codecs=opus",
-        ptt: true,
-        waveform: getFastWaveform()
+        audio: rawAudioBuffer,
+        mimetype: "audio/mp4",
+        fileName: `${video.title.replace(/[^a-zA-Z0-9 ]/g, "")}.mp3`
       });
 
       sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
