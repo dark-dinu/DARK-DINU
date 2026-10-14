@@ -85,15 +85,16 @@ export function attachSettingsEngine(sock) {
 }
 
 // ==========================================
-// 3. ACTION DISPATCHER FOR DIRECT & NUMBER REPLIES
+// 3. SELECTION DISPATCHER & TOGGLE ENGINE
 // ==========================================
 async function handleSettingAction(sock, from, botPhone, actionKey, value, quotedMsg) {
   let feedback = "";
+  const currentCfg = getSessionConfig(botPhone);
 
   switch (actionKey) {
     case "mode":
       await updateSessionConfig(botPhone, "mode", value);
-      feedback = `🎯 *Bot Mode:* \`${value.toUpperCase()}\` ලෙස සාර්ථකව සකසන ලදී.`;
+      feedback = `🎯 *Bot Mode:* \`${value.toUpperCase()}\` ලෙස සාර්ථකව මාරු කරන ලදී.`;
       break;
 
     case "antiSend":
@@ -103,29 +104,29 @@ async function handleSettingAction(sock, from, botPhone, actionKey, value, quote
 
     case "statusEmoji":
       await updateSessionConfig(botPhone, "statusEmoji", value);
-      feedback = `💖 *Status React Emoji:* ${value} ලෙස සකසන ලදී.`;
+      feedback = `💖 *Status React Emoji:* ${value} ලෙස සාර්ථකව සකසන ලදී.`;
       break;
 
     case "fakePresence":
       if (value === "typing") {
         await updateSessionConfig(botPhone, "fakeTyping", true);
         await updateSessionConfig(botPhone, "fakeRecording", false);
-        feedback = `✍️ *Presence Mode:* \`Fake Typing (ON)\` සක්‍රීය කරන ලදී.`;
+        feedback = `✍️ *Presence Status:* \`Fake Typing (ON)\` සක්‍රීය විය.`;
       } else if (value === "recording") {
         await updateSessionConfig(botPhone, "fakeRecording", true);
         await updateSessionConfig(botPhone, "fakeTyping", false);
-        feedback = `🎙️ *Presence Mode:* \`Fake Recording (ON)\` සක්‍රීය කරන ලදී.`;
+        feedback = `🎙️ *Presence Status:* \`Fake Recording (ON)\` සක්‍රීය විය.`;
       } else {
         await updateSessionConfig(botPhone, "fakeTyping", false);
         await updateSessionConfig(botPhone, "fakeRecording", false);
-        feedback = `🛑 *Presence Mode:* \`OFF\` (සාමාන්‍ය තත්ත්වයට පත් කරන ලදී).`;
+        feedback = `🛑 *Presence Status:* \`OFF\` (සාමාන්‍ය තත්ත්වයට පත් කරන ලදී).`;
       }
       break;
 
     default:
-      // Boolean Toggles (antiDelete, statusSeen, statusReact, autoReply, welcomeCard, antiCall)
-      const current = getSessionConfig(botPhone)[actionKey];
-      const nextState = value !== undefined ? value : !current;
+      // Automatic Boolean Toggle (ON -> OFF / OFF -> ON)
+      const currentState = Boolean(currentCfg[actionKey]);
+      const nextState = value !== undefined ? value : !currentState;
       await updateSessionConfig(botPhone, actionKey, nextState);
       feedback = `⚙️ *${actionKey.toUpperCase()}:* ${nextState ? "ක්‍රියාත්මකයි (ON) 🟢" : "අක්‍රියයි (OFF) 🔴"}`;
       break;
@@ -142,7 +143,7 @@ export default {
   name: "setting",
   aliases: ["settings", "mode", "botmode", "antisend", "config", "presence"],
   category: "owner",
-  description: "Advanced session-locked visual settings manager",
+  description: "100% interactive number-selection settings manager",
 
   // 🛑 Interactive Number Reply Engine
   async onReply({ sock, msg, from, body, quotedStanzaId }) {
@@ -153,37 +154,55 @@ export default {
 
     if (!checkAuthorization(sock, msg, from, botPhone)) return false;
 
-    const choice = body.trim().toLowerCase();
+    const rawChoice = body.trim();
+    const choice = rawChoice.toLowerCase();
+
+    // Map of All Actions via Numbers
     const actionMap = {
-      // 1. Bot Mode
+      // 1. 🎯 Bot Mode
       "1.1": { key: "mode", val: "public" },
       "1.2": { key: "mode", val: "private" },
       "1.3": { key: "mode", val: "group" },
       "1.4": { key: "mode", val: "inbox" },
 
-      // 2. Chat Protections
+      // 2. 🛡️ Security & Privacy
       "2.1": { key: "antiDelete" },
       "2.2": { key: "antiCall" },
 
-      // 3. Status Utilities
+      // 3. 👁️ Status Engine
       "3.1": { key: "statusSeen" },
       "3.2": { key: "statusReact" },
 
-      // 4. Presence Simulation (Fake Typing & Recording)
+      // 4. 🎭 Fake Presence
       "4.1": { key: "fakePresence", val: "typing" },
       "4.2": { key: "fakePresence", val: "recording" },
       "4.3": { key: "fakePresence", val: "off" },
 
-      // 5. Anti-Send Auto Eraser
+      // 5. 🚫 Anti-Send Eraser
       "5.1": { key: "antiSend", val: "all" },
       "5.2": { key: "antiSend", val: "me" },
       "5.3": { key: "antiSend", val: "from" },
       "5.4": { key: "antiSend", val: "off" },
 
-      // 6. Automation & Greetings
+      // 6. 🤖 Automation
       "6.1": { key: "autoReply" },
-      "6.2": { key: "welcomeCard" }
+      "6.2": { key: "welcomeCard" },
+
+      // 7. 💖 Status React Emoji Quick Select
+      "7.1": { key: "statusEmoji", val: "💖" },
+      "7.2": { key: "statusEmoji", val: "✨" },
+      "7.3": { key: "statusEmoji", val: "🔥" },
+      "7.4": { key: "statusEmoji", val: "⚡" },
+      "7.5": { key: "statusEmoji", val: "🥀" }
     };
+
+    // Custom Emoji (e.g. reply "7.6 ❤️")
+    if (choice.startsWith("7.6")) {
+      const parts = rawChoice.split(/\s+/);
+      const customEmoji = parts[1] || "💖";
+      await handleSettingAction(sock, from, botPhone, "statusEmoji", customEmoji, msg);
+      return true;
+    }
 
     if (actionMap[choice]) {
       const { key, val } = actionMap[choice];
@@ -210,38 +229,16 @@ export default {
       );
     }
 
+    // Direct Quick Command Bypasses (Fallback)
     const fullBody = (body || "").trim().slice(pref.length).trim();
     const cmd = fullBody.split(/\s+/)[0].toLowerCase();
     const opt = args[0]?.toLowerCase()?.trim();
-    const val = args[1]?.toLowerCase()?.trim();
 
-    // Fast-path command shortcuts
     if (cmd === "mode" && opt) return await handleSettingAction(sock, from, botPhone, "mode", opt, msg);
     if (cmd === "antisend" && opt) return await handleSettingAction(sock, from, botPhone, "antiSend", opt, msg);
-    if ((cmd === "presence" || opt === "presence") && val) return await handleSettingAction(sock, from, botPhone, "fakePresence", val, msg);
-
-    // Direct Toggles (.setting antidel on / off)
-    const toggleMap = {
-      antidel: "antiDelete",
-      anticall: "antiCall",
-      stseen: "statusSeen",
-      stract: "statusReact",
-      autoreply: "autoReply",
-      welcome: "welcomeCard"
-    };
-
-    if (opt && toggleMap[opt]) {
-      const boolVal = val === "on" ? true : val === "off" ? false : undefined;
-      return await handleSettingAction(sock, from, botPhone, toggleMap[opt], boolVal, msg);
-    }
-
-    // Direct Emoji Selector
-    if (opt === "emoji" && args[1]) {
-      return await handleSettingAction(sock, from, botPhone, "statusEmoji", args[1].trim(), msg);
-    }
 
     // ==========================================
-    // 5. CLEAN MODULAR CARD DASHBOARD UI
+    // 5. CLEAN NUMBER-BASED MODULAR DASHBOARD
     // ==========================================
     sock.sendMessage(from, { react: { text: "🎛️", key: msg.key } }).catch(() => {});
 
@@ -254,26 +251,26 @@ export default {
    🎛️ 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆
 ╚═════════════════════════════╝
 
-📱 *Session Node:* \`+${botPhone}\`
-⚡ *Database Sync:* \`Active (Persistent)\`
+📱 *Session:* \`+${botPhone}\`
+⚡ *Storage:* \`MongoDB Atlas (Persistent)\`
 
 ╭───〔 1. 🎯 𝐁𝐎𝐓 𝐌𝐎𝐃𝐄 〕
 ├ 📌 *Current:* \`${settings.mode ? settings.mode.toUpperCase() : "PUBLIC"}\`
 │
-│ [ 1.1 ] 🌐 Public Mode
-│ [ 1.2 ] 🔒 Private Mode
-│ [ 1.3 ] 👥 Group Only
-│ [ 1.4 ] 💬 Inbox Only
+│ [ 1.1 ] 🌐 Public Mode (Everyone)
+│ [ 1.2 ] 🔒 Private Mode (Owner Only)
+│ [ 1.3 ] 👥 Group Chats Only
+│ [ 1.4 ] 💬 Inbox Chats Only
 ╰─────────────────────────────
 
 ╭───〔 2. 🛡️ 𝐒𝐄𝐂𝐔𝐑𝐈𝐓𝐘 & 𝐂𝐀𝐋𝐋𝐒 〕
-│ [ 2.1 ] 🗑️ Anti-Delete  : ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"}
-│ [ 2.2 ] 📵 Anti-Call    : ${settings.antiCall ? "🟢 ON" : "🔴 OFF"}
+│ [ 2.1 ] 🗑️ Anti-Delete  : ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"} (Toggle)
+│ [ 2.2 ] 📵 Anti-Call    : ${settings.antiCall ? "🟢 ON" : "🔴 OFF"} (Toggle)
 ╰─────────────────────────────
 
 ╭───〔 3. 👁️ 𝐒𝐓𝐀𝐓𝐔𝐒 𝐄𝐍𝐆𝐈𝐍𝐄 〕
-│ [ 3.1 ] 👁️ Status Seen  : ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"}
-│ [ 3.2 ] 💖 Status React : ${settings.statusReact ? "🟢 ON" : "🔴 OFF"} [ ${settings.statusEmoji || "💖"} ]
+│ [ 3.1 ] 👁️ Status Seen  : ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"} (Toggle)
+│ [ 3.2 ] 💖 Status React : ${settings.statusReact ? "🟢 ON" : "🔴 OFF"} (Toggle)
 ╰─────────────────────────────
 
 ╭───〔 4. 🎭 𝐅𝐀𝐊𝐄 𝐏𝐑𝐄𝐒𝐄𝐍𝐂𝐄 〕
@@ -294,17 +291,28 @@ export default {
 ╰─────────────────────────────
 
 ╭───〔 6. 🤖 𝐀𝐔𝐓𝐎𝐌𝐀𝐓𝐈𝐎𝐍 〕
-│ [ 6.1 ] 💬 Auto-Reply   : ${settings.autoReply ? "🟢 ON" : "🔴 OFF"}
-│ [ 6.2 ] 💌 Welcome Card : ${settings.welcomeCard ? "🟢 ON" : "🔴 OFF"}
+│ [ 6.1 ] 💬 Auto-Reply   : ${settings.autoReply ? "🟢 ON" : "🔴 OFF"} (Toggle)
+│ [ 6.2 ] 💌 Welcome Card : ${settings.welcomeCard ? "🟢 ON" : "🔴 OFF"} (Toggle)
 ╰─────────────────────────────
 
-> 💡 *මෙම පණිවිඩයට අදාළ අංකය (උදා: 1.1 හෝ 4.1) Reply කරන්න.*
+╭───〔 7. 💖 𝐒𝐓𝐀𝐓𝐔𝐒 𝐑𝐄𝐀𝐂𝐓 𝐄𝐌𝐎喜 〕
+├ 📌 *Current:* [ ${settings.statusEmoji || "💖"} ]
+│
+│ [ 7.1 ] 💖 Pink Heart
+│ [ 7.2 ] ✨ Sparkles
+│ [ 7.3 ] 🔥 Fire
+│ [ 7.4 ] ⚡ Lightning
+│ [ 7.5 ] 🥀 Rose
+│ [ 7.6 ] ➕ Custom (Reply \`7.6 <emoji>\`)
+╰─────────────────────────────
+
+> 💡 *වෙනස් කිරීමට අවශ්‍ය අංකය මෙම පණිවිඩයට Reply කරන්න.*
+> *(උදාහරණ: 1.2 හෝ 2.1 හෝ 4.1)*
 
 👑 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
     const sent = await sock.sendMessage(from, { text: dashboardCard }, { quoted: msg });
 
-    // Store Session ID for Reply Trap
     if (sent?.key?.id) {
       global.settingSessions.set(sent.key.id, {
         botPhone,
