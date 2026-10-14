@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>DARK-DINU OFC // PAIRING NODE</title>
+  
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700;800&family=JetBrains+Mono:wght@500;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <style>
+    :root {
+      --bg: #050609;
+      --card-bg: rgba(13, 16, 25, 0.85);
+      --card-border: rgba(255, 45, 85, 0.22);
+      --card-border-subtle: rgba(255, 255, 255, 0.08);
+      --accent-pink: #ff2d55;
+      --accent-pink-glow: rgba(255, 45, 85, 0.35);
+      --accent-cyan: #00f0ff;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #475569;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color: transparent; }
+    body { background-color: var(--bg); color: var(--text-main); min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px 16px; position: relative; }
+    .ambient-glow-1 { position: fixed; top: -100px; left: 50%; transform: translateX(-50%); width: 500px; height: 350px; background: radial-gradient(circle, rgba(255, 45, 85, 0.2) 0%, transparent 70%); pointer-events: none; z-index: 0; filter: blur(50px); }
+
+    .tool-card {
+      width: 100%; max-width: 460px; background: var(--card-bg); border: 1px solid var(--card-border);
+      border-radius: 26px; padding: 30px 24px; backdrop-filter: blur(20px); box-shadow: 0 15px 45px rgba(0, 0, 0, 0.7); position: relative; z-index: 10;
+    }
+
+    .tool-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .tool-title { font-size: 16px; font-weight: 800; color: #fff; display: flex; align-items: center; gap: 8px; }
+    .tool-tag { font-size: 10px; font-weight: 800; font-family: 'JetBrains Mono', monospace; color: var(--accent-cyan); background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.25); padding: 4px 10px; border-radius: 8px; }
+
+    .input-wrapper { position: relative; margin: 18px 0; }
+    .input-wrapper i { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--text-dim); font-size: 15px; }
+    input[type="tel"] {
+      width: 100%; background: rgba(6, 7, 10, 0.85); border: 1px solid var(--card-border-subtle); border-radius: 14px;
+      padding: 16px 16px 16px 44px; font-size: 15px; font-family: 'JetBrains Mono', monospace; color: #fff; outline: none; transition: 0.25s;
+    }
+    input:focus { border-color: var(--accent-pink); box-shadow: 0 0 20px var(--accent-pink-glow); }
+
+    .btn-submit {
+      width: 100%; padding: 16px; border-radius: 14px; border: none; background: linear-gradient(135deg, var(--accent-pink) 0%, #d81b43 100%);
+      color: #fff; font-size: 13px; font-weight: 800; letter-spacing: 0.5px; cursor: pointer; box-shadow: 0 6px 25px var(--accent-pink-glow);
+      display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.25s;
+    }
+    .btn-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #codeDisplayBox { display: none; margin-top: 18px; background: rgba(0, 0, 0, 0.6); border: 1px dashed var(--accent-pink); border-radius: 16px; padding: 20px; text-align: center; }
+    .code-val { font-family: 'JetBrains Mono', monospace; font-size: 30px; font-weight: 800; color: #fff; letter-spacing: 5px; margin: 10px 0 14px 0; text-shadow: 0 0 15px var(--accent-pink-glow); }
+    .btn-copy-code { background: rgba(255, 255, 255, 0.08); border: 1px solid var(--card-border-subtle); color: #fff; padding: 12px; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; }
+
+    .btn-back-home { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); text-decoration: none; font-size: 12px; font-weight: 700; margin-top: 20px; transition: 0.2s; }
+    .btn-back-home:hover { color: #fff; }
+  </style>
+</head>
+<body>
+
+  <div class="ambient-glow-1"></div>
+
+  <div class="tool-card">
+    <div class="tool-meta">
+      <div class="tool-title"><i class="fa-solid fa-qrcode" style="color: var(--accent-pink);"></i> Link WhatsApp Node</div>
+      <div class="tool-tag">SAFARI V2</div>
+    </div>
+    <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5;">
+      Enter your WhatsApp phone number with country code (e.g. 94712345678) to generate an 8-digit secure Pairing Code.
+    </p>
+
+    <div class="input-wrapper">
+      <i class="fa-solid fa-phone"></i>
+      <input type="tel" id="userPhone" placeholder="e.g. 94712345678" autocomplete="off">
+    </div>
+
+    <button id="genBtn" class="btn-submit" onclick="requestPairCode()">
+      <i class="fa-solid fa-key"></i> GET PAIRING CODE
+    </button>
+
+    <div id="codeDisplayBox">
+      <div style="font-size: 10px; color: var(--accent-pink); font-weight: 800; letter-spacing: 1.5px;">YOUR PAIRING CODE</div>
+      <div class="code-val" id="codeVal">--------</div>
+      <button class="btn-copy-code" id="copyCodeBtn" onclick="copyCode()">
+        <i class="fa-regular fa-copy"></i> Copy Pairing Code
+      </button>
+    </div>
+
+    <div style="text-align: center;">
+      <a class="btn-back-home" href="/"><i class="fa-solid fa-arrow-left"></i> Return to Dashboard</a>
+    </div>
+  </div>
+
+  <script>
+    async function requestPairCode() {
+      const p = document.getElementById('userPhone').value.trim().replace(/[^0-9]/g, '');
+      const btn = document.getElementById('genBtn');
+      const box = document.getElementById('codeDisplayBox');
+      const codeEl = document.getElementById('codeVal');
+
+      if (!p || p.length < 10) return alert('Please enter a valid WhatsApp phone number!');
+      btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> GENERATING...';
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/pair?phone=' + p);
+        const data = await res.json();
+        if (data.code) {
+          codeEl.innerText = data.code;
+          box.style.display = 'block';
+          btn.innerHTML = '<i class="fa-solid fa-check"></i> CODE READY!';
+          if (navigator.clipboard) navigator.clipboard.writeText(data.code.replace(/-/g, ''));
+        } else {
+          alert(data.error || 'Pairing error.');
+          btn.innerHTML = '<i class="fa-solid fa-key"></i> GET PAIRING CODE';
+          btn.disabled = false;
+        }
+      } catch {
+        alert('Server unreachable');
+        btn.innerHTML = '<i class="fa-solid fa-key"></i> GET PAIRING CODE';
+        btn.disabled = false;
+      }
+    }
+
+    function copyCode() {
+      navigator.clipboard.writeText(document.getElementById('codeVal').innerText.replace(/-/g, ''));
+      document.getElementById('copyCodeBtn').innerHTML = '<i class="fa-solid fa-check"></i> COPIED!';
+      setTimeout(() => { document.getElementById('copyCodeBtn').innerHTML = '<i class="fa-regular fa-copy"></i> Copy Pairing Code'; }, 2000);
+    }
+  </script>
+</body>
+</html>
