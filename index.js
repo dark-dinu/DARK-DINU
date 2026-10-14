@@ -20,7 +20,6 @@ import { attachSettingsEngine } from "./commands/setting.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Terminal noise filter
 const origLog = console.log;
 console.log = (...args) => (typeof args[0] === "string" && (args[0].includes("Closing session: SessionEntry") || args[0].includes("SessionEntry {"))) ? null : origLog(...args);
 
@@ -28,8 +27,6 @@ const app = express();
 const PORT = Number(CONFIG.PORT) || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Serve Static Frontend Assets from public folder
 app.use(express.static(path.join(__dirname, "public")));
 
 const msgRetryCounterCache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
@@ -42,7 +39,6 @@ const replyHandlers = new Map();
 let db = null;
 let mongoClient = null;
 
-// Dynamic Command Loader
 async function loadCommands() {
   const dir = path.join(__dirname, "commands");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -67,38 +63,36 @@ async function loadCommands() {
   console.log(`✨ Loaded ${commands.size} commands & aliases into fast-memory!`);
 }
 
-// ================= Modular Web Pages Routes =================
-// 1. Main Dashboard
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
-});
+// ================= Web Pages Routes =================
+app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+app.get("/pair-web", (req, res) => res.sendFile(path.join(__dirname, "public", "pair.html")));
+app.get("/react", (req, res) => res.sendFile(path.join(__dirname, "public", "react.html")));
+app.get("/commands", (req, res) => res.sendFile(path.join(__dirname, "public", "commands.html")));
+app.get("/status", (req, res) => res.sendFile(path.join(__dirname, "public", "status.html")));
 
-// 2. Separate Pairing Web Page
-app.get("/pair-web", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "pair.html"));
-});
-
-// 3. Separate Channel React Web Page
-app.get("/react", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "react.html"));
-});
-
-// 4. Guaranteed Logo Image Delivery Route
 app.get("/logo.jpg", (req, res) => {
   const localLogo = path.join(__dirname, "logo.jpg");
-  if (fs.existsSync(localLogo)) {
-    return res.sendFile(localLogo);
-  }
+  if (fs.existsSync(localLogo)) return res.sendFile(localLogo);
   return res.redirect("https://files.catbox.moe/k315x4.jpg");
 });
 
-// ================= Live Backend APIs =================
-// 5. Diagnostics & Smooth Spline History API
+// ================= API Endpoints =================
+// 1. Live Telemetry Stats
 app.get("/api/stats", (req, res) => {
   const count = activeSockets.size;
   const mem = process.memoryUsage();
   const up = Math.floor(process.uptime());
   const h = Math.floor(up / 3600), m = Math.floor((up % 3600) / 60), s = up % 60;
+
+  const nodes = [];
+  for (const [sId, sock] of activeSockets.entries()) {
+    const rawNumber = (sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+    let masked = "Connecting...";
+    if (rawNumber && rawNumber.length >= 8) {
+      masked = `+${rawNumber.slice(0, 5)}***${rawNumber.slice(-3)}`;
+    }
+    nodes.push({ sessionId: sId, number: masked });
+  }
 
   const historyPoints = [];
   const base = Math.max(count, 1);
@@ -113,12 +107,33 @@ app.get("/api/stats", (req, res) => {
     peakCount: count > 0 ? count + 3 : 0,
     avgCount: count > 0 ? Math.max(1, Math.round(count * 0.92)) : 0,
     history: historyPoints,
+    nodes,
     uptime: `${h}h ${m}m ${s}s`,
     memory: `${(mem.rss / 1024 / 1024).toFixed(1)} MB`
   });
 });
 
-// 6. Direct Channel Reaction Engine Endpoint
+// 2. Real-time Commands Registry for Web
+app.get("/api/commands", (req, res) => {
+  const list = [];
+  const visited = new Set();
+
+  for (const [, cmd] of commands.entries()) {
+    if (cmd?.name && !visited.has(cmd.name)) {
+      visited.add(cmd.name);
+      list.push({
+        name: cmd.name,
+        category: cmd.category || "GENERAL",
+        description: cmd.description || "Bot utility command",
+        aliases: cmd.aliases || []
+      });
+    }
+  }
+
+  res.json(list);
+});
+
+// 3. Channel React API
 app.post("/api/channel-react", async (req, res) => {
   const { postLink, emojis } = req.body;
   if (!postLink || !Array.isArray(emojis) || emojis.length === 0) {
@@ -126,20 +141,12 @@ app.post("/api/channel-react", async (req, res) => {
   }
 
   const match = postLink.trim().match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]+)(?:\/(\d+))?/i);
-  if (!match) {
-    return res.status(400).json({ status: false, error: "Invalid WhatsApp Channel Post Link." });
-  }
+  if (!match) return res.status(400).json({ status: false, error: "Invalid WhatsApp Channel Post Link." });
 
   const channelCode = match[1];
   const serverId = match[2];
-
-  if (!serverId) {
-    return res.status(400).json({ status: false, error: "Please provide the specific post link (Click post > Copy link)." });
-  }
-
-  if (activeSockets.size === 0) {
-    return res.status(503).json({ status: false, error: "No active bot nodes are online right now." });
-  }
+  if (!serverId) return res.status(400).json({ status: false, error: "Please provide the specific post link." });
+  if (activeSockets.size === 0) return res.status(503).json({ status: false, error: "No active bot nodes are online right now." });
 
   try {
     const firstSock = activeSockets.values().next().value;
@@ -149,10 +156,7 @@ app.post("/api/channel-react", async (req, res) => {
       const meta = await firstSock.newsletterMetadata("invite", channelCode);
       newsletterJid = meta?.id;
     }
-
-    if (!newsletterJid) {
-      newsletterJid = `${channelCode}@newsletter`;
-    }
+    if (!newsletterJid) newsletterJid = `${channelCode}@newsletter`;
 
     const sockets = Array.from(activeSockets.values());
     for (const sock of sockets) {
@@ -163,11 +167,7 @@ app.post("/api/channel-react", async (req, res) => {
           } else if (typeof sock.query === "function") {
             await sock.query({
               tag: "message",
-              attrs: {
-                to: newsletterJid,
-                type: "reaction",
-                server_id: String(serverId)
-              },
+              attrs: { to: newsletterJid, type: "reaction", server_id: String(serverId) },
               content: [{ tag: "reaction", attrs: { code: emoji } }]
             });
           }
@@ -183,7 +183,7 @@ app.post("/api/channel-react", async (req, res) => {
   }
 });
 
-// Pairing Code Generator Endpoint
+// 4. Pairing API
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone?.replace(/[^0-9]/g, "");
   if (!phone) return res.status(400).json({ error: "Phone number required" });
@@ -206,8 +206,11 @@ app.get("/pair", async (req, res) => {
   }
 });
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "OK", activeBots: activeSockets.size });
+app.get("/health", (req, res) => res.status(200).json({ status: "OK", activeBots: activeSockets.size }));
+
+// 404 Catch-All Handler
+app.use((req, res) => {
+  res.status(404).sendFile(path.join(__dirname, "public", "404.html"));
 });
 
 // Central Socket Launcher
@@ -301,7 +304,6 @@ app.listen(PORT, "0.0.0.0", async () => {
   }
 });
 
-// Keep-Alive
 const KEEP_ALIVE_URL = process.env.APP_URL || "https://heshan.devofc.top";
 setInterval(async () => {
   try { await axios.get(`${KEEP_ALIVE_URL}/health`, { timeout: 8000 }); } catch (_) {}
