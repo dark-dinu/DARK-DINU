@@ -71,9 +71,7 @@ app.get("/commands", (req, res) => res.sendFile(path.join(__dirname, "public", "
 app.get("/status", (req, res) => res.sendFile(path.join(__dirname, "public", "status.html")));
 
 app.get("/logo.jpg", (req, res) => {
-  const localLogo = path.join(__dirname, "logo.jpg");
-  if (fs.existsSync(localLogo)) return res.sendFile(localLogo);
-  return res.redirect("https://files.catbox.moe/k315x4.jpg");
+  return res.redirect("https://files.catbox.moe/s1q558.jpg");
 });
 
 // ================= API Endpoints =================
@@ -133,7 +131,7 @@ app.get("/api/commands", (req, res) => {
   res.json(list);
 });
 
-// 3. Channel React API
+// 3. Ultra-Fast Sequential Channel React Worker API
 app.post("/api/channel-react", async (req, res) => {
   const { postLink, emojis } = req.body;
   if (!postLink || !Array.isArray(emojis) || emojis.length === 0) {
@@ -145,7 +143,7 @@ app.post("/api/channel-react", async (req, res) => {
 
   const channelCode = match[1];
   const serverId = match[2];
-  if (!serverId) return res.status(400).json({ status: false, error: "Please provide the specific post link." });
+  if (!serverId) return res.status(400).json({ status: false, error: "Please provide the specific post link (Click post > Copy link)." });
   if (activeSockets.size === 0) return res.status(503).json({ status: false, error: "No active bot nodes are online right now." });
 
   try {
@@ -153,33 +151,55 @@ app.post("/api/channel-react", async (req, res) => {
     let newsletterJid = null;
 
     if (typeof firstSock.newsletterMetadata === "function") {
-      const meta = await firstSock.newsletterMetadata("invite", channelCode);
-      newsletterJid = meta?.id;
+      try {
+        const meta = await firstSock.newsletterMetadata("invite", channelCode);
+        newsletterJid = meta?.id;
+      } catch (_) {}
     }
     if (!newsletterJid) newsletterJid = `${channelCode}@newsletter`;
 
-    const sockets = Array.from(activeSockets.values());
-    for (const sock of sockets) {
-      for (const emoji of emojis) {
+    // 1. Connection Timeout වළක්වා ගැනීමට ක්ෂණිකව Web Response එක ලබා දීම
+    res.json({
+      status: true,
+      message: "Reactions queued successfully! Dispatching in sequential order across the cluster."
+    });
+
+    // 2. Background Task: තෝරාගත් Emojis පිළිවෙළට Bot Nodes හරහා යැවීම
+    (async () => {
+      const sockets = Array.from(activeSockets.values()).filter(s => s?.user?.id);
+      if (sockets.length === 0) return;
+
+      console.log(`[REACT DISPATCH] Initiating ${emojis.length} emojis to ${newsletterJid}/${serverId} via ${sockets.length} nodes.`);
+
+      for (let i = 0; i < emojis.length; i++) {
+        const emoji = emojis[i];
+        const targetSock = sockets[i % sockets.length];
+
         try {
-          if (typeof sock.newsletterReactMessage === "function") {
-            await sock.newsletterReactMessage(newsletterJid, serverId, emoji);
-          } else if (typeof sock.query === "function") {
-            await sock.query({
+          if (typeof targetSock.newsletterReactMessage === "function") {
+            await targetSock.newsletterReactMessage(newsletterJid, serverId, emoji);
+          } else if (typeof targetSock.query === "function") {
+            await targetSock.query({
               tag: "message",
               attrs: { to: newsletterJid, type: "reaction", server_id: String(serverId) },
               content: [{ tag: "reaction", attrs: { code: emoji } }]
             });
           }
-        } catch (_) {}
-        await delay(250);
-      }
-    }
+        } catch (err) {
+          console.error(`[!] Failed reaction with node ${targetSock.user?.id}:`, err.message);
+        }
 
-    return res.json({ status: true, message: "Reactions deployed successfully!" });
+        // WhatsApp Rate Limits මඟහැර පිළිවෙළ තහවුරු කිරීමට තත්පර 0.5ක පරතරයක්
+        await delay(500);
+      }
+      console.log(`✨ All ${emojis.length} reactions deployed successfully in order.`);
+    })().catch(err => console.error("[REACT WORKER ERR]:", err.message));
+
   } catch (err) {
     console.error("[CHANNEL REACT ERR]:", err.message);
-    return res.status(500).json({ status: false, error: err.message || "Failed to deploy reactions." });
+    if (!res.headersSent) {
+      return res.status(500).json({ status: false, error: err.message || "Failed to process reactions." });
+    }
   }
 });
 
