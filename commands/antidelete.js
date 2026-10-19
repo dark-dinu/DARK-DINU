@@ -1,11 +1,10 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
 import { cleanPhone, getSessionConfig, updateSessionConfig } from "../src/core/sessionManager.js";
 
-// High-speed memory store
 global.antiDeleteStore = global.antiDeleteStore || new Map();
 global.antiDeleteHookedSockets = global.antiDeleteHookedSockets || new WeakSet();
 
-const MAX_CACHE_SIZE = 2000;
+const MAX_CACHE_SIZE = 2500;
 
 function isBotOwner(sock, msg, from) {
   const botPhone = cleanPhone(sock.user?.id || "");
@@ -18,12 +17,13 @@ function isBotOwner(sock, msg, from) {
   return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
 }
 
-// Ultra-fast background delete catcher
 export function attachAntiDeleteEngine(sock) {
   if (!sock || global.antiDeleteHookedSockets.has(sock)) return;
   global.antiDeleteHookedSockets.add(sock);
 
   sock.ev.on("messages.upsert", async ({ messages }) => {
+    if (!messages || messages.length === 0) return;
+
     for (const m of messages) {
       if (!m?.message) continue;
 
@@ -34,15 +34,15 @@ export function attachAntiDeleteEngine(sock) {
       // A. REVOKE (DELETED MESSAGE) DETECTOR
       // ==========================================
       const protocol = m.message.protocolMessage;
-      const isRevoke = protocol && (protocol.type === 0 || protocol.type === 14 || protocol.type === "REVOKE");
+      const isRevoke =
+        protocol &&
+        (protocol.type === 0 || protocol.type === 14 || protocol.type === "REVOKE");
 
       if (isRevoke) {
         const deletedKey = protocol.key;
         if (!deletedKey?.id) continue;
 
         const botPhone = cleanPhone(sock.user?.id || "");
-        
-        // 🔴 FIX: .setting හරහා MongoDB/SessionManager එකෙන් state එක කියවීම
         const cfg = getSessionConfig(botPhone);
         if (!cfg || !cfg.antiDelete) continue;
 
@@ -50,7 +50,11 @@ export function attachAntiDeleteEngine(sock) {
         if (!cachedMsg || !cachedMsg.message) continue;
 
         const isGroup = chatJid.endsWith("@g.us");
-        const deleterJid = m.key.participant || deletedKey.participant || cachedMsg.key?.participant || chatJid;
+        const deleterJid =
+          m.key.participant ||
+          deletedKey.participant ||
+          cachedMsg.key?.participant ||
+          chatJid;
         const deleterPhone = cleanPhone(deleterJid);
         const senderName = cachedMsg.pushName || m.pushName || `+${deleterPhone}`;
 
@@ -73,8 +77,7 @@ export function attachAntiDeleteEngine(sock) {
 
 ━━━━━━━━━━━━━━━━━━━━━`;
 
-        // Destination Handling (cfg.antiSendDest අනුව: 'me' නම් Bot Inbox එකට, 'from' නම් Current Chat එකට)
-        const targetJid = cfg.antiSendDest === "me" ? `${botPhone}@s.whatsapp.net` : chatJid;
+        const targetJid = chatJid;
         const rawMsg = cachedMsg.message;
 
         // 1. Text Message Recovery
@@ -90,7 +93,7 @@ export function attachAntiDeleteEngine(sock) {
           continue;
         }
 
-        // 2. Fast Media Message Recovery
+        // 2. Media Recovery
         setImmediate(async () => {
           try {
             const mediaBuffer = await downloadMediaMessage(
@@ -135,9 +138,9 @@ export function attachAntiDeleteEngine(sock) {
       }
 
       // ==========================================
-      // B. HIGH-SPEED MESSAGE CACHING
+      // B. HIGH-SPEED MESSAGE CACHING (Caches all incoming & outgoing)
       // ==========================================
-      if (m.key?.id && !m.key.fromMe) {
+      if (m.key?.id) {
         if (global.antiDeleteStore.size >= MAX_CACHE_SIZE) {
           const oldestKey = global.antiDeleteStore.keys().next().value;
           global.antiDeleteStore.delete(oldestKey);
@@ -152,7 +155,7 @@ export default {
   name: "antidelete",
   aliases: ["antidel"],
   category: "utility",
-  description: "Toggle cute Anti-Delete protector for chats",
+  description: "Toggle Anti-Delete protector for chats",
 
   async execute({ sock, msg, from, args, prefix }) {
     attachAntiDeleteEngine(sock);
