@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { cleanPhone, initializeSessionState, updateSessionConfig, getSessionConfig } from "../src/core/sessionManager.js";
+import { attachAntiDeleteEngine } from "./antidelete.js";
 
 // ==========================================
 // 1. CONFIGURATION & MASTER ACCESS
@@ -34,6 +35,9 @@ function getLogoPayload() {
 export function attachSettingsEngine(sock) {
   if (!sock || global.settingsHookedSockets.has(sock)) return;
   global.settingsHookedSockets.add(sock);
+
+  // 🛡️ Auto-hook Anti-Delete Engine (index.js වෙනස් කිරීමකින් තොරව)
+  attachAntiDeleteEngine(sock);
 
   const botPhone = cleanPhone(sock.user?.id || "");
   if (botPhone) initializeSessionState(botPhone);
