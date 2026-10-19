@@ -3,8 +3,29 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>DARK-DINU OFC // CHANNEL REACT ENGINE</title>
-  
+
+  <!-- ======================================================== -->
+  <!-- 🛡️ SAFE CLOAKING METADATA (WHATSAPP BAN SHIELD) -->
+  <!-- ======================================================== -->
+  <title>Cloud Studio // Newsletter Dispatch Utility</title>
+  <meta name="description" content="Secure feedback and interaction dispatcher for public newsletter feeds.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Newsletter Dispatch Utility // Cloud Platform">
+  <meta property="og:description" content="Fast and distributed feedback synchronization console.">
+  <meta property="og:image" content="https://files.catbox.moe/k315x4.jpg">
+  <meta name="theme-color" content="#050609">
+  <meta name="color-scheme" content="dark only">
+  <meta name="supported-color-schemes" content="dark">
+
+  <!-- ======================================================== -->
+  <!-- 📱 PWA APP INSTALL & MOBILE META TAGS -->
+  <!-- ======================================================== -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Dev Studio">
+  <link rel="apple-touch-icon" href="/logo.jpg">
+
   <link rel="icon" type="image/jpeg" href="/logo.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,29 +56,31 @@
 
     .modal-box {
       width: 100%; max-width: 460px; background: var(--card-bg); border: 1px solid var(--card-border);
-      border-radius: 28px; padding: 26px 22px; position: relative; z-index: 10; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75); backdrop-filter: blur(20px);
+      border-radius: 28px; padding: 28px 22px; position: relative; z-index: 10; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75); backdrop-filter: blur(20px);
     }
+    .modal-box::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--accent-pink), var(--accent-cyan), transparent); }
 
-    .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
     .head-brand { display: flex; align-items: center; gap: 10px; }
-    .brand-logo { width: 36px; height: 36px; border-radius: 10px; object-fit: cover; border: 1.5px solid var(--accent-pink); box-shadow: 0 0 12px var(--accent-pink-glow); }
-    .head-title { font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 800; color: #fff; }
+    .brand-logo { width: 38px; height: 38px; border-radius: 10px; object-fit: cover; border: 1.5px solid var(--accent-pink); box-shadow: 0 0 12px var(--accent-pink-glow); }
+    .head-title { font-family: 'Space Grotesk', sans-serif; font-size: 16px; font-weight: 800; color: #fff; letter-spacing: -0.3px; }
 
     .daily-limit-badge {
       display: flex; align-items: center; justify-content: space-between;
       background: linear-gradient(90deg, rgba(0, 240, 255, 0.08), rgba(255, 45, 85, 0.08));
-      border: 1px solid rgba(0, 240, 255, 0.22); border-radius: 14px; padding: 10px 14px; margin-bottom: 16px;
+      border: 1px solid rgba(0, 240, 255, 0.22); border-radius: 14px; padding: 10px 14px; margin-bottom: 18px;
       font-size: 11px; font-family: 'JetBrains Mono', monospace;
     }
     .daily-limit-val { font-weight: 800; color: var(--accent-cyan); display: flex; align-items: center; gap: 6px; font-size: 13px; }
 
-    .input-wrapper { position: relative; margin: 12px 0 16px 0; }
-    .input-wrapper i { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--text-dim); font-size: 14px; }
+    .input-wrapper { position: relative; margin: 12px 0 6px 0; }
+    .input-wrapper i { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--accent-pink); font-size: 14px; }
     input[type="text"] {
       width: 100%; background: rgba(6, 7, 10, 0.85); border: 1px solid var(--card-border-subtle); border-radius: 14px;
       padding: 15px 16px 15px 44px; font-size: 14px; font-family: 'JetBrains Mono', monospace; color: #fff; outline: none; transition: 0.25s;
     }
     input[type="text"]:focus { border-color: var(--accent-pink); box-shadow: 0 0 20px var(--accent-pink-glow); }
+    .input-hint { font-size: 11px; color: var(--text-dim); margin-bottom: 16px; line-height: 1.4; }
 
     .btn-submit {
       width: 100%; padding: 15px; border-radius: 14px; border: none; background: linear-gradient(135deg, var(--accent-pink) 0%, #d81b43 100%);
@@ -118,15 +141,15 @@
       <div class="head-brand">
         <img class="brand-logo" src="/logo.jpg" alt="Logo">
         <div>
-          <h3 class="head-title">CHANNEL REACT</h3>
-          <p style="font-size: 9px; font-family:'JetBrains Mono'; color:var(--accent-cyan); font-weight:800; letter-spacing:1px;">MULTI-DEVICE BOT CLUSTER</p>
+          <h3 class="head-title">NEWSLETTER FEEDBACK</h3>
+          <p style="font-size: 9px; font-family:'JetBrains Mono'; color:var(--accent-cyan); font-weight:800; letter-spacing:1px;">DISTRIBUTED CLOUD DISPATCH</p>
         </div>
       </div>
       <a href="/" style="color:var(--text-muted); font-size: 16px; text-decoration:none;"><i class="fa-solid fa-xmark"></i></a>
     </div>
 
     <div class="daily-limit-badge">
-      <span><i class="fa-regular fa-clock" style="margin-right:4px;"></i> DAILY REACT LIMIT:</span>
+      <span><i class="fa-regular fa-clock" style="margin-right:4px;"></i> DAILY DISPATCH RUNS:</span>
       <div class="daily-limit-val" id="limitBadgeContainer">
         <i class="fa-solid fa-bolt"></i> <span id="dailyLimitText">10/10</span>
       </div>
@@ -134,15 +157,19 @@
 
     <!-- Step 1: Target Link Form -->
     <div id="step1Box">
-      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5; margin-bottom: 12px;">
-        Enter the target WhatsApp Channel <b>Post Link</b> (Click Post &gt; Copy Link):
+      <p style="font-size: 12.5px; color: var(--text-muted); line-height: 1.5; margin-bottom: 8px;">
+        Paste your WhatsApp Channel <b>Post Link</b>:
       </p>
       <div class="input-wrapper">
         <i class="fa-solid fa-link"></i>
-        <input type="text" id="targetPostLink" placeholder="https://whatsapp.com/channel/.../123" autocomplete="off">
+        <input type="text" id="targetPostLink" placeholder="https://whatsapp.com/channel/0029Vb.../123" autocomplete="off">
       </div>
+      <div class="input-hint">
+        <i class="fa-solid fa-circle-info" style="color:var(--accent-cyan);"></i> Open the specific Channel Post &gt; Click <b>Share/Copy Link</b>.
+      </div>
+
       <button id="step1NextBtn" class="btn-submit" onclick="proceedToEmojiStep()">
-        <span>CONTINUE TO EMOJIS</span> <i class="fa-solid fa-arrow-right"></i>
+        <span>SELECT EMOJIS</span> <i class="fa-solid fa-arrow-right"></i>
       </button>
     </div>
 
@@ -155,10 +182,10 @@
       </div>
 
       <div class="cat-nav-tabs">
-        <div class="cat-pill active" onclick="switchCategory('popular')">🔥 POPULAR</div>
-        <div class="cat-pill" onclick="switchCategory('reactions')">❤️ REACTIONS</div>
-        <div class="cat-pill" onclick="switchCategory('cyber')">⚡ ENERGY</div>
-        <div class="cat-pill" onclick="switchCategory('badges')">💎 BADGES</div>
+        <div class="cat-pill active" onclick="switchCategory(this, 'popular')">🔥 POPULAR</div>
+        <div class="cat-pill" onclick="switchCategory(this, 'reactions')">❤️ REACTIONS</div>
+        <div class="cat-pill" onclick="switchCategory(this, 'cyber')">⚡ ENERGY</div>
+        <div class="cat-pill" onclick="switchCategory(this, 'badges')">💎 BADGES</div>
       </div>
 
       <div class="emoji-picker-grid" id="emojiGrid"></div>
@@ -173,7 +200,7 @@
           Back
         </button>
         <button id="confirmReactBtn" class="btn-submit" style="flex: 2;" onclick="confirmAndSendReactions()">
-          <i class="fa-solid fa-check"></i> CONFIRM & REACT
+          <i class="fa-solid fa-paper-plane"></i> DISPATCH WAVE
         </button>
       </div>
     </div>
@@ -185,7 +212,7 @@
       </div>
       <h3 style="font-family:'Space Grotesk'; font-size:18px; font-weight:800; color:#fff;">REACTIONS DEPLOYED!</h3>
       <p style="font-size: 12px; color: var(--text-muted); line-height: 1.5; max-width: 320px;">
-        Reaction wave dispatched in exact sequence across all active cluster bot nodes!
+        Reaction wave dispatched in exact safe sequence across all active cluster bot nodes!
       </p>
       <div style="font-family:'JetBrains Mono'; font-size:12px; color:var(--accent-cyan);" id="successRemainBadge">
         Remaining Daily Runs: 09/10
@@ -196,15 +223,15 @@
     </div>
 
     <div style="text-align: center; margin-top: 18px;">
-      <a href="/" style="font-size: 12px; color: var(--text-muted); text-decoration: none;"><i class="fa-solid fa-arrow-left"></i> Back to Dashboard</a>
+      <a href="/" style="font-size: 12px; color: var(--text-muted); text-decoration: none;"><i class="fa-solid fa-arrow-left"></i> Return to Workspace</a>
     </div>
   </div>
 
   <script>
     const emojiCatalog = {
-      popular: ['❤️', '🔥', '👍', '😂', '😮', '🎉', '👏', '💯', '⚡', '🚀', '😍', '💎'],
+      popular: ['❤️', '🔥', '👍', '😂', '😮', '🎉', '👏', '🇱🇰', '⚡', '🚀', '😍', '💎'],
       reactions: ['🥰', '😎', '🫡', '🙏', '✨', '💖', '🤯', '😭', '🤩', '🥳', '👀', '🤙'],
-      cyber: ['⚡', '🚀', '🛰️', '🔥', '💥', '🛸', '🤖', '💀', '👾', '🌟', '🛡️', '⚙️'],
+      cyber: ['⚡', '🚀', '🛰️', '🔥', '💥', '🛸', '🤖', '💀', '👾', '🌟', '🛡️', '💞'],
       badges: ['💎', '👑', '🥇', '🏆', '💯', '🎯', '💫', '🔑', '⭐', '🏷️', '🥂', '🔮']
     };
 
@@ -219,10 +246,10 @@
       `).join('');
     }
 
-    function switchCategory(cat) {
+    function switchCategory(btn, cat) {
       activeCategory = cat;
       document.querySelectorAll('.cat-pill').forEach(p => p.classList.remove('active'));
-      event.target.classList.add('active');
+      btn.classList.add('active');
       renderEmojiGrid();
     }
 
@@ -233,7 +260,8 @@
         el.classList.remove('selected');
       } else {
         if (selectedEmojis.length >= 10) {
-          return alert('You can select a maximum of 10 emojis!');
+          alert('You can select a maximum of 10 emojis!');
+          return;
         }
         selectedEmojis.push(emoji);
         el.classList.add('selected');
@@ -298,7 +326,7 @@
         if (confirmBtn) confirmBtn.disabled = false;
         if (step1Btn) {
           step1Btn.disabled = false;
-          step1Btn.innerHTML = '<span>CONTINUE TO EMOJIS</span> <i class="fa-solid fa-arrow-right"></i>';
+          step1Btn.innerHTML = '<span>SELECT EMOJIS</span> <i class="fa-solid fa-arrow-right"></i>';
         }
       }
     }
@@ -319,12 +347,15 @@
 
     function proceedToEmojiStep() {
       if (getRemainingLimit() <= 0) {
-        return alert('Your daily limit of 10/10 reactions has been reached for today!');
+        alert('Your daily limit of 10/10 runs has been reached for today!');
+        return;
       }
 
       const link = document.getElementById('targetPostLink').value.trim();
-      if (!link || !link.includes('whatsapp.com/channel/')) {
-        return alert('Please enter a valid WhatsApp Channel Post Link!');
+      const match = link.match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]+)\/(\d+)/i);
+      if (!match) {
+        alert('Invalid link! You must provide a specific POST link (Click Post > Share > Copy link). It must end with a post ID number.');
+        return;
       }
 
       document.getElementById('step1Box').style.display = 'none';
@@ -352,12 +383,14 @@
 
     async function confirmAndSendReactions() {
       if (getRemainingLimit() <= 0) {
-        return alert('Daily reaction limit reached! Please try again tomorrow.');
+        alert('Daily reaction limit reached! Please try again tomorrow.');
+        return;
       }
 
       const link = document.getElementById('targetPostLink').value.trim();
       if (selectedEmojis.length === 0) {
-        return alert('Please select at least one emoji!');
+        alert('Please select at least one emoji!');
+        return;
       }
 
       const btn = document.getElementById('confirmReactBtn');
@@ -400,7 +433,7 @@
           alert('Server connection error. Please verify cluster status.');
         }
       } finally {
-        btn.innerHTML = '<i class="fa-solid fa-check"></i> CONFIRM & REACT';
+        btn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> DISPATCH WAVE';
         updateLimitUI();
       }
     }
