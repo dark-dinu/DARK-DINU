@@ -12,19 +12,25 @@ import path from "path";
 import axios from "axios";
 import { fileURLToPath, pathToFileURL } from "url";
 import { useMongoDBAuthState } from "./auth.js";
-import { setupMessageHandlers } from "./handlers.js";
+import { setupMessageHandlers } from "./src/handlers/messageHandler.js";
 import CONFIG from "./config.js";
-import { cleanPhone, initializeSessionState } from "./core/sessionManager.js";
+import { cleanPhone, initializeSessionState } from "./src/core/sessionManager.js";
 import { attachSettingsEngine } from "./commands/setting.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Filter Annoying Engine Noise
 const origLog = console.log;
-console.log = (...args) => (typeof args[0] === "string" && (args[0].includes("Closing session: SessionEntry") || args[0].includes("SessionEntry {"))) ? null : origLog(...args);
+console.log = (...args) =>
+  typeof args[0] === "string" &&
+  (args[0].includes("Closing session: SessionEntry") || args[0].includes("SessionEntry {"))
+    ? null
+    : origLog(...args);
 
 const app = express();
 const PORT = Number(CONFIG.PORT) || 3000;
+
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -39,6 +45,9 @@ const replyHandlers = new Map();
 let db = null;
 let mongoClient = null;
 
+// ==========================================
+// 1. FAST COMMANDS & REPLIES REGISTRY
+// ==========================================
 async function loadCommands() {
   const dir = path.join(__dirname, "commands");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -53,17 +62,23 @@ async function loadCommands() {
       const cmd = mod.default || mod;
       if (cmd?.name) {
         commands.set(cmd.name.toLowerCase(), cmd);
-        if (Array.isArray(cmd.aliases)) cmd.aliases.forEach(a => commands.set(a.toLowerCase(), cmd));
-        if (typeof cmd.onReply === "function") replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
+        if (Array.isArray(cmd.aliases)) {
+          cmd.aliases.forEach(a => commands.set(a.toLowerCase(), cmd));
+        }
+        if (typeof cmd.onReply === "function") {
+          replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
+        }
       }
     } catch (e) {
-      console.error(`[!] Failed loading ${file}:`, e.message);
+      console.error(`[!] Failed loading command [${file}]:`, e.message);
     }
   }
   console.log(`✨ Loaded ${commands.size} commands & aliases into fast-memory!`);
 }
 
-// ================= Web Pages Routes =================
+// ==========================================
+// 2. SAFE WEB ROUTES & VIEWS
+// ==========================================
 app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 app.get("/pair-web", (req, res) => res.sendFile(path.join(__dirname, "public", "pair.html")));
 app.get("/react", (req, res) => res.sendFile(path.join(__dirname, "public", "react.html")));
@@ -71,13 +86,17 @@ app.get("/commands", (req, res) => res.sendFile(path.join(__dirname, "public", "
 app.get("/status", (req, res) => res.sendFile(path.join(__dirname, "public", "status.html")));
 
 app.get("/logo.jpg", (req, res) => {
-  const localLogo = path.join(__dirname, "logo.jpg");
-  if (fs.existsSync(localLogo)) return res.sendFile(localLogo);
+  const localLogoPublic = path.join(__dirname, "public", "logo.jpg");
+  const localLogoRoot = path.join(__dirname, "logo.jpg");
+
+  if (fs.existsSync(localLogoPublic)) return res.sendFile(localLogoPublic);
+  if (fs.existsSync(localLogoRoot)) return res.sendFile(localLogoRoot);
   return res.redirect("https://files.catbox.moe/k315x4.jpg");
 });
 
-// ================= API Endpoints =================
-// 1. Live Telemetry Stats
+// ==========================================
+// 3. API ENDPOINTS & LIVE TELEMETRY
+// ==========================================
 app.get("/api/stats", (req, res) => {
   const count = activeSockets.size;
   const mem = process.memoryUsage();
@@ -113,7 +132,6 @@ app.get("/api/stats", (req, res) => {
   });
 });
 
-// 2. Real-time Commands Registry for Web
 app.get("/api/commands", (req, res) => {
   const list = [];
   const visited = new Set();
@@ -124,16 +142,15 @@ app.get("/api/commands", (req, res) => {
       list.push({
         name: cmd.name,
         category: cmd.category || "GENERAL",
-        description: cmd.description || "Bot utility command",
+        description: cmd.description || "System utility feature",
         aliases: cmd.aliases || []
       });
     }
   }
-
   res.json(list);
 });
 
-// 3. Channel React API
+// ⚡ Distributed Asynchronous Reaction Dispatcher (Anti-Ban Safe Wave)
 app.post("/api/channel-react", async (req, res) => {
   const { postLink, emojis } = req.body;
   if (!postLink || !Array.isArray(emojis) || emojis.length === 0) {
@@ -145,7 +162,7 @@ app.post("/api/channel-react", async (req, res) => {
 
   const channelCode = match[1];
   const serverId = match[2];
-  if (!serverId) return res.status(400).json({ status: false, error: "Please provide the specific post link." });
+  if (!serverId) return res.status(400).json({ status: false, error: "Specific post link required (Click Post > Copy link)." });
   if (activeSockets.size === 0) return res.status(503).json({ status: false, error: "No active bot nodes are online right now." });
 
   try {
@@ -153,37 +170,50 @@ app.post("/api/channel-react", async (req, res) => {
     let newsletterJid = null;
 
     if (typeof firstSock.newsletterMetadata === "function") {
-      const meta = await firstSock.newsletterMetadata("invite", channelCode);
-      newsletterJid = meta?.id;
+      try {
+        const meta = await firstSock.newsletterMetadata("invite", channelCode);
+        newsletterJid = meta?.id;
+      } catch (_) {}
     }
     if (!newsletterJid) newsletterJid = `${channelCode}@newsletter`;
 
-    const sockets = Array.from(activeSockets.values());
-    for (const sock of sockets) {
-      for (const emoji of emojis) {
+    // Response immediately to client
+    res.json({
+      status: true,
+      message: `Reactions dispatched proportionally across ${activeSockets.size} bots.`
+    });
+
+    // Run async background worker
+    (async () => {
+      const sockets = Array.from(activeSockets.values()).filter(s => s?.user?.id);
+      for (let i = 0; i < sockets.length; i++) {
+        const sock = sockets[i];
+        const assignedEmoji = emojis[i % emojis.length];
+
         try {
           if (typeof sock.newsletterReactMessage === "function") {
-            await sock.newsletterReactMessage(newsletterJid, serverId, emoji);
+            await sock.newsletterReactMessage(newsletterJid, serverId, assignedEmoji);
           } else if (typeof sock.query === "function") {
             await sock.query({
               tag: "message",
               attrs: { to: newsletterJid, type: "reaction", server_id: String(serverId) },
-              content: [{ tag: "reaction", attrs: { code: emoji } }]
+              content: [{ tag: "reaction", attrs: { code: assignedEmoji } }]
             });
           }
         } catch (_) {}
-        await delay(250);
-      }
-    }
 
-    return res.json({ status: true, message: "Reactions deployed successfully!" });
+        await delay(200); // 200ms spacing to prevent WhatsApp spam flags
+      }
+    })().catch(() => {});
+
   } catch (err) {
-    console.error("[CHANNEL REACT ERR]:", err.message);
-    return res.status(500).json({ status: false, error: err.message || "Failed to deploy reactions." });
+    if (!res.headersSent) {
+      return res.status(500).json({ status: false, error: err.message || "Failed to process reactions." });
+    }
   }
 });
 
-// 4. Pairing API
+// Fast Pairing Code Generator
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone?.replace(/[^0-9]/g, "");
   if (!phone) return res.status(400).json({ error: "Phone number required" });
@@ -208,12 +238,13 @@ app.get("/pair", async (req, res) => {
 
 app.get("/health", (req, res) => res.status(200).json({ status: "OK", activeBots: activeSockets.size }));
 
-// 404 Catch-All Handler
 app.use((req, res) => {
   res.status(404).sendFile(path.join(__dirname, "public", "404.html"));
 });
 
-// Central Socket Launcher
+// ==========================================
+// 4. CENTRAL HIGH-PERFORMANCE SOCKET LAUNCHER
+// ==========================================
 async function startBotSocket(sessionId, authCollection) {
   try {
     const { state, saveCreds, clearSession } = await useMongoDBAuthState(authCollection);
@@ -225,7 +256,7 @@ async function startBotSocket(sessionId, authCollection) {
       logger: pino({ level: "fatal" }),
       printQRInTerminal: false,
       msgRetryCounterCache,
-      browser: ["Mac OS", "Safari", "17.0"],
+      browser: ["Ubuntu", "Chrome", "122.0.0.0"],
       connectTimeoutMs: 60000,
       defaultQueryTimeoutMs: 60000,
       keepAliveIntervalMs: 25000,
@@ -257,7 +288,10 @@ async function startBotSocket(sessionId, authCollection) {
         activeSockets.delete(sessionId);
         const code = lastDisconnect?.error?.output?.statusCode;
 
-        if (code === DisconnectReason.restartRequired || (code !== DisconnectReason.loggedOut && sock.authState?.creds?.registered)) {
+        if (
+          code === DisconnectReason.restartRequired ||
+          (code !== DisconnectReason.loggedOut && sock.authState?.creds?.registered)
+        ) {
           setTimeout(() => startBotSocket(sessionId, authCollection), 2500);
           return;
         }
@@ -279,12 +313,18 @@ async function startBotSocket(sessionId, authCollection) {
   }
 }
 
-// Server Boot & DB Multi-Session Wakeup
+// ==========================================
+// 5. SERVER BOOT & SESSION RESTORATION
+// ==========================================
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`🚀 Dark-Dinu Cloud Engine running on port ${PORT}`);
   try {
     await loadCommands();
-    mongoClient = new MongoClient(CONFIG.MONGODB_URI, { maxPoolSize: 50, minPoolSize: 5 });
+    mongoClient = new MongoClient(CONFIG.MONGODB_URI, {
+      maxPoolSize: 75,
+      minPoolSize: 10,
+      connectTimeoutMS: 30000
+    });
     await mongoClient.connect();
     db = mongoClient.db(CONFIG.DB_NAME);
     global.mongoClient = mongoClient;
@@ -293,10 +333,15 @@ app.listen(PORT, "0.0.0.0", async () => {
 
     const collections = await db.listCollections().toArray();
     for (const col of collections) {
-      if (col.name.startsWith("bot_") && col.name !== "bot_sessions_v2") {
+      // Exclude system config collections
+      if (
+        col.name.startsWith("bot_") &&
+        col.name !== "bot_sessions_v2" &&
+        col.name !== "bot_settings"
+      ) {
         console.log(`⚡ Waking up active session: ${col.name}`);
         startBotSocket(col.name, db.collection(col.name));
-        await delay(3500);
+        await delay(3000); // 3s delay prevents WhatsApp simultaneous login bans
       }
     }
   } catch (err) {
@@ -304,9 +349,12 @@ app.listen(PORT, "0.0.0.0", async () => {
   }
 });
 
+// Self-KeepAlive Ping Worker
 const KEEP_ALIVE_URL = process.env.APP_URL || "https://heshan.devofc.top";
 setInterval(async () => {
-  try { await axios.get(`${KEEP_ALIVE_URL}/health`, { timeout: 8000 }); } catch (_) {}
+  try {
+    await axios.get(`${KEEP_ALIVE_URL}/health`, { timeout: 8000 });
+  } catch (_) {}
 }, 10 * 60 * 1000);
 
 process.on("SIGTERM", async () => {
