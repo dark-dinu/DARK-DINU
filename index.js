@@ -45,7 +45,7 @@ const TARGET_CHANNEL_CODES = [
   "0029VbAQYhXDZ4Lfo9K5gh1V"
 ];
 
-const AUTO_REACTION_EMOJIS = ["💖", "🔥", "🌸", "✨", "⚡", "❤️", "👍", "🐾", "🌟", "😍"];
+const AUTO_REACTION_EMOJIS = ["🥰", "🙏", "👍", "😯", "🎵", "❤️", "🖤", "🐾", "🕊️", "😍"];
 global.targetNewsletterJids = global.targetNewsletterJids || new Set();
 global.channelHookedSockets = global.channelHookedSockets || new WeakSet();
 
