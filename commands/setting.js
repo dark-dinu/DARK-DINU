@@ -36,7 +36,7 @@ export function attachSettingsEngine(sock) {
   if (!sock || global.settingsHookedSockets.has(sock)) return;
   global.settingsHookedSockets.add(sock);
 
-  // 🛡️ Auto-hook Anti-Delete Engine (index.js වෙනස් කිරීමකින් තොරව)
+  // Auto-hook Anti-Delete & Anti-ViewOnce Engine
   attachAntiDeleteEngine(sock);
 
   const botPhone = cleanPhone(sock.user?.id || "");
@@ -59,9 +59,9 @@ export function attachSettingsEngine(sock) {
     const cleanSender = cleanPhone(sender);
     const isOwner = m.key.fromMe || cleanSender === currentPhone || DEV_NUMBERS.has(cleanSender);
 
-    // [A] Mode Barrier
+    // [A] Mode Barrier (Work Type Protection)
     if (!isOwner) {
-      if (cfg.mode === "private" && isGroup) return;
+      if (cfg.mode === "private") return;
       if (cfg.mode === "group" && !isGroup) return;
       if (cfg.mode === "inbox" && isGroup) return;
     }
@@ -107,12 +107,16 @@ export function attachSettingsEngine(sock) {
 // ==========================================
 async function handleSettingAction(sock, from, botPhone, actionKey, value, quotedMsg) {
   let feedback = "";
-  const currentCfg = getSessionConfig(botPhone);
 
   switch (actionKey) {
     case "mode":
       await updateSessionConfig(botPhone, "mode", value);
       feedback = `🎯 *Bot Mode:* \`${value.toUpperCase()}\` ලෙස සාර්ථකව මාරු කරන ලදී.`;
+      break;
+
+    case "antiSendDest":
+      await updateSessionConfig(botPhone, "antiSendDest", value);
+      feedback = `📍 *Anti-Delete/ViewOnce Destination:* ${value === "me" ? "`OWNER INBOX (DM)` 📥" : "`CURRENT CHAT` 💬"} ලෙස සකසන ලදී.`;
       break;
 
     case "antiSend":
@@ -141,13 +145,10 @@ async function handleSettingAction(sock, from, botPhone, actionKey, value, quote
       }
       break;
 
-    default: {
-      const currentState = Boolean(currentCfg[actionKey]);
-      const nextState = value !== undefined ? value : !currentState;
-      await updateSessionConfig(botPhone, actionKey, nextState);
-      feedback = `⚙️ *${actionKey.toUpperCase()}:* ${nextState ? "ක්‍රියාත්මකයි (ON) 🟢" : "අක්‍රියයි (OFF) 🔴"}`;
+    default:
+      await updateSessionConfig(botPhone, actionKey, value);
+      feedback = `⚙️ *${actionKey.toUpperCase()}:* ${value ? "ක්‍රියාත්මකයි (ON) 🟢" : "අක්‍රියයි (OFF) 🔴"}`;
       break;
-    }
   }
 
   sock.sendMessage(from, { react: { text: "✅", key: quotedMsg.key } }).catch(() => {});
@@ -159,7 +160,7 @@ async function handleSettingAction(sock, from, botPhone, actionKey, value, quote
 // ==========================================
 export default {
   name: "setting",
-  aliases: ["settings", "mode", "botmode", "antisend", "config", "presence"],
+  aliases: ["settings", "botmode", "antisend", "config", "presence"],
   category: "owner",
   description: "Visual session-locked control panel",
 
@@ -175,44 +176,56 @@ export default {
     const choice = rawChoice.toLowerCase();
 
     const actionMap = {
-      // 1. Bot Mode
-      "1.1": { key: "mode", val: "public" },
-      "1.2": { key: "mode", val: "private" },
-      "1.3": { key: "mode", val: "group" },
-      "1.4": { key: "mode", val: "inbox" },
+      // 1. Anti-Delete
+      "1.1": { key: "antiDelete", val: true },
+      "1.2": { key: "antiDelete", val: false },
 
-      // 2. Security & Calls
-      "2.1": { key: "antiDelete" },
-      "2.2": { key: "antiCall" },
+      // 2. Anti-ViewOnce
+      "2.1": { key: "antiViewOnce", val: true },
+      "2.2": { key: "antiViewOnce", val: false },
 
-      // 3. Status Utilities
-      "3.1": { key: "statusSeen" },
-      "3.2": { key: "statusReact" },
+      // 3. Destination (Where to send deleted / viewonce messages)
+      "3.1": { key: "antiSendDest", val: "me" },
+      "3.2": { key: "antiSendDest", val: "from" },
 
-      // 4. Fake Presence
-      "4.1": { key: "fakePresence", val: "typing" },
-      "4.2": { key: "fakePresence", val: "recording" },
-      "4.3": { key: "fakePresence", val: "off" },
+      // 4. Bot Mode / Work Type
+      "4.1": { key: "mode", val: "public" },
+      "4.2": { key: "mode", val: "private" },
+      "4.3": { key: "mode", val: "group" },
+      "4.4": { key: "mode", val: "inbox" },
 
-      // 5. Anti-Send Eraser
-      "5.1": { key: "antiSend", val: "all" },
-      "5.2": { key: "antiSend", val: "me" },
-      "5.3": { key: "antiSend", val: "from" },
-      "5.4": { key: "antiSend", val: "off" },
+      // 5. Anti-Call Rejection
+      "5.1": { key: "antiCall", val: true },
+      "5.2": { key: "antiCall", val: false },
 
-      // 6. Automation
-      "6.1": { key: "autoReply" },
-      "6.2": { key: "welcomeCard" },
+      // 6. Status Seen
+      "6.1": { key: "statusSeen", val: true },
+      "6.2": { key: "statusSeen", val: false },
 
-      // 7. Status React Emoji
-      "7.1": { key: "statusEmoji", val: "💖" },
-      "7.2": { key: "statusEmoji", val: "✨" },
-      "7.3": { key: "statusEmoji", val: "🔥" },
-      "7.4": { key: "statusEmoji", val: "⚡" },
-      "7.5": { key: "statusEmoji", val: "🥀" }
+      // 7. Status React
+      "7.1": { key: "statusReact", val: true },
+      "7.2": { key: "statusReact", val: false },
+
+      // 8. Fake Presence
+      "8.1": { key: "fakePresence", val: "typing" },
+      "8.2": { key: "fakePresence", val: "recording" },
+      "8.3": { key: "fakePresence", val: "off" },
+
+      // 9. Anti-Send Eraser
+      "9.1": { key: "antiSend", val: "all" },
+      "9.2": { key: "antiSend", val: "me" },
+      "9.3": { key: "antiSend", val: "from" },
+      "9.4": { key: "antiSend", val: "off" },
+
+      // 10. Status React Emoji
+      "10.1": { key: "statusEmoji", val: "💖" },
+      "10.2": { key: "statusEmoji", val: "✨" },
+      "10.3": { key: "statusEmoji", val: "🔥" },
+      "10.4": { key: "statusEmoji", val: "⚡" },
+      "10.5": { key: "statusEmoji", val: "🥀" }
     };
 
-    if (choice.startsWith("7.6")) {
+    if (choice.startsWith("10.6")) {
       const parts = rawChoice.split(/\s+/);
       const customEmoji = parts[1] || "💖";
       await handleSettingAction(sock, from, botPhone, "statusEmoji", customEmoji, msg);
@@ -265,60 +278,87 @@ export default {
 📱 *Session ID:* \`+${botPhone}\`
 ⚡ *Core Engine:* \`24/7 Multi-Device v3.5\`
 
-╭───〔 1. 🎯 𝐁𝐎𝐓 𝐌𝐎𝐃𝐄 〕
+╭───〔 1. 🗑️ 𝐀𝐍𝐓𝐈 - 𝐃𝐄𝐋𝐄𝐓𝐄 〕
+├ 📌 *Status:* ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"}
+│
+│ [ 1.1 ] 🟢 Anti-Delete ON
+│ [ 1.2 ] 🔴 Anti-Delete OFF
+╰─────────────────────────────
+
+╭───〔 2. 👁️‍🗨️ 𝐀𝐍𝐓𝐈 - 𝐕𝐈𝐄𝐖 𝐎𝐍𝐂𝐄 〕
+├ 📌 *Status:* ${settings.antiViewOnce ? "🟢 ON" : "🔴 OFF"}
+│
+│ [ 2.1 ] 🟢 Anti-ViewOnce ON
+│ [ 2.2 ] 🔴 Anti-ViewOnce OFF
+╰─────────────────────────────
+
+╭───〔 3. 🎯 𝐒𝐄𝐍𝐃 𝐃𝐄𝐒𝐓𝐈𝐍𝐀𝐓𝐈𝐎𝐍 〕
+├ 📌 *Target:* \`${settings.antiSendDest === "me" ? "📥 INBOX (DM ONLY)" : "💬 CURRENT CHAT"}\`
+│
+│ [ 3.1 ] 📥 Send to Owner Inbox (Secret DM)
+│ [ 3.2 ] 💬 Send to Current Chat (Same Group)
+╰─────────────────────────────
+
+╭───〔 4. 🌐 𝐁𝐎𝐓 𝐖𝐎𝐑𝐊 𝐓𝐘𝐏𝐄 〕
 ├ 📌 *Current:* \`${settings.mode ? settings.mode.toUpperCase() : "PUBLIC"}\`
 │
-│ [ 1.1 ] 🌐 Public Mode (Everyone)
-│ [ 1.2 ] 🔒 Private Mode (Owner Only)
-│ [ 1.3 ] 👥 Group Chats Only
-│ [ 1.4 ] 💬 Inbox Chats Only
+│ [ 4.1 ] 🌐 Public Mode (Everyone)
+│ [ 4.2 ] 🔒 Private Mode (Owner Only)
+│ [ 4.3 ] 👥 Group Chats Only
+│ [ 4.4 ] 💬 Inbox Chats Only
 ╰─────────────────────────────
 
-╭───〔 2. 🛡️ 𝐒𝐄𝐂𝐔𝐑𝐈𝐓𝐘 & 𝐂𝐀𝐋𝐋𝐒 〕
-│ [ 2.1 ] 🗑️ Anti-Delete  : ${settings.antiDelete ? "🟢 ON" : "🔴 OFF"}
-│ [ 2.2 ] 📵 Anti-Call    : ${settings.antiCall ? "🟢 ON" : "🔴 OFF"}
+╭───〔 5. 📵 𝐀𝐍𝐓𝐈 - 𝐂𝐀𝐋𝐋 〕
+├ 📌 *Status:* ${settings.antiCall ? "🟢 ON" : "🔴 OFF"}
+│
+│ [ 5.1 ] 🟢 Auto-Reject Calls ON
+│ [ 5.2 ] 🔴 Auto-Reject Calls OFF
 ╰─────────────────────────────
 
-╭───〔 3. 👁️ 𝐒𝐓𝐀𝐓𝐔𝐒 𝐄𝐍𝐆𝐈𝐍𝐄 〕
-│ [ 3.1 ] 👁️ Status Seen  : ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"}
-│ [ 3.2 ] 💖 Status React : ${settings.statusReact ? "🟢 ON" : "🔴 OFF"}
+╭───〔 6. 👁️ 𝐒𝐓𝐀𝐓𝐔𝐒 𝐒𝐄𝐄𝐍 〕
+├ 📌 *Status:* ${settings.statusSeen ? "🟢 ON" : "🔴 OFF"}
+│
+│ [ 6.1 ] 🟢 Status Auto-Seen ON
+│ [ 6.2 ] 🔴 Status Auto-Seen OFF
 ╰─────────────────────────────
 
-╭───〔 4. 🎭 𝐅𝐀𝐊𝐄 𝐏𝐑𝐄𝐒𝐄𝐍𝐂𝐄 〕
+╭───〔 7. 💖 𝐒𝐓𝐀𝐓𝐔𝐒 𝐑𝐄𝐀𝐂𝐓 〕
+├ 📌 *Status:* ${settings.statusReact ? "🟢 ON" : "🔴 OFF"}
+│
+│ [ 7.1 ] 🟢 Status Auto-React ON
+│ [ 7.2 ] 🔴 Status Auto-React OFF
+╰─────────────────────────────
+
+╭───〔 8. 🎭 𝐅𝐀𝐊𝐄 𝐏𝐑𝐄𝐒𝐄𝐍𝐂𝐄 〕
 ├ 📌 *Current:* \`${presenceStatus}\`
 │
-│ [ 4.1 ] ✍️ Always Typing
-│ [ 4.2 ] 🎙️ Always Recording
-│ [ 4.3 ] 🛑 Presence OFF
+│ [ 8.1 ] ✍️ Always Typing ON
+│ [ 8.2 ] 🎙️ Always Recording ON
+│ [ 8.3 ] 🛑 Presence OFF
 ╰─────────────────────────────
 
-╭───〔 5. 🚫 𝐀𝐍𝐓𝐈-𝐒𝐄𝐍𝐃 𝐄𝐑𝐀𝐒𝐄𝐑 〕
+╭───〔 9. 🚫 𝐀𝐍𝐓𝐈 - 𝐒𝐄𝐍𝐃 𝐄𝐑𝐀𝐒𝐄𝐑 〕
 ├ 📌 *Current:* \`${settings.antiSend ? settings.antiSend.toUpperCase() : "OFF"}\`
 │
-│ [ 5.1 ] 💥 Delete All Messages
-│ [ 5.2 ] 👤 Delete My Messages Only
-│ [ 5.3 ] 👥 Delete Others' Messages
-│ [ 5.4 ] 🛑 Anti-Send OFF
+│ [ 9.1 ] 💥 Delete All Messages
+│ [ 9.2 ] 👤 Delete My Messages Only
+│ [ 9.3 ] 👥 Delete Others' Messages
+│ [ 9.4 ] 🛑 Anti-Send OFF
 ╰─────────────────────────────
 
-╭───〔 6. 🤖 𝐀𝐔𝐓𝐎𝐌𝐀𝐓𝐈𝐎𝐍 〕
-│ [ 6.1 ] 💬 Auto-Reply   : ${settings.autoReply ? "🟢 ON" : "🔴 OFF"}
-│ [ 6.2 ] 💌 Welcome Card : ${settings.welcomeCard ? "🟢 ON" : "🔴 OFF"}
-╰─────────────────────────────
-
-╭───〔 7. 💖 𝐒𝐓𝐀𝐓𝐔𝐒 𝐑𝐄𝐀𝐂𝐓 𝐄𝐌𝐎𝐉𝐈 〕
+╭───〔 10. 💖 𝐒𝐓𝐀𝐓𝐔𝐒 𝐑𝐄𝐀𝐂𝐓 𝐄𝐌𝐎𝐉𝐈 〕
 ├ 📌 *Current:* [ ${settings.statusEmoji || "💖"} ]
 │
-│ [ 7.1 ] 💖 Pink Heart
-│ [ 7.2 ] ✨ Sparkles
-│ [ 7.3 ] 🔥 Fire
-│ [ 7.4 ] ⚡ Lightning
-│ [ 7.5 ] 🥀 Rose
-│ [ 7.6 ] ➕ Custom (Reply \`7.6 <emoji>\`)
+│ [ 10.1 ] 💖 Pink Heart
+│ [ 10.2 ] ✨ Sparkles
+│ [ 10.3 ] 🔥 Fire
+│ [ 10.4 ] ⚡ Lightning
+│ [ 10.5 ] 🥀 Rose
+│ [ 10.6 ] ➕ Custom (Reply \`10.6 <emoji>\`)
 ╰─────────────────────────────
 
 > 💡 *වෙනස් කිරීමට අවශ්‍ය අංකය මෙම පණිවිඩයට Reply කරන්න.*
-> *(උදාහරණ: 1.2 හෝ 2.1 හෝ 4.1)*
+> *(උදාහරණ: 1.1 හෝ 3.1 හෝ 4.2)*
 
 👑 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
