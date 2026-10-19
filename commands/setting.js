@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { cleanPhone, initializeSessionState, updateSessionConfig, getSessionConfig } from "../core/sessionManager.js";
+import { cleanPhone, initializeSessionState, updateSessionConfig, getSessionConfig } from "../src/core/sessionManager.js";
 
 // ==========================================
 // 1. CONFIGURATION & MASTER ACCESS
@@ -16,11 +16,14 @@ function checkAuthorization(sock, msg, from, botPhone) {
   return cleanSender === botPhone || DEV_NUMBERS.has(cleanSender);
 }
 
-// Logo image loader helper (Local logo.jpg or Cloud CDN Fallback)
 function getLogoPayload() {
-  const localLogoPath = path.join(process.cwd(), "logo.jpg");
-  if (fs.existsSync(localLogoPath)) {
-    return { image: fs.readFileSync(localLogoPath) };
+  const localLogoPublic = path.join(process.cwd(), "public", "logo.jpg");
+  const localLogoRoot = path.join(process.cwd(), "logo.jpg");
+
+  if (fs.existsSync(localLogoPublic)) {
+    return { image: fs.readFileSync(localLogoPublic) };
+  } else if (fs.existsSync(localLogoRoot)) {
+    return { image: fs.readFileSync(localLogoRoot) };
   }
   return { image: { url: "https://files.catbox.moe/k315x4.jpg" } };
 }
@@ -71,9 +74,9 @@ export function attachSettingsEngine(sock) {
     // [C] Anti-Send Engine
     if (cfg.antiSend && cfg.antiSend !== "off") {
       const shouldDelete =
+        (cfg.antiSend === "all") ||
         (cfg.antiSend === "me" && m.key.fromMe) ||
-        (cfg.antiSend === "from" && !m.key.fromMe) ||
-        cfg.antiSend === "all";
+        (cfg.antiSend === "from" && !m.key.fromMe);
 
       if (shouldDelete) {
         await sock.sendMessage(chatJid, { delete: m.key }).catch(() => {});
@@ -134,12 +137,13 @@ async function handleSettingAction(sock, from, botPhone, actionKey, value, quote
       }
       break;
 
-    default:
+    default: {
       const currentState = Boolean(currentCfg[actionKey]);
       const nextState = value !== undefined ? value : !currentState;
       await updateSessionConfig(botPhone, actionKey, nextState);
       feedback = `⚙️ *${actionKey.toUpperCase()}:* ${nextState ? "ක්‍රියාත්මකයි (ON) 🟢" : "අක්‍රියයි (OFF) 🔴"}`;
       break;
+    }
   }
 
   sock.sendMessage(from, { react: { text: "✅", key: quotedMsg.key } }).catch(() => {});
@@ -243,9 +247,6 @@ export default {
     if (cmd === "mode" && opt) return await handleSettingAction(sock, from, botPhone, "mode", opt, msg);
     if (cmd === "antisend" && opt) return await handleSettingAction(sock, from, botPhone, "antiSend", opt, msg);
 
-    // ==========================================
-    // 5. CLEAN BRANDED DASHBOARD (LOGO + CARD)
-    // ==========================================
     sock.sendMessage(from, { react: { text: "🎛️", key: msg.key } }).catch(() => {});
 
     let presenceStatus = "🔴 OFF";
@@ -329,7 +330,6 @@ export default {
         timestamp: Date.now()
       });
 
-      // 5 Minutes Auto-Expire (Clean RAM)
       setTimeout(() => {
         global.settingSessions.delete(sent.key.id);
       }, 5 * 60 * 1000);
