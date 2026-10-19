@@ -1,23 +1,18 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
+import { cleanPhone, getSessionConfig, updateSessionConfig } from "../src/core/sessionManager.js";
 
-// High-speed memory store with safe max capacity
+// High-speed memory store
 global.antiDeleteStore = global.antiDeleteStore || new Map();
-global.antiDeleteSettings = global.antiDeleteSettings || new Map();
 global.antiDeleteHookedSockets = global.antiDeleteHookedSockets || new WeakSet();
 
-const MAX_CACHE_SIZE = 1500;
-
-function getBotPhone(sock) {
-  const userJid = sock.user?.id || "";
-  return userJid.split(":")[0].replace(/[^0-9]/g, "");
-}
+const MAX_CACHE_SIZE = 2000;
 
 function isBotOwner(sock, msg, from) {
-  const botPhone = getBotPhone(sock);
+  const botPhone = cleanPhone(sock.user?.id || "");
   const senderJid = msg.key.fromMe
     ? botPhone
     : (msg.key.participant || msg.participant || from || "");
-  const senderPhone = String(senderJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+  const senderPhone = cleanPhone(senderJid);
 
   const devNumbers = ["94719845166", "15947733680169"];
   return msg.key.fromMe || senderPhone === botPhone || devNumbers.includes(senderPhone);
@@ -39,20 +34,24 @@ export function attachAntiDeleteEngine(sock) {
       // A. REVOKE (DELETED MESSAGE) DETECTOR
       // ==========================================
       const protocol = m.message.protocolMessage;
-      if (protocol && (protocol.type === 0 || protocol.type === "REVOKE")) {
+      const isRevoke = protocol && (protocol.type === 0 || protocol.type === 14 || protocol.type === "REVOKE");
+
+      if (isRevoke) {
         const deletedKey = protocol.key;
         if (!deletedKey?.id) continue;
 
-        const botPhone = getBotPhone(sock);
-        const isEnabled = global.antiDeleteSettings.get(botPhone) ?? true;
-        if (!isEnabled) continue;
+        const botPhone = cleanPhone(sock.user?.id || "");
+        
+        // 🔴 FIX: .setting හරහා MongoDB/SessionManager එකෙන් state එක කියවීම
+        const cfg = getSessionConfig(botPhone);
+        if (!cfg || !cfg.antiDelete) continue;
 
         const cachedMsg = global.antiDeleteStore.get(deletedKey.id);
         if (!cachedMsg || !cachedMsg.message) continue;
 
         const isGroup = chatJid.endsWith("@g.us");
         const deleterJid = m.key.participant || deletedKey.participant || cachedMsg.key?.participant || chatJid;
-        const deleterPhone = String(deleterJid).split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+        const deleterPhone = cleanPhone(deleterJid);
         const senderName = cachedMsg.pushName || m.pushName || `+${deleterPhone}`;
 
         const timeStr = new Date().toLocaleTimeString("en-US", {
@@ -63,7 +62,6 @@ export function attachAntiDeleteEngine(sock) {
           hour12: true
         });
 
-        // Cute Aesthetic UI Header
         const headerUI = 
 `🌸 ｡ﾟ•┈୨ *CAUGHT YA DELETING!* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
@@ -75,6 +73,8 @@ export function attachAntiDeleteEngine(sock) {
 
 ━━━━━━━━━━━━━━━━━━━━━`;
 
+        // Destination Handling (cfg.antiSendDest අනුව: 'me' නම් Bot Inbox එකට, 'from' නම් Current Chat එකට)
+        const targetJid = cfg.antiSendDest === "me" ? `${botPhone}@s.whatsapp.net` : chatJid;
         const rawMsg = cachedMsg.message;
 
         // 1. Text Message Recovery
@@ -84,7 +84,7 @@ export function attachAntiDeleteEngine(sock) {
           null;
 
         if (textContent) {
-          sock.sendMessage(chatJid, {
+          await sock.sendMessage(targetJid, {
             text: `${headerUI}\n\n📝 *Deleted Message:*\n> ${textContent}\n\n💖 *© DARK-DINU MD* • https://heshan.devofc.top/`
           }).catch(() => {});
           continue;
@@ -104,30 +104,30 @@ export function attachAntiDeleteEngine(sock) {
 
             if (rawMsg.imageMessage) {
               const caption = rawMsg.imageMessage.caption ? `\n\n💭 *Caption:* _${rawMsg.imageMessage.caption}_` : "";
-              await sock.sendMessage(chatJid, {
+              await sock.sendMessage(targetJid, {
                 image: mediaBuffer,
                 caption: `${headerUI}${caption}\n\n💖 *© DARK-DINU MD*`
               }).catch(() => {});
             } else if (rawMsg.videoMessage) {
               const caption = rawMsg.videoMessage.caption ? `\n\n💭 *Caption:* _${rawMsg.videoMessage.caption}_` : "";
-              await sock.sendMessage(chatJid, {
+              await sock.sendMessage(targetJid, {
                 video: mediaBuffer,
                 caption: `${headerUI}${caption}\n\n💖 *© DARK-DINU MD*`
               }).catch(() => {});
             } else if (rawMsg.audioMessage) {
-              await sock.sendMessage(chatJid, {
+              await sock.sendMessage(targetJid, {
                 text: `${headerUI}\n\n🎙️ *Deleted Audio Note:*`
               }).catch(() => {});
-              await sock.sendMessage(chatJid, {
+              await sock.sendMessage(targetJid, {
                 audio: mediaBuffer,
                 mimetype: "audio/ogg; codecs=opus",
                 ptt: true
               }).catch(() => {});
             } else if (rawMsg.stickerMessage) {
-              await sock.sendMessage(chatJid, {
+              await sock.sendMessage(targetJid, {
                 text: `${headerUI}\n\n🎨 *Deleted Cute Sticker:*`
               }).catch(() => {});
-              await sock.sendMessage(chatJid, { sticker: mediaBuffer }).catch(() => {});
+              await sock.sendMessage(targetJid, { sticker: mediaBuffer }).catch(() => {});
             }
           } catch (_) {}
         });
@@ -138,7 +138,6 @@ export function attachAntiDeleteEngine(sock) {
       // B. HIGH-SPEED MESSAGE CACHING
       // ==========================================
       if (m.key?.id && !m.key.fromMe) {
-        // Zero-lag FIFO Eviction
         if (global.antiDeleteStore.size >= MAX_CACHE_SIZE) {
           const oldestKey = global.antiDeleteStore.keys().next().value;
           global.antiDeleteStore.delete(oldestKey);
@@ -159,9 +158,8 @@ export default {
     attachAntiDeleteEngine(sock);
 
     const subCmd = args[0]?.toLowerCase();
-    const botPhone = getBotPhone(sock);
+    const botPhone = cleanPhone(sock.user?.id || "");
 
-    // Cute Owner Guard
     if (!isBotOwner(sock, msg, from)) {
       sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
@@ -173,7 +171,7 @@ export default {
 
     if (subCmd === "on" || subCmd === "off") {
       const status = subCmd === "on";
-      global.antiDeleteSettings.set(botPhone, status);
+      await updateSessionConfig(botPhone, "antiDelete", status);
 
       sock.sendMessage(from, { react: { text: status ? "💖" : "💤", key: msg.key } }).catch(() => {});
 
@@ -193,7 +191,8 @@ _${status ? "I'll save and show any deleted messages for you right away!" : "Ant
       return await sock.sendMessage(from, { text: statusCard }, { quoted: msg });
     }
 
-    const currentStatus = global.antiDeleteSettings.get(botPhone) ?? true;
+    const cfg = getSessionConfig(botPhone);
+    const currentStatus = cfg?.antiDelete ?? true;
     sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
 
     return await sock.sendMessage(
