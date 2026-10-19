@@ -20,8 +20,14 @@ import { attachSettingsEngine } from "./commands/setting.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Filter annoying console noise
 const origLog = console.log;
-console.log = (...args) => (typeof args[0] === "string" && (args[0].includes("Closing session: SessionEntry") || args[0].includes("SessionEntry {"))) ? null : origLog(...args);
+console.log = (...args) =>
+  typeof args[0] === "string" &&
+  (args[0].includes("Closing session: SessionEntry") ||
+    args[0].includes("SessionEntry {"))
+    ? null
+    : origLog(...args);
 
 const app = express();
 const PORT = Number(CONFIG.PORT) || 3000;
@@ -29,13 +35,16 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
 
+// Caches for fast in-memory access & deduplication
 const msgRetryCounterCache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
+const processedPostCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+
 global.activeSockets = global.activeSockets || new Map();
 const activeSockets = global.activeSockets;
 global.attachedEngineSockets = global.attachedEngineSockets || new WeakSet();
 
 // ========================================================
-// 🛑 PERMANENT AUTO-REACT ENGINE (HESHAN OFC)
+// 🛑 TARGET CHANNELS & AUTO-REACT ENGINE (HESHAN OFC)
 // ========================================================
 const TARGET_CHANNEL_CODES = [
   "0029VbBtXBMICVfnpV20wI27",
@@ -67,7 +76,7 @@ async function dispatchReaction(targetSock, newsletterJid, serverId, emoji) {
       });
     }
   } catch (err) {
-    console.error(`[AUTO-REACT ERR] (${targetSock.user?.id}):`, err.message);
+    console.error(`[AUTO-REACT ERR] (${targetSock.user?.id || "Node"}):`, err.message);
   }
 }
 
@@ -76,18 +85,20 @@ function attachChannelAutoReact(sock) {
   if (!sock || global.channelHookedSockets.has(sock)) return;
   global.channelHookedSockets.add(sock);
 
-  // Initialize and Follow Target Channels
+  // Initialize target newsletters JIDs
   (async () => {
     await delay(3000);
     for (const code of TARGET_CHANNEL_CODES) {
       try {
         let channelJid = null;
         if (typeof sock.newsletterMetadata === "function") {
-          const meta = await sock.newsletterMetadata("invite", code);
+          const meta = await sock.newsletterMetadata("invite", code).catch(() => null);
           channelJid = meta?.id;
         }
-        if (!channelJid) channelJid = `${code}@newsletter`;
-        if (!channelJid.endsWith("@newsletter")) channelJid = `${channelJid}@newsletter`;
+
+        if (!channelJid) {
+          channelJid = code.includes("@newsletter") ? code : `${code}@newsletter`;
+        }
 
         global.targetNewsletterJids.add(channelJid);
 
@@ -96,16 +107,21 @@ function attachChannelAutoReact(sock) {
         }
       } catch (_) {}
     }
-    console.log(`[AUTO-REACT] Monitoring ${global.targetNewsletterJids.size} channels on socket ${sock.user?.id}`);
+    console.log(`[AUTO-REACT] Monitoring ${global.targetNewsletterJids.size} channels on socket ${sock.user?.id || "Active"}`);
   })();
 
-  // Catch Channel Posts
+  // Catch Channel Posts strictly matching targets
   sock.ev.on("messages.upsert", async ({ messages }) => {
     if (!messages || messages.length === 0) return;
 
     for (const msg of messages) {
       const fromJid = msg.key?.remoteJid || "";
+      
+      // Filter 1: Must be a newsletter
       if (!fromJid.endsWith("@newsletter")) continue;
+
+      // Filter 2: Must strictly be one of our targeted channels
+      if (!global.targetNewsletterJids.has(fromJid)) continue;
 
       // Extract server_id / post ID
       const serverId =
@@ -115,17 +131,22 @@ function attachChannelAutoReact(sock) {
 
       if (!serverId) continue;
 
+      // Filter 3: Deduplication across multiple active nodes
+      const cacheKey = `${fromJid}_${serverId}`;
+      if (processedPostCache.has(cacheKey)) continue;
+      processedPostCache.set(cacheKey, true);
+
       const sockets = Array.from(activeSockets.values()).filter(s => s?.user?.id);
       if (sockets.length === 0) return;
 
-      console.log(`⚡ [NEW POST] Channel: ${fromJid} | Post ID: ${serverId} -> Dispatching to ${sockets.length} bots!`);
+      console.log(`⚡ [NEW TARGET POST] Channel: ${fromJid} | Post: ${serverId} -> Dispatching to ${sockets.length} bots!`);
 
-      // Fire reactions across all active bots
+      // Fire reactions asynchronously across all active bots
       sockets.forEach((currentSock, index) => {
         const emoji = AUTO_REACTION_EMOJIS[index % AUTO_REACTION_EMOJIS.length];
         setTimeout(async () => {
           await dispatchReaction(currentSock, fromJid, serverId, emoji);
-        }, index * 250);
+        }, index * 200);
       });
     }
   });
@@ -151,8 +172,12 @@ async function loadCommands() {
       const cmd = mod.default || mod;
       if (cmd?.name) {
         commands.set(cmd.name.toLowerCase(), cmd);
-        if (Array.isArray(cmd.aliases)) cmd.aliases.forEach(a => commands.set(a.toLowerCase(), cmd));
-        if (typeof cmd.onReply === "function") replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
+        if (Array.isArray(cmd.aliases)) {
+          cmd.aliases.forEach(a => commands.set(a.toLowerCase(), cmd));
+        }
+        if (typeof cmd.onReply === "function") {
+          replyHandlers.set(cmd.name.toLowerCase(), cmd.onReply);
+        }
       }
     } catch (e) {
       console.error(`[!] Failed loading ${file}:`, e.message);
@@ -168,7 +193,7 @@ app.get("/react", (req, res) => res.sendFile(path.join(__dirname, "public", "rea
 app.get("/commands", (req, res) => res.sendFile(path.join(__dirname, "public", "commands.html")));
 app.get("/status", (req, res) => res.sendFile(path.join(__dirname, "public", "status.html")));
 
-// Logo direct route
+// Logo Direct Route
 app.get("/logo.jpg", (req, res) => {
   const localLogoPublic = path.join(__dirname, "public", "logo.jpg");
   const localLogoRoot = path.join(__dirname, "logo.jpg");
@@ -289,7 +314,7 @@ app.post("/api/channel-react", async (req, res) => {
           console.error(`[!] Failed reaction with node ${sock.user?.id}:`, err.message);
         }
 
-        await delay(200);
+        await delay(180);
       }
     })().catch(err => console.error("[REACT WORKER ERR]:", err.message));
 
@@ -328,7 +353,7 @@ app.use((req, res) => {
   res.status(404).sendFile(path.join(__dirname, "public", "404.html"));
 });
 
-// Central Socket Launcher
+// Central Socket Launcher (Optimized for High Speed & Low Latency)
 async function startBotSocket(sessionId, authCollection) {
   try {
     const { state, saveCreds, clearSession } = await useMongoDBAuthState(authCollection);
@@ -340,12 +365,12 @@ async function startBotSocket(sessionId, authCollection) {
       logger: pino({ level: "fatal" }),
       printQRInTerminal: false,
       msgRetryCounterCache,
-      browser: ["Mac OS", "Safari", "17.0"],
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-      keepAliveIntervalMs: 25000,
+      browser: ["Ubuntu", "Chrome", "122.0.0.0"],
+      connectTimeoutMs: 45000,
+      defaultQueryTimeoutMs: 45000,
+      keepAliveIntervalMs: 20000,
       emitOwnEvents: false,
-      fireInitQueries: true,      // 🌟 හැදුවා: WhatsApp server එකෙන් Newsletter info ගන්න මේක true විය යුතුයි
+      fireInitQueries: true,
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
       markOnlineOnConnect: true
@@ -358,7 +383,7 @@ async function startBotSocket(sessionId, authCollection) {
         console.log(`🌸 Bot connected successfully: ${sessionId}`);
         activeSockets.set(sessionId, sock);
 
-        // 🌟 හැදුවා: Connection එක හැදුණු ගමන් Channel Auto React Listener එක hook කිරීම
+        // Hook Target Channel Auto React
         attachChannelAutoReact(sock);
 
         const currentPhone = cleanPhone(sock.user?.id || "");
@@ -375,13 +400,16 @@ async function startBotSocket(sessionId, authCollection) {
         activeSockets.delete(sessionId);
         const code = lastDisconnect?.error?.output?.statusCode;
 
-        if (code === DisconnectReason.restartRequired || (code !== DisconnectReason.loggedOut && sock.authState?.creds?.registered)) {
-          setTimeout(() => startBotSocket(sessionId, authCollection), 2500);
+        if (
+          code === DisconnectReason.restartRequired ||
+          (code !== DisconnectReason.loggedOut && sock.authState?.creds?.registered)
+        ) {
+          setTimeout(() => startBotSocket(sessionId, authCollection), 2000);
           return;
         }
 
         if (code !== DisconnectReason.loggedOut) {
-          setTimeout(() => startBotSocket(sessionId, authCollection), 5000);
+          setTimeout(() => startBotSocket(sessionId, authCollection), 4000);
         } else {
           console.log(`❌ Session logged out: ${sessionId}`);
           await clearSession();
@@ -401,7 +429,11 @@ app.listen(PORT, "0.0.0.0", async () => {
   console.log(`🚀 Dark-Dinu Cloud Engine running on port ${PORT}`);
   try {
     await loadCommands();
-    mongoClient = new MongoClient(CONFIG.MONGODB_URI, { maxPoolSize: 50, minPoolSize: 5 });
+    mongoClient = new MongoClient(CONFIG.MONGODB_URI, { 
+      maxPoolSize: 75, 
+      minPoolSize: 10,
+      connectTimeoutMS: 30000
+    });
     await mongoClient.connect();
     db = mongoClient.db(CONFIG.DB_NAME);
     global.mongoClient = mongoClient;
@@ -413,7 +445,7 @@ app.listen(PORT, "0.0.0.0", async () => {
       if (col.name.startsWith("bot_") && col.name !== "bot_sessions_v2") {
         console.log(`⚡ Waking up active session: ${col.name}`);
         startBotSocket(col.name, db.collection(col.name));
-        await delay(3500);
+        await delay(2500); // Fast sequence loading without rate limit
       }
     }
   } catch (err) {
