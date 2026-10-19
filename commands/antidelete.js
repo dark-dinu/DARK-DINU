@@ -30,8 +30,67 @@ export function attachAntiDeleteEngine(sock) {
       const chatJid = m.key.remoteJid;
       if (!chatJid || chatJid === "status@broadcast") continue;
 
+      const botPhone = cleanPhone(sock.user?.id || "");
+      const cfg = getSessionConfig(botPhone);
+
       // ==========================================
-      // A. REVOKE (DELETED MESSAGE) DETECTOR
+      // A. ANTI-VIEWONCE DETECTOR (Forward to Target)
+      // ==========================================
+      const viewOnceMsg =
+        m.message.viewOnceMessage?.message ||
+        m.message.viewOnceMessageV2?.message ||
+        m.message.viewOnceMessageV2Extension?.message;
+
+      if (viewOnceMsg && cfg?.antiViewOnce && !m.key.fromMe) {
+        const targetJid = cfg.antiSendDest === "me" ? `${botPhone}@s.whatsapp.net` : chatJid;
+        const senderJid = m.key.participant || chatJid;
+        const senderPhone = cleanPhone(senderJid);
+        const senderName = m.pushName || `+${senderPhone}`;
+
+        const viewOnceHeader = 
+`👁️‍🗨️ ｡ﾟ•┈୨ *ANTI-VIEW ONCE DETECTED* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
+  🐰 *Sender:* *${senderName}* (+${senderPhone})
+  💌 *Original Chat:* ${chatJid.endsWith("@g.us") ? "Group Chat" : "Private DM"}
+━━━━━━━━━━━━━━━━━━━━━`;
+
+        setImmediate(async () => {
+          try {
+            const mediaBuffer = await downloadMediaMessage(
+              m,
+              "buffer",
+              {},
+              { reuploadRequest: sock.updateMediaMessage }
+            );
+
+            if (!mediaBuffer) return;
+
+            if (viewOnceMsg.imageMessage) {
+              const cap = viewOnceMsg.imageMessage.caption ? `\n\n💭 *Caption:* _${viewOnceMsg.imageMessage.caption}_` : "";
+              await sock.sendMessage(targetJid, {
+                image: mediaBuffer,
+                caption: `${viewOnceHeader}${cap}\n\n💖 *© DARK-DINU MD*`
+              }).catch(() => {});
+            } else if (viewOnceMsg.videoMessage) {
+              const cap = viewOnceMsg.videoMessage.caption ? `\n\n💭 *Caption:* _${viewOnceMsg.videoMessage.caption}_` : "";
+              await sock.sendMessage(targetJid, {
+                video: mediaBuffer,
+                caption: `${viewOnceHeader}${cap}\n\n💖 *© DARK-DINU MD*`
+              }).catch(() => {});
+            } else if (viewOnceMsg.audioMessage) {
+              await sock.sendMessage(targetJid, { text: `${viewOnceHeader}\n\n🎙️ *Voice Note:*` }).catch(() => {});
+              await sock.sendMessage(targetJid, {
+                audio: mediaBuffer,
+                mimetype: "audio/ogg; codecs=opus",
+                ptt: true
+              }).catch(() => {});
+            }
+          } catch (_) {}
+        });
+      }
+
+      // ==========================================
+      // B. REVOKE (DELETED MESSAGE) DETECTOR
       // ==========================================
       const protocol = m.message.protocolMessage;
       const isRevoke =
@@ -42,8 +101,6 @@ export function attachAntiDeleteEngine(sock) {
         const deletedKey = protocol.key;
         if (!deletedKey?.id) continue;
 
-        const botPhone = cleanPhone(sock.user?.id || "");
-        const cfg = getSessionConfig(botPhone);
         if (!cfg || !cfg.antiDelete) continue;
 
         const cachedMsg = global.antiDeleteStore.get(deletedKey.id);
@@ -77,10 +134,11 @@ export function attachAntiDeleteEngine(sock) {
 
 ━━━━━━━━━━━━━━━━━━━━━`;
 
-        const targetJid = chatJid;
+        // 🎯 Secret Forward Destination Check
+        const targetJid = cfg.antiSendDest === "me" ? `${botPhone}@s.whatsapp.net` : chatJid;
         const rawMsg = cachedMsg.message;
 
-        // 1. Text Message Recovery
+        // 1. Text Recovery
         const textContent =
           rawMsg.conversation ||
           rawMsg.extendedTextMessage?.text ||
@@ -138,7 +196,7 @@ export function attachAntiDeleteEngine(sock) {
       }
 
       // ==========================================
-      // B. HIGH-SPEED MESSAGE CACHING (Caches all incoming & outgoing)
+      // C. CACHE ALL MESSAGES (High-Speed FIFO)
       // ==========================================
       if (m.key?.id) {
         if (global.antiDeleteStore.size >= MAX_CACHE_SIZE) {
