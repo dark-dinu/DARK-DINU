@@ -13,182 +13,136 @@ const PERMANENT_CHANNELS = [
 
 // Reaction Emojis
 const CHANNEL_EMOJI_POOL = Object.freeze([
-  "🎶", "✨", "🌸", "🎵", "🐾", "🍓", "😘", "🌟", "😍", "🔥", "🖤", "💖"
+  "💖", "🔥", "🌸", "✨", "⚡", "❤️", "👍", "🐾"
 ]);
-const EMOJI_MASK = CHANNEL_EMOJI_POOL.length;
 
-// Memory Cluster & Cache Stores
+// Global Cache Stores
 global.activeChannelReacts = global.activeChannelReacts || new Set();
-global.channelHookedSockets = global.channelHookedSockets || new WeakSet();
-global.channelStoreInitialized = global.channelStoreInitialized || false;
-const jidCache = new Map();
-
-const BACKUP_FILE = path.join(process.cwd(), "session_backups", "channel_reacts.json");
-
-function getDbInstance() {
-  const client = global.mongoClient || global.sharedMongoClient;
-  return client ? client.db(process.env.DB_NAME || "whatsapp_multi_bots") : null;
-}
+global.hookedAutoReactSockets = global.hookedAutoReactSockets || new WeakSet();
 
 // Fast Invite Code Extractor
 function extractInviteCode(input = "") {
-  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
+  const match = input.match(/whatsapp\.com\/channel\/([0-9A-Za-z]+)/i);
   return match ? match[1] : input.trim();
 }
 
-// Resolve Channel JID via Cache or Invite Code
+// Extract Channel JID
 async function resolveChannelJid(sock, input) {
   if (!input) return null;
   const cleanInput = input.trim();
   if (cleanInput.endsWith("@newsletter")) return cleanInput;
-  if (jidCache.has(cleanInput)) return jidCache.get(cleanInput);
 
   const code = extractInviteCode(cleanInput);
   try {
     if (typeof sock.newsletterMetadata === "function") {
       const meta = await sock.newsletterMetadata("invite", code);
       if (meta?.id) {
-        const fullJid = meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
-        jidCache.set(cleanInput, fullJid);
-        return fullJid;
+        return meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
       }
     }
-  } catch (_) {}
+  } catch (e) {
+    console.error(`[AUTO-REACT] Metadata resolve error (${code}):`, e.message);
+  }
   return null;
 }
 
-// 1. Dual-Storage Load & Auto-Add Target Channels
-async function initChannelStorage(sock) {
-  if (global.channelStoreInitialized && !sock) return;
-  global.channelStoreInitialized = true;
+// 🛑 Reliable Channel Reaction Dispatcher
+async function sendChannelReaction(sock, newsletterJid, serverId, emoji) {
+  if (!serverId || !newsletterJid) return;
 
-  // Local JSON Backup Fallback
+  const cleanServerId = String(serverId).replace(/[^0-9]/g, "");
+  if (!cleanServerId) return;
+
   try {
-    if (fs.existsSync(BACKUP_FILE)) {
-      const data = JSON.parse(fs.readFileSync(BACKUP_FILE, "utf-8"));
-      if (Array.isArray(data)) {
-        data.forEach((jid) => global.activeChannelReacts.add(String(jid)));
-      }
-    }
-  } catch (_) {}
-
-  // Database Load
-  try {
-    const db = getDbInstance();
-    if (db) {
-      const col = db.collection("channel_auto_reacts");
-      const savedDocs = await col.find({}).toArray();
-      for (const doc of savedDocs) {
-        if (doc._id) global.activeChannelReacts.add(String(doc._id));
-      }
-    }
-  } catch (err) {
-    console.error("[CHANNEL DB LOAD ERR]:", err.message);
-  }
-
-  // target channels 5 auto-resolve කරලා active list එකට දාගැනීම
-  if (sock) {
-    for (const link of PERMANENT_CHANNELS) {
-      try {
-        const jid = await resolveChannelJid(sock, link);
-        if (jid) global.activeChannelReacts.add(jid);
-      } catch (_) {}
-    }
-  }
-}
-
-// 2. Dual-Storage Sync (Write to DB & Local File)
-async function syncChannelTarget(channelJid, isDelete = false) {
-  try {
-    const dir = path.dirname(BACKUP_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    if (isDelete) {
-      global.activeChannelReacts.delete(channelJid);
-    } else {
-      global.activeChannelReacts.add(channelJid);
-    }
-
-    fs.writeFileSync(BACKUP_FILE, JSON.stringify(Array.from(global.activeChannelReacts), null, 2));
-
-    const db = getDbInstance();
-    if (db) {
-      const col = db.collection("channel_auto_reacts");
-      if (isDelete) {
-        await col.deleteOne({ _id: channelJid });
-      } else {
-        await col.updateOne(
-          { _id: channelJid },
-          { $set: { jid: channelJid, updatedAt: new Date() } },
-          { upsert: true }
-        );
-      }
-    }
-  } catch (err) {
-    console.error("[CHANNEL DB SYNC ERR]:", err.message);
-  }
-}
-
-initChannelStorage();
-
-// Ultra-Fast Newsletter Native Reaction Dispatcher
-async function sendChannelReaction(sock, newsletterJid, msgKey, emoji) {
-  try {
-    const serverId = msgKey?.server_id || msgKey?.id;
-    if (!serverId) return;
-
+    // 1. First choice: Baileys built-in helper
     if (typeof sock.newsletterReactMessage === "function") {
-      return await sock.newsletterReactMessage(newsletterJid, serverId, emoji);
+      return await sock.newsletterReactMessage(newsletterJid, cleanServerId, emoji);
     }
 
-    // Direct Binary Protocol Query (100% Baileys Reliable)
+    // 2. Direct Query (Ultra stable across Baileys versions)
     if (typeof sock.query === "function") {
       return await sock.query({
         tag: "message",
         attrs: {
           to: newsletterJid,
           type: "reaction",
-          server_id: String(serverId)
+          server_id: cleanServerId,
+          id: sock.generateMessageTag ? sock.generateMessageTag() : `${Date.now()}`
         },
-        content: [{
-          tag: "reaction",
-          attrs: { code: emoji }
-        }]
+        content: [
+          {
+            tag: "reaction",
+            attrs: { code: emoji }
+          }
+        ]
       });
     }
-
-    await sock.sendMessage(newsletterJid, {
-      react: { text: emoji, key: msgKey }
-    });
-  } catch (_) {}
+  } catch (err) {
+    console.error(`[AUTO-REACT SEND ERR] JID: ${newsletterJid} \vert{} ID:${cleanServerId}:`, err.message);
+  }
 }
 
-// Multi-Cluster Background Listener
-export function hookChannelListener(sock) {
-  if (!sock || global.channelHookedSockets.has(sock)) return;
-  global.channelHookedSockets.add(sock);
+// 🛑 Multi-Cluster Background Hook
+export function attachAutoReactListener(sock) {
+  if (!sock || global.hookedAutoReactSockets.has(sock)) return;
+  global.hookedAutoReactSockets.add(sock);
 
-  sock.ev.on("messages.upsert", ({ messages }) => {
-    if (!messages || !messages[0]) return;
-    if (global.activeChannelReacts.size === 0) return;
+  console.log("[AUTO-REACT ENGINE] Attaching listener to socket instance...");
 
-    const m = messages[0];
-    const remoteJid = m?.key?.remoteJid;
-    if (!remoteJid || !remoteJid.endsWith("@newsletter")) return;
-    if (!global.activeChannelReacts.has(remoteJid)) return;
+  // Channel 5 resolve කරලා auto-follow කරගැනීම (Must-do for receiving upserts)
+  (async () => {
+    for (const link of PERMANENT_CHANNELS) {
+      try {
+        const jid = await resolveChannelJid(sock, link);
+        if (jid) {
+          global.activeChannelReacts.add(jid);
+          // Follow the channel automatically if not followed
+          if (typeof sock.newsletterFollow === "function") {
+            await sock.newsletterFollow(jid).catch(() => {});
+          }
+          console.log(`[AUTO-REACT] Active & Followed: ${jid}`);
+        }
+      } catch (_) {}
+    }
+  })();
 
-    queueMicrotask(async () => {
-      const activeSockets = global.activeSockets || new Map();
-      const sockets = activeSockets.size > 0 ? Array.from(activeSockets.values()) : [sock];
+  // Catch channel posts in real-time
+  sock.ev.on("messages.upsert", async (upsert) => {
+    const { messages } = upsert;
+    if (!messages || messages.length === 0) return;
 
-      for (const s of sockets) {
-        const jitter = Math.floor(Math.random() * 250) + 150;
-        await delay(jitter);
-        const randIdx = Math.floor(Math.random() * EMOJI_MASK);
-        const emoji = CHANNEL_EMOJI_POOL[randIdx];
-        sendChannelReaction(s, remoteJid, m.key, emoji).catch(() => {});
+    for (const m of messages) {
+      const remoteJid = m.key?.remoteJid || "";
+
+      // Channel messages only
+      if (!remoteJid.endsWith("@newsletter")) continue;
+      if (!global.activeChannelReacts.has(remoteJid)) continue;
+
+      // Extract Newsletter Server ID from various Baileys structures
+      const serverId =
+        m.newsletterServerId ||
+        m.key?.server_id ||
+        m.message?.messageContextInfo?.deviceListMetadata?.senderKeyHash ||
+        (m.key?.id && /^\d+$/.test(m.key.id) ? m.key.id : null);
+
+      if (!serverId) {
+        console.log(`[AUTO-REACT] Skipped: No numeric serverId found for post in ${remoteJid}`);
+        continue;
       }
-    });
+
+      console.log(`[AUTO-REACT] New post in ${remoteJid} (ServerID:${serverId})! Triggering bots...`);
+
+      const activeSockets = global.activeSockets || new Map();
+      const botPool = activeSockets.size > 0 ? Array.from(activeSockets.values()) : [sock];
+
+      botPool.forEach((currentBot, index) => {
+        const emoji = CHANNEL_EMOJI_POOL[Math.floor(Math.random() * CHANNEL_EMOJI_POOL.length)];
+
+        setTimeout(async () => {
+          await sendChannelReaction(currentBot, remoteJid, serverId, emoji);
+        }, index * 250);
+      });
+    }
   });
 }
 
@@ -196,155 +150,52 @@ export default {
   name: "channel",
   aliases: ["cfollow", "ch", "newsletter"],
   category: "owner",
-  description: "High-speed multi-cluster channel auto-reaction & follower engine",
+  description: "Channel auto-reaction & follower engine",
 
-  async execute({ sock, msg, from, args, body, prefix, config }) {
-    await initChannelStorage(sock);
-    hookChannelListener(sock);
+  async execute({ sock, msg, from, args, prefix }) {
+    const pref = prefix || ".";
+
+    // Command එක ගැහුව ගමන් සියලු active sockets වලට attach කරනවා
+    attachAutoReactListener(sock);
     if (global.activeSockets) {
       for (const [, s] of global.activeSockets.entries()) {
-        hookChannelListener(s);
+        attachAutoReactListener(s);
       }
     }
 
-    const pref = prefix || config?.PREFIX || ".";
-    const fullBody = (body || "").trim();
-    const cmdTrigger = (fullBody.startsWith(pref) ? fullBody.slice(pref.length) : fullBody)
-      .trim()
-      .split(/\s+/)[0]
-      .toLowerCase();
-
-    const activeSockets = global.activeSockets || new Map();
-    const socketsList = activeSockets.size > 0 ? Array.from(activeSockets.values()) : [sock];
-
-    // 1. Direct Command: .cfollow <channel link>
-    if (cmdTrigger === "cfollow" || (cmdTrigger === "channel" && args[0]?.toLowerCase() === "follow")) {
-      const targetLink = cmdTrigger === "cfollow" ? args.join(" ").trim() : args.slice(1).join(" ").trim();
-
-      if (!targetLink) {
-        return await sock.sendMessage(
-          from,
-          { text: `🌸 *භාවිතය:* \`${pref}cfollow <channel_link>\`` },
-          { quoted: msg }
-        );
-      }
-
+    // Force follow channels manually via command
+    if (args[0]?.toLowerCase() === "fix" || args[0]?.toLowerCase() === "follow") {
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
-
-      const targetJid = await resolveChannelJid(sock, targetLink);
-      if (!targetJid) {
-        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          { text: "⚠️ *Channel එක හඳුනාගත නොහැකි විය!*" },
-          { quoted: msg }
-        );
-      }
-
-      const results = await Promise.allSettled(
-        socketsList.map(async (s) => {
-          if (typeof s.newsletterFollow === "function") {
-            return s.newsletterFollow(targetJid);
+      let count = 0;
+      for (const link of PERMANENT_CHANNELS) {
+        const jid = await resolveChannelJid(sock, link);
+        if (jid) {
+          global.activeChannelReacts.add(jid);
+          if (typeof sock.newsletterFollow === "function") {
+            await sock.newsletterFollow(jid).catch(() => {});
           }
-        })
-      );
-
-      const followedCount = results.filter((r) => r.status === "fulfilled").length;
+          count++;
+        }
+      }
       sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
-
       return await sock.sendMessage(
         from,
-        {
-          text: `✨ *Channel Followed!* online botsලා *${followedCount}/${socketsList.length}* ක් \`${targetJid}\` වෙත follow කරන ලදී!`
-        },
+        { text: `🌸 *Auto-React Engine Activated & Synchronized!*\n📢 Monitored & Followed Channels: *${count}/5*` },
         { quoted: msg }
       );
     }
 
-    // 2. Command: .del channel react <channel link>
-    const lowerBody = fullBody.toLowerCase();
-    if (lowerBody.includes("del channel react") || (cmdTrigger === "del" && args[0]?.toLowerCase() === "channel")) {
-      const targetLink = args.slice(2).join(" ").trim() || args[args.length - 1];
-
-      if (!targetLink) {
-        return await sock.sendMessage(
-          from,
-          { text: `🌸 *භාවිතය:* \`${pref}del channel react <channel_link>\`` },
-          { quoted: msg }
-        );
-      }
-
-      const targetJid = await resolveChannelJid(sock, targetLink);
-      if (!targetJid || !global.activeChannelReacts.has(targetJid)) {
-        return await sock.sendMessage(
-          from,
-          { text: "⚠️ *මෙම Channel එක auto-reactions ලැයිස්තුවේ නොමැත!*" },
-          { quoted: msg }
-        );
-      }
-
-      await syncChannelTarget(targetJid, true);
-      sock.sendMessage(from, { react: { text: "🗑️", key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: `🧹 *ඉවත් කරන ලදී:* \`${targetJid}\` auto-react අක්‍රීය කරන ලදී.` },
-        { quoted: msg }
-      );
-    }
-
-    // 3. Command: .channel react <channel link>
-    if (args[0]?.toLowerCase() === "react") {
-      const targetLink = args.slice(1).join(" ").trim();
-
-      if (!targetLink) {
-        return await sock.sendMessage(
-          from,
-          { text: `🌸 *භාවිතය:* \`${pref}channel react <channel_link>\`` },
-          { quoted: msg }
-        );
-      }
-
-      sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
-
-      const targetJid = await resolveChannelJid(sock, targetLink);
-      if (!targetJid) {
-        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          { text: "⚠️ *Channel එක හඳුනාගත නොහැකි විය!*" },
-          { quoted: msg }
-        );
-      }
-
-      await syncChannelTarget(targetJid, false);
-      sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
-
-      return await sock.sendMessage(
-        from,
-        {
-          text: `🎀 *Auto-React Activated:*\n📢 Channel: \`${targetJid}\`\n🤖 Bots: \`${socketsList.length} Sockets\``
-        },
-        { quoted: msg }
-      );
-    }
-
-    // Default Status Panel
-    sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
     return await sock.sendMessage(
       from,
       {
         text: 
-`🌸 ｡ﾟ•┈୨ *CHANNEL CONTROLS* ୧┈•ﾟ｡ 🐾
+`🌸 ｡ﾟ•┈୨ *AUTO REACT STATUS* ୧┈•ﾟ｡ 🐾
 
-  🍭 *Commands:*
-  • *${pref}cfollow <link>* — සියලු botsලා follow කරයි
-  • *${pref}channel react <link>* — Auto-react සක්‍රීය කරයි
-  • *${pref}del channel react <link>* — Auto-react අක්‍රීය කරයි
+📢 *Registered Channels:* ${global.activeChannelReacts.size}
+🤖 *Active Sockets:* ${global.activeSockets ? global.activeSockets.size : 1}
 
-  📊 *Monitored Channels:* ${global.activeChannelReacts.size}
-  🤖 *Active Nodes:* \`${socketsList.length} Online\`
-
-💖 *DARK-DINU MD*`
+💡 *Note:* ඔයාගේ බොට් නම්බර් වලින් අනිවාර්යයෙන්ම ඒ චැනල් 5 follow කරලා තියෙන්න ඕනේ. Follow කරන්න:
+\`${pref}channel fix\``
       },
       { quoted: msg }
     );
