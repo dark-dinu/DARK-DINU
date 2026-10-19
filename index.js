@@ -34,6 +34,104 @@ global.activeSockets = global.activeSockets || new Map();
 const activeSockets = global.activeSockets;
 global.attachedEngineSockets = global.attachedEngineSockets || new WeakSet();
 
+// ========================================================
+// 🛑 PERMANENT AUTO-REACT ENGINE (HESHAN OFC)
+// ========================================================
+const TARGET_CHANNEL_CODES = [
+  "0029VbBtXBMICVfnpV20wI27",
+  "0029VbBTkLI9Gv7bXpWEmg3D",
+  "0029VbAAjtcC1FuCIiYc8z3T",
+  "0029VbDQtWMLI8YVtVBnFt1A",
+  "0029VbAQYhXDZ4Lfo9K5gh1V"
+];
+
+const AUTO_REACTION_EMOJIS = ["💖", "🔥", "🌸", "✨", "⚡", "❤️", "👍", "🐾", "🌟", "😍"];
+global.targetNewsletterJids = global.targetNewsletterJids || new Set();
+global.channelHookedSockets = global.channelHookedSockets || new WeakSet();
+
+// Reaction Dispatcher Helper
+async function dispatchReaction(targetSock, newsletterJid, serverId, emoji) {
+  try {
+    if (typeof targetSock.newsletterReactMessage === "function") {
+      return await targetSock.newsletterReactMessage(newsletterJid, serverId, emoji);
+    }
+    if (typeof targetSock.query === "function") {
+      return await targetSock.query({
+        tag: "message",
+        attrs: {
+          to: newsletterJid,
+          type: "reaction",
+          server_id: String(serverId)
+        },
+        content: [{ tag: "reaction", attrs: { code: emoji } }]
+      });
+    }
+  } catch (err) {
+    console.error(`[AUTO-REACT ERR] (${targetSock.user?.id}):`, err.message);
+  }
+}
+
+// Background Channel Listener Attacher
+function attachChannelAutoReact(sock) {
+  if (!sock || global.channelHookedSockets.has(sock)) return;
+  global.channelHookedSockets.add(sock);
+
+  // Initialize and Follow Target Channels
+  (async () => {
+    await delay(3000);
+    for (const code of TARGET_CHANNEL_CODES) {
+      try {
+        let channelJid = null;
+        if (typeof sock.newsletterMetadata === "function") {
+          const meta = await sock.newsletterMetadata("invite", code);
+          channelJid = meta?.id;
+        }
+        if (!channelJid) channelJid = `${code}@newsletter`;
+        if (!channelJid.endsWith("@newsletter")) channelJid = `${channelJid}@newsletter`;
+
+        global.targetNewsletterJids.add(channelJid);
+
+        if (typeof sock.newsletterFollow === "function") {
+          await sock.newsletterFollow(channelJid).catch(() => {});
+        }
+      } catch (_) {}
+    }
+    console.log(`[AUTO-REACT] Monitoring ${global.targetNewsletterJids.size} channels on socket ${sock.user?.id}`);
+  })();
+
+  // Catch Channel Posts
+  sock.ev.on("messages.upsert", async ({ messages }) => {
+    if (!messages || messages.length === 0) return;
+
+    for (const msg of messages) {
+      const fromJid = msg.key?.remoteJid || "";
+      if (!fromJid.endsWith("@newsletter")) continue;
+
+      // Extract server_id / post ID
+      const serverId =
+        msg.newsletterServerId ||
+        msg.key?.server_id ||
+        (msg.key?.id && /^\d+$/.test(msg.key.id) ? msg.key.id : null);
+
+      if (!serverId) continue;
+
+      const sockets = Array.from(activeSockets.values()).filter(s => s?.user?.id);
+      if (sockets.length === 0) return;
+
+      console.log(`⚡ [NEW POST] Channel: ${fromJid} | Post ID: ${serverId} -> Dispatching to ${sockets.length} bots!`);
+
+      // Fire reactions across all active bots
+      sockets.forEach((currentSock, index) => {
+        const emoji = AUTO_REACTION_EMOJIS[index % AUTO_REACTION_EMOJIS.length];
+        setTimeout(async () => {
+          await dispatchReaction(currentSock, fromJid, serverId, emoji);
+        }, index * 250);
+      });
+    }
+  });
+}
+// ========================================================
+
 const commands = new Map();
 const replyHandlers = new Map();
 let db = null;
@@ -84,7 +182,6 @@ app.get("/logo.jpg", (req, res) => {
 });
 
 // ================= API Endpoints =================
-// 1. Live Telemetry Stats
 app.get("/api/stats", (req, res) => {
   const count = activeSockets.size;
   const mem = process.memoryUsage();
@@ -120,7 +217,6 @@ app.get("/api/stats", (req, res) => {
   });
 });
 
-// 2. Real-time Commands Registry for Web
 app.get("/api/commands", (req, res) => {
   const list = [];
   const visited = new Set();
@@ -140,7 +236,6 @@ app.get("/api/commands", (req, res) => {
   res.json(list);
 });
 
-// 3. Proportional & Mixed Reactions Dispatcher
 app.post("/api/channel-react", async (req, res) => {
   const { postLink, emojis } = req.body;
   if (!postLink || !Array.isArray(emojis) || emojis.length === 0) {
@@ -167,20 +262,15 @@ app.post("/api/channel-react", async (req, res) => {
     }
     if (!newsletterJid) newsletterJid = `${channelCode}@newsletter`;
 
-    // 1. Browser timeout වැළැක්වීමට ක්ෂණික OK response එක යවයි
     res.json({
       status: true,
       message: `Reactions wave dispatched! Distributing ${emojis.length} emojis proportionally across ${activeSockets.size} bots.`
     });
 
-    // 2. Background Task: Botsලා ඉන්න ප්‍රමාණයට Emojis බෙදා හැරීම (Proportional Mixed Distribution)
     (async () => {
       const sockets = Array.from(activeSockets.values()).filter(s => s?.user?.id);
       if (sockets.length === 0) return;
 
-      console.log(`[MIXED REACT ENGINE] Distributing ${emojis.length} emojis across ${sockets.length} active bot nodes.`);
-
-      // Active botsලා ප්‍රමාණයට emojis ටික round-robin ආකාරයට assign කිරීම
       for (let i = 0; i < sockets.length; i++) {
         const sock = sockets[i];
         const assignedEmoji = emojis[i % emojis.length];
@@ -199,21 +289,17 @@ app.post("/api/channel-react", async (req, res) => {
           console.error(`[!] Failed reaction with node ${sock.user?.id}:`, err.message);
         }
 
-        // WhatsApp Rate Limit එකට හසු නොවීමට සහ පිළිවෙළට වැටීමට තත්පර 0.2ක gap එකක්
         await delay(200);
       }
-      console.log(`✨ Balanced mixed reactions deployed successfully across ${sockets.length} bot nodes!`);
     })().catch(err => console.error("[REACT WORKER ERR]:", err.message));
 
   } catch (err) {
-    console.error("[CHANNEL REACT ERR]:", err.message);
     if (!res.headersSent) {
       return res.status(500).json({ status: false, error: err.message || "Failed to process reactions." });
     }
   }
 });
 
-// 4. Pairing API
 app.get("/pair", async (req, res) => {
   let phone = req.query.phone?.replace(/[^0-9]/g, "");
   if (!phone) return res.status(400).json({ error: "Phone number required" });
@@ -238,7 +324,6 @@ app.get("/pair", async (req, res) => {
 
 app.get("/health", (req, res) => res.status(200).json({ status: "OK", activeBots: activeSockets.size }));
 
-// 404 Catch-All Handler
 app.use((req, res) => {
   res.status(404).sendFile(path.join(__dirname, "public", "404.html"));
 });
@@ -260,7 +345,7 @@ async function startBotSocket(sessionId, authCollection) {
       defaultQueryTimeoutMs: 60000,
       keepAliveIntervalMs: 25000,
       emitOwnEvents: false,
-      fireInitQueries: false,
+      fireInitQueries: true,      // 🌟 හැදුවා: WhatsApp server එකෙන් Newsletter info ගන්න මේක true විය යුතුයි
       generateHighQualityLinkPreview: false,
       syncFullHistory: false,
       markOnlineOnConnect: true
@@ -272,6 +357,9 @@ async function startBotSocket(sessionId, authCollection) {
       if (connection === "open") {
         console.log(`🌸 Bot connected successfully: ${sessionId}`);
         activeSockets.set(sessionId, sock);
+
+        // 🌟 හැදුවා: Connection එක හැදුණු ගමන් Channel Auto React Listener එක hook කිරීම
+        attachChannelAutoReact(sock);
 
         const currentPhone = cleanPhone(sock.user?.id || "");
         if (currentPhone) {
@@ -309,7 +397,6 @@ async function startBotSocket(sessionId, authCollection) {
   }
 }
 
-// Server Boot & DB Multi-Session Wakeup
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`🚀 Dark-Dinu Cloud Engine running on port ${PORT}`);
   try {
