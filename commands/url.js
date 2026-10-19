@@ -1,19 +1,10 @@
 import axios from "axios";
 import FormData from "form-data";
-import { downloadContentFromMessage } from "@whiskeysockets/baileys";
+import { downloadMediaMessage } from "@whiskeysockets/baileys";
 
-// Stream to Buffer Helper
-async function streamToBuffer(stream) {
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
-}
-
-// 100% Reliable Multi-Engine Direct Uploader
+// Multi-Engine Cloud Uploader
 async function uploadMedia(buffer, filename, mimeType) {
-  // Method 1: Catbox Moe (with Full Spoof Headers)
+  // Method 1: Catbox.moe
   try {
     const form = new FormData();
     form.append("reqtype", "fileupload");
@@ -25,10 +16,9 @@ async function uploadMedia(buffer, filename, mimeType) {
     const res = await axios.post("https://catbox.moe/user/api.php", form, {
       headers: {
         ...form.getHeaders(),
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "*/*"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
       },
-      timeout: 25000,
+      timeout: 30000,
       maxBodyLength: Infinity,
       maxContentLength: Infinity
     });
@@ -36,31 +26,31 @@ async function uploadMedia(buffer, filename, mimeType) {
     if (typeof res.data === "string" && res.data.startsWith("http")) {
       return res.data.trim();
     }
-  } catch (_) {
-    // Catbox cloudflare block වුණොත් පහත Fallback එකට මාරු වේ
-  }
+  } catch (_) {}
 
-  // Method 2: Quax / File.io Cloud Mirror (No IP Blocks)
+  // Method 2: Litterbox (Temporary Catbox Mirror)
   try {
     const form2 = new FormData();
-    form2.append("files[]", buffer, {
+    form2.append("reqtype", "fileupload");
+    form2.append("time", "72h");
+    form2.append("fileToUpload", buffer, {
       filename: filename,
       contentType: mimeType
     });
 
-    const res2 = await axios.post("https://qu.ax/upload.php", form2, {
+    const res2 = await axios.post("https://litterbox.catbox.moe/resources/internals/api.php", form2, {
       headers: form2.getHeaders(),
-      timeout: 25000,
+      timeout: 30000,
       maxBodyLength: Infinity,
       maxContentLength: Infinity
     });
 
-    if (res2.data?.success && res2.data.files?.[0]?.url) {
-      return res2.data.files[0].url;
+    if (typeof res2.data === "string" && res2.data.startsWith("http")) {
+      return res2.data.trim();
     }
   } catch (_) {}
 
-  // Method 3: Tmpfiles fallback (Direct Stream)
+  // Method 3: Tmpfiles.org (Instant Direct Download Link)
   try {
     const form3 = new FormData();
     form3.append("file", buffer, {
@@ -70,20 +60,18 @@ async function uploadMedia(buffer, filename, mimeType) {
 
     const res3 = await axios.post("https://tmpfiles.org/api/v1/upload", form3, {
       headers: form3.getHeaders(),
-      timeout: 25000,
+      timeout: 30000,
       maxBodyLength: Infinity,
       maxContentLength: Infinity
     });
 
-    const url = res3.data?.data?.url;
-    if (url) {
-      return url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
+    const rawUrl = res3.data?.data?.url;
+    if (rawUrl) {
+      return rawUrl.replace("tmpfiles.org/", "tmpfiles.org/dl/");
     }
-  } catch (err) {
-    throw new Error("Cloud upload servers are currently unreachable. Please retry.");
-  }
+  } catch (_) {}
 
-  throw new Error("Unable to parse uploaded URL.");
+  throw new Error("සියලුම Cloud upload engines කාර්යබහුලයි. මඳ වේලාවකින් නැවත උත්සාහ කරන්න.");
 }
 
 export default {
@@ -97,53 +85,51 @@ export default {
       const quoted = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
       let targetMessage = quoted || msg.message;
 
-      // View-Once unpack
+      // Extract from View-Once wrappers
       if (targetMessage?.viewOnceMessageV2?.message) {
         targetMessage = targetMessage.viewOnceMessageV2.message;
       } else if (targetMessage?.viewOnceMessage?.message) {
         targetMessage = targetMessage.viewOnceMessage.message;
+      } else if (targetMessage?.viewOnceMessageV2Extension?.message) {
+        targetMessage = targetMessage.viewOnceMessageV2Extension.message;
       }
 
-      let mediaType = null;
-      let mediaNode = null;
       let fileExt = ".bin";
       let mediaLabel = "DOCUMENT";
       let mimeType = "application/octet-stream";
+      let hasMedia = false;
 
       if (targetMessage?.imageMessage) {
-        mediaType = "image";
-        mediaNode = targetMessage.imageMessage;
+        hasMedia = true;
         fileExt = ".jpg";
         mediaLabel = "IMAGE";
-        mimeType = mediaNode.mimetype || "image/jpeg";
+        mimeType = targetMessage.imageMessage.mimetype || "image/jpeg";
       } else if (targetMessage?.videoMessage) {
-        mediaType = "video";
-        mediaNode = targetMessage.videoMessage;
+        hasMedia = true;
         fileExt = ".mp4";
         mediaLabel = "VIDEO";
-        mimeType = mediaNode.mimetype || "video/mp4";
+        mimeType = targetMessage.videoMessage.mimetype || "video/mp4";
       } else if (targetMessage?.audioMessage) {
-        mediaType = "audio";
-        mediaNode = targetMessage.audioMessage;
-        const isPtt = Boolean(mediaNode.ptt);
-        fileExt = isPtt ? ".opus" : ".mp3";
+        hasMedia = true;
+        const isPtt = Boolean(targetMessage.audioMessage.ptt);
+        fileExt = isPtt ? ".ogg" : ".mp3";
         mediaLabel = isPtt ? "VOICE NOTE" : "AUDIO";
-        mimeType = mediaNode.mimetype || "audio/ogg; codecs=opus";
+        mimeType = targetMessage.audioMessage.mimetype || "audio/ogg; codecs=opus";
       } else if (targetMessage?.stickerMessage) {
-        mediaType = "sticker";
-        mediaNode = targetMessage.stickerMessage;
+        hasMedia = true;
         fileExt = ".webp";
         mediaLabel = "STICKER";
-        mimeType = mediaNode.mimetype || "image/webp";
+        mimeType = targetMessage.stickerMessage.mimetype || "image/webp";
       } else if (targetMessage?.documentMessage) {
-        mediaType = "document";
-        mediaNode = targetMessage.documentMessage;
-        const docName = mediaNode.fileName || "file";
+        hasMedia = true;
+        const docName = targetMessage.documentMessage.fileName || "file";
         const parts = docName.split(".");
         fileExt = parts.length > 1 ? `.${parts.pop()}` : ".bin";
         mediaLabel = "DOCUMENT";
-        mimeType = mediaNode.mimetype || "application/octet-stream";
-      } else {
+        mimeType = targetMessage.documentMessage.mimetype || "application/octet-stream";
+      }
+
+      if (!hasMedia) {
         return await sock.sendMessage(
           from,
           {
@@ -155,15 +141,20 @@ export default {
 
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      // Download buffer
-      const stream = await downloadContentFromMessage(mediaNode, mediaType);
-      const buffer = await streamToBuffer(stream);
+      // Safe Baileys Buffer Downloader
+      const downloadTarget = quoted ? { message: quoted } : msg;
+      const buffer = await downloadMediaMessage(
+        downloadTarget,
+        "buffer",
+        {},
+        { reuploadRequest: sock.updateMediaMessage }
+      ).catch(() => null);
 
       if (!buffer || buffer.length === 0) {
         sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "❌ Media එක download කර ගැනීමට නොහැකි විය." },
+          { text: "❌ Media එක download කර ගැනීමට නොහැකි විය. Media එක නැවත forward කර try කරන්න." },
           { quoted: msg }
         );
       }
