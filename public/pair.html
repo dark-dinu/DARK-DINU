@@ -17,6 +17,15 @@
   <meta name="color-scheme" content="dark only">
   <meta name="supported-color-schemes" content="dark">
 
+  <!-- ======================================================== -->
+  <!-- 📱 PWA APP INSTALL & MOBILE META TAGS -->
+  <!-- ======================================================== -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Dev Studio">
+  <link rel="apple-touch-icon" href="/logo.jpg">
+
   <link rel="icon" type="image/jpeg" href="/logo.jpg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -160,7 +169,6 @@
           box.style.display = 'block';
           btn.innerHTML = '<i class="fa-solid fa-check"></i> CODE GENERATED';
 
-          // Safe clipboard copy
           if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(data.code.replace(/-/g, '')).catch(() => {});
           }
