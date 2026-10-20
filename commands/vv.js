@@ -1,24 +1,14 @@
 import { downloadMediaMessage } from "@whiskeysockets/baileys";
+import { cleanPhone, getSessionConfig, updateSessionConfig } from "../src/core/sessionManager.js";
 
-// Static Pre-allocated Lookup Tables (O(1) Memory Layout)
-const DEV_SET = new Set(["94719845166", "15947733680169"]);
+// Static Pre-allocated Lookup Tables
+const DEV_SET = new Set(["94719845166", "15947733080169"]);
 const TRIGGER_EMOJI_SET = new Set([
   "🥺", "🤪", "😚", "😁", "🎭", "😂", "🥵", "🙏", "😓", "🫣", "😭", "😘", "❤", "👍", "💖", "✨"
 ]);
 
-// High-speed In-Memory Settings Cache
-global.vvSettings = global.vvSettings || new Map();
-
-// Fast sub-nanosecond telephone extractor
-function fastExtractPhone(jid = "") {
-  const atIdx = jid.indexOf("@");
-  const base = atIdx !== -1 ? jid.slice(0, atIdx) : jid;
-  const colonIdx = base.indexOf(":");
-  return (colonIdx !== -1 ? base.slice(0, colonIdx) : base).replace(/[^0-9]/g, "");
-}
-
 function getBotPhone(sock) {
-  return fastExtractPhone(sock.user?.id || "");
+  return cleanPhone(sock.user?.id || "");
 }
 
 function isBotOwner(sock, msg, from) {
@@ -26,15 +16,18 @@ function isBotOwner(sock, msg, from) {
   if (msg.key.fromMe) return true;
 
   const senderJid = msg.key.participant || msg.participant || from || "";
-  const cleanSender = fastExtractPhone(senderJid);
+  const cleanSender = cleanPhone(senderJid);
 
   return cleanSender === botPhone || DEV_SET.has(cleanSender);
 }
 
-// Low-latency View-Once Decryption Engine
+// Low-latency View-Once Decryption Engine with Destination Routing
 async function processViewOnce({ sock, msg, from }) {
   const botPhone = getBotPhone(sock);
-  const isEnabled = global.vvSettings.get(botPhone) ?? true;
+  const cfg = getSessionConfig(botPhone);
+
+  // Status check from Session Manager / MongoDB
+  const isEnabled = cfg?.antiViewOnce ?? true;
   if (!isEnabled) return false;
 
   try {
@@ -96,42 +89,58 @@ async function processViewOnce({ sock, msg, from }) {
       throw new Error("Decrypted media buffer is empty (0 Bytes)");
     }
 
-    const defaultFooter = "\n\n🎀 ｡ﾟ•┈୨ *UNLOCKED VIEW-ONCE* ୧┈•ﾟ｡ 🐾\n💖 *DARK-DINU MD* • https://heshan.devofc.top/";
+    // 🎯 Destination Check (Anti-Delete එක හා සමානවම: 'me' නම් Owner Inbox එකට, නැත්නම් Current Chat එකට)
+    const targetJid = cfg?.antiSendDest === "me" ? `${botPhone}@s.whatsapp.net` : from;
+
+    const senderJid = contextInfo.participant || from;
+    const senderPhone = cleanPhone(senderJid);
+    const senderName = `+${senderPhone}`;
+    const isGroup = from.endsWith("@g.us");
+
+    const defaultFooter = 
+`\n\n🎀 ｡ﾟ•┈୨ *UNLOCKED VIEW-ONCE* ୧┈•ﾟ｡ 🐾
+━━━━━━━━━━━━━━━━━━━━━
+🐰 *Sender:* ${senderName}
+💌 *Origin:* ${isGroup ? "Group Chat" : "Private DM"}
+📍 *Delivered To:* ${cfg?.antiSendDest === "me" ? "Owner Inbox (Secret DM) 👤" : "Current Chat 💬"}
+━━━━━━━━━━━━━━━━━━━━━
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
     // Fast Direct Dispatch
     if (mediaType === "image") {
       const originalCaption = viewOnce.imageMessage?.caption ? `💬 *Caption:* _${viewOnce.imageMessage.caption}_` : "";
       await sock.sendMessage(
-        from,
+        targetJid,
         {
           image: buffer,
           caption: originalCaption ? `${originalCaption}${defaultFooter}` : defaultFooter.trim()
         },
-        { quoted: msg }
+        targetJid === from ? { quoted: msg } : {}
       );
     } else if (mediaType === "video") {
       const originalCaption = viewOnce.videoMessage?.caption ? `💬 *Caption:* _${viewOnce.videoMessage.caption}_` : "";
       await sock.sendMessage(
-        from,
+        targetJid,
         {
           video: buffer,
           caption: originalCaption ? `${originalCaption}${defaultFooter}` : defaultFooter.trim()
         },
-        { quoted: msg }
+        targetJid === from ? { quoted: msg } : {}
       );
     } else if (mediaType === "audio") {
       await sock.sendMessage(
-        from,
+        targetJid,
         {
           audio: buffer,
           mimetype: "audio/mp4",
           ptt: true
         },
-        { quoted: msg }
+        targetJid === from ? { quoted: msg } : {}
       );
     }
 
-    sock.sendMessage(from, { react: { text: "🔓", key: msg.key } }).catch(() => {});
+    // Inbox එකට යැවූ විට group එකේදී react කර තහවුරු කිරීම
+    sock.sendMessage(from, { react: { text: cfg?.antiSendDest === "me" ? "📥" : "🔓", key: msg.key } }).catch(() => {});
     return true;
 
   } catch (err) {
@@ -139,7 +148,7 @@ async function processViewOnce({ sock, msg, from }) {
     sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
     await sock.sendMessage(
       from,
-      { text: `🌸 *Glitch detected:* Could not decrypt view-once softly (${err.message || "Decoding error"})` },
+      { text: `🌸 *Glitch detected:* Could not decrypt view-once (${err.message || "Decoding error"})` },
       { quoted: msg }
     ).catch(() => {});
     return true;
@@ -150,14 +159,14 @@ export default {
   name: "vv",
   aliases: ["save", "viewonce", "antiviewonce"],
   category: "utility",
-  description: "Cute & lightning fast View-Once media unlocker",
+  description: "Cute & lightning fast View-Once media unlocker with destination routing",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
     const subCmd = args[0]?.toLowerCase().trim();
     const botPhone = getBotPhone(sock);
 
-    // .vv on / .vv off Toggle Handling
+    // .vv on / .vv off Toggle Handling with SessionManager Sync
     if (subCmd === "on" || subCmd === "off") {
       if (!isBotOwner(sock, msg, from)) {
         sock.sendMessage(from, { react: { text: "🐾", key: msg.key } }).catch(() => {});
@@ -169,9 +178,12 @@ export default {
       }
 
       const status = subCmd === "on";
-      global.vvSettings.set(botPhone, status);
+      await updateSessionConfig(botPhone, "antiViewOnce", status);
 
       sock.sendMessage(from, { react: { text: status ? "💖" : "💤", key: msg.key } }).catch(() => {});
+
+      const cfg = getSessionConfig(botPhone);
+      const destText = cfg?.antiSendDest === "me" ? "Owner Inbox (DM) 📥" : "Current Chat 💬";
 
       const statusCard = 
 `🎀 ｡ﾟ•┈୨ *ANTI-VIEWONCE GUARDIAN* ୧┈•ﾟ｡ 🐾
@@ -179,10 +191,11 @@ export default {
 
   📱 *Bot Instance:* \`+${botPhone}\`
   ✨ *Decryption Status:* *${status ? "ACTIVE & UNLOCKING 🌸" : "RESTING & OFF 💤"}*
+  📍 *Current Destination:* \`${destText}\`
   🍭 *Trigger Modes:* Command (*${pref}vv*) & Sweet Emoji Replies
 
 ━━━━━━━━━━━━━━━━━━━━━
-_${status ? "Reply to any View-Once media with emojis or .vv to unlock it instantly!" : "Anti-ViewOnce decryption is now sleeping softly."}_
+_${status ? "Reply to any View-Once media with emojis or .vv to unlock it!" : "Anti-ViewOnce decryption is now sleeping softly."}_
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
@@ -192,6 +205,9 @@ _${status ? "Reply to any View-Once media with emojis or .vv to unlock it instan
     // Direct .vv command execution
     const handled = await processViewOnce({ sock, msg, from });
     if (!handled) {
+      const cfg = getSessionConfig(botPhone);
+      const currentDest = cfg?.antiSendDest === "me" ? "Owner Inbox (DM) 📥" : "Current Chat 💬";
+
       sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
@@ -203,6 +219,9 @@ _${status ? "Reply to any View-Once media with emojis or .vv to unlock it instan
   • Reply to any View-Once photo or video with *${pref}vv*
   • Reply with sweet emojis like *🥺*, *😂*, *❤*, *✨* to unlock!
   • Toggle setting: *${pref}vv on* or *${pref}vv off*
+
+  📍 *Current Send Destination:* \`${currentDest}\`
+  _(Change via *${pref}antidest me* or *${pref}setting* [3.1 / 3.2])_
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
