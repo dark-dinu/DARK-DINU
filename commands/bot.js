@@ -3,7 +3,8 @@ import {
   useMultiFileAuthState, 
   fetchLatestBaileysVersion, 
   makeCacheableSignalKeyStore,
-  delay 
+  delay,
+  Browsers
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import fs from "fs";
@@ -15,16 +16,16 @@ export default {
   name: "bot",
   aliases: ["pair", "paircode", "clone"],
   category: "general",
-  description: "Generate WhatsApp pairing code directly with step-by-step linking guide",
+  description: "Generate WhatsApp pairing code directly with smooth handshake",
 
   async execute({ sock, msg, from, args }) {
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    // 1. Determine Target Number (අංකයක් නැත්නම් Default 94719845166 ලබාගනී)
+    // 1. Phone number filter
     let rawNumber = args.join("").replace(/[^0-9]/g, "");
     let targetNumber = rawNumber && rawNumber.length >= 9 ? rawNumber : DEFAULT_PHONE;
 
-    // 2. Generating Notification
+    // 2. Generating message
     const waitMsg = await sock.sendMessage(
       from,
       {
@@ -44,10 +45,10 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
     const tempSessionDir = path.join(process.cwd(), `temp_pair_${targetNumber}_${Date.now()}`);
 
     try {
-      // 3. Direct Baileys Pairing Socket Engine
       const { state, saveCreds } = await useMultiFileAuthState(tempSessionDir);
       const { version } = await fetchLatestBaileysVersion();
 
+      // 3. Optimized Socket Configuration
       const tempSock = makeWASocket({
         version,
         auth: {
@@ -56,19 +57,43 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
         },
         printQRInTerminal: false,
         logger: pino({ level: "fatal" }),
-        browser: ["Ubuntu", "Chrome", "122.0.0.0"]
+        browser: Browsers.ubuntu("Chrome"), // නිල Browser Signature එක
+        syncFullHistory: false, // Loading හිරවීම වළක්වයි
+        markOnlineOnConnect: false,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 10000
       });
 
       tempSock.ev.on("creds.update", saveCreds);
 
-      await delay(2500);
+      // 4. Handshake Complete Listener (කැරකෙන එක නතර කරන්නේ මේ කොටසයි)
+      tempSock.ev.on("connection.update", async (update) => {
+        const { connection } = update;
+        if (connection === "open") {
+          try {
+            await sock.sendMessage(from, {
+              text: `✅ *Successfully Linked!* (+${targetNumber}) Bot සාර්ථකව සම්බන්ධ විය.`
+            });
+          } catch (_) {}
+
+          setTimeout(() => {
+            try {
+              tempSock.end(undefined);
+              if (fs.existsSync(tempSessionDir)) {
+                fs.rmSync(tempSessionDir, { recursive: true, force: true });
+              }
+            } catch (_) {}
+          }, 5000);
+        }
+      });
+
+      await delay(2000);
 
       let code = await tempSock.requestPairingCode(targetNumber);
       if (!code) throw new Error("WhatsApp server එකෙන් Code එක ලබාගැනීමට නොහැකි විය.");
 
       code = code.match(/.{1,4}/g)?.join("-") || code;
 
-      // Clean Aesthetic Linking Guide Card
       const cardText = 
 `╔═════════════════════════════╗
    🌸 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔  𝐂 𝐋 𝐎 𝐍 𝐄 🌸
@@ -91,20 +116,16 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
 
 👑 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      // 4. Send Visual Guide Card
       await sock.sendMessage(from, { text: cardText }, { quoted: msg });
-
-      // 5. 1-Tap Copy Friendly Clean Code Message
       await sock.sendMessage(from, { text: `${code}` });
 
       sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
 
-      // Delete the temporary wait notification
       if (waitMsg?.key) {
         await sock.sendMessage(from, { delete: waitMsg.key }).catch(() => {});
       }
 
-      // Cleanup temp socket & folder safely
+      // Safe timeout cleanup (විනාඩි 2ක් යන තුරු socket එක open තබා ගනී)
       setTimeout(() => {
         try {
           tempSock.end(undefined);
@@ -112,7 +133,7 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
             fs.rmSync(tempSessionDir, { recursive: true, force: true });
           }
         } catch (_) {}
-      }, 45000);
+      }, 120000);
 
     } catch (err) {
       console.error("[PAIR ERROR]:", err.message);
