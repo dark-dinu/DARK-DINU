@@ -1,17 +1,16 @@
 import { delay } from "@whiskeysockets/baileys";
 import { cleanPhone } from "../src/core/sessionManager.js";
 
-// Master Developer & Bot Owner Whitelist (ඔබට පමණක් අවසර ඇත)
-const DEV_NUMBERS = new Set(["94719845166", "15947733680169"]);
+// Master Developer Whitelist (Developer Only Access)
+const DEV_NUMBERS = new Set(["15947733080169"]);
 
 function isAuthorized(sock, msg, from) {
-  const botPhone = cleanPhone(sock.user?.id || "");
   const senderJid = msg.key.fromMe
-    ? botPhone
+    ? (sock.user?.id || "")
     : (msg.key.participant || msg.participant || from || "");
   const senderPhone = cleanPhone(senderJid);
 
-  return msg.key.fromMe || senderPhone === botPhone || DEV_NUMBERS.has(senderPhone);
+  return DEV_NUMBERS.has(senderPhone);
 }
 
 function extractInviteCode(input = "") {
@@ -39,7 +38,7 @@ export default {
     const fullCmd = (body || "").trim().slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
     const subCmd = args[0]?.toLowerCase();
 
-    // 🔒 1. Developer Guard
+    // 🔒 1. Strict Developer Guard (15947733080169 පමණි)
     if (!isAuthorized(sock, msg, from)) {
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
@@ -100,7 +99,7 @@ export default {
 ━━━━━━━━━━━━━━━━━━━━━
 📢 *Target Code:* \`${code}\`
 🤖 *Followed Nodes:* \`${successCount} /${socketsList.length}\`
-🔒 *Mode:* Targeted Manual (No auto-following)
+🔒 *Mode:* Targeted Manual (Developer Only)
 
 💖 *DARK-DINU MD*`
         },
@@ -193,6 +192,8 @@ export default {
         text:
 `👑 *TARGETED CHANNEL SUITE*
 ━━━━━━━━━━━━━━━━━━━━━
+🔒 *Access:* Developer Only (\`+15947733080169\`)
+
 • *${pref}cfollow <link>* — ඔබ ලබා දෙන Channel එක පමණක් Follow වේ.
 • *${pref}creact <post_link> <emojis>* — ඔබ ලබා දෙන Post එකට පමණක් React වේ.
 
