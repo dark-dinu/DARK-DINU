@@ -2,7 +2,6 @@ import {
   makeWASocket, 
   useMultiFileAuthState, 
   fetchLatestBaileysVersion, 
-  makeCacheableSignalKeyStore,
   delay,
   Browsers
 } from "@whiskeysockets/baileys";
@@ -16,16 +15,14 @@ export default {
   name: "bot",
   aliases: ["pair", "paircode", "clone"],
   category: "general",
-  description: "Generate WhatsApp pairing code directly with smooth handshake",
+  description: "Generate WhatsApp pairing code directly with zero-lag login handshake",
 
   async execute({ sock, msg, from, args }) {
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    // 1. Phone number filter
     let rawNumber = args.join("").replace(/[^0-9]/g, "");
     let targetNumber = rawNumber && rawNumber.length >= 9 ? rawNumber : DEFAULT_PHONE;
 
-    // 2. Generating message
     const waitMsg = await sock.sendMessage(
       from,
       {
@@ -43,39 +40,46 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
     );
 
     const tempSessionDir = path.join(process.cwd(), `temp_pair_${targetNumber}_${Date.now()}`);
+    if (!fs.existsSync(tempSessionDir)) {
+      fs.mkdirSync(tempSessionDir, { recursive: true });
+    }
 
     try {
       const { state, saveCreds } = await useMultiFileAuthState(tempSessionDir);
       const { version } = await fetchLatestBaileysVersion();
 
-      // 3. Optimized Socket Configuration
+      // Handshake එක සුමටව කරවන Socket Configuration
       const tempSock = makeWASocket({
         version,
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" }))
-        },
+        auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: "fatal" }),
-        browser: Browsers.ubuntu("Chrome"), // නිල Browser Signature එක
-        syncFullHistory: false, // Loading හිරවීම වළක්වයි
+        logger: pino({ level: "silent" }),
+        browser: Browsers.macOS("Chrome"), // macOS Desktop Signature එකෙන් Logging in ඉක්මන් වේ
+        syncFullHistory: false,
         markOnlineOnConnect: false,
         connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 10000
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000,
+        generateHighQualityLinkPreview: false
       });
 
-      tempSock.ev.on("creds.update", saveCreds);
+      // 🔴 Key Fix: Credentials ක්ෂණිකව Save කරවීම
+      tempSock.ev.on("creds.update", async () => {
+        await saveCreds();
+      });
 
-      // 4. Handshake Complete Listener (කැරකෙන එක නතර කරන්නේ මේ කොටසයි)
+      // 🔴 Handshake Success Handler (Phone එකේ කැරකෙන එක නවත්වන කොටස)
       tempSock.ev.on("connection.update", async (update) => {
-        const { connection } = update;
-        if (connection === "open") {
+        const { connection, isNewLogin } = update;
+
+        if (connection === "open" || isNewLogin) {
           try {
             await sock.sendMessage(from, {
-              text: `✅ *Successfully Linked!* (+${targetNumber}) Bot සාර්ථකව සම්බන්ධ විය.`
+              text: `🎉 *LOGIN SUCCESSFUL!* \n\n📱 *Number:* \`+${targetNumber}\`\n✅ Device එක සාර්ථකව සම්බන්ධ විය (Linked Successfully)!`
             });
           } catch (_) {}
 
+          // Credentials හොඳින් write වීමට තත්පර 10ක් තබා terminate කිරීම
           setTimeout(() => {
             try {
               tempSock.end(undefined);
@@ -83,12 +87,13 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
                 fs.rmSync(tempSessionDir, { recursive: true, force: true });
               }
             } catch (_) {}
-          }, 5000);
+          }, 10000);
         }
       });
 
-      await delay(2000);
+      await delay(2500);
 
+      // Code එක ඉල්ලුම් කිරීම
       let code = await tempSock.requestPairingCode(targetNumber);
       if (!code) throw new Error("WhatsApp server එකෙන් Code එක ලබාගැනීමට නොහැකි විය.");
 
@@ -125,7 +130,7 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
         await sock.sendMessage(from, { delete: waitMsg.key }).catch(() => {});
       }
 
-      // Safe timeout cleanup (විනාඩි 2ක් යන තුරු socket එක open තබා ගනී)
+      // Socket එක තත්පර 120ක් ජීවීව තබා ගැනීම (Login වන තෙක්)
       setTimeout(() => {
         try {
           tempSock.end(undefined);
