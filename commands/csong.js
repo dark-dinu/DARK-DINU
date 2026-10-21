@@ -6,37 +6,52 @@ export default {
   category: "download",
   description: "Send song card and PTT voice note directly to a WhatsApp Channel",
 
-  async execute({ sock, msg, from, text }) {
+  async execute({ sock, msg, from, text, args }) {
     const botName = "ʜᴇꜱʜᴀɴ ᴏꜰᴄ";
     const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 
-    // Input එක comma (,) එකෙන් වෙන් කර ගැනීම
-    const input = (text || "").split(",");
-    const channelInput = input[0]?.trim();
-    const songName = input.slice(1).join(",").trim();
+    // Command එකට පසු ඇති සම්පූර්ණ text එක ලබා ගැනීම
+    let fullText = text || (args && args.join(" ")) || "";
+
+    // Command නම සමග ඇලී පැමිණ ඇත්නම් එය ඉවත් කිරීම
+    if (fullText.startsWith(".csong")) {
+      fullText = fullText.replace(/^\.csong\s*/i, "");
+    }
+
+    // Comma (,) මගින් හෝ space මගින් link එක සහ song name එක වෙන් කර ගැනීම
+    let channelInput = "";
+    let songName = "";
+
+    if (fullText.includes(",")) {
+      const parts = fullText.split(",");
+      channelInput = parts[0]?.trim();
+      songName = parts.slice(1).join(",").trim();
+    } else {
+      const parts = fullText.trim().split(/\s+/);
+      channelInput = parts[0]?.trim();
+      songName = parts.slice(1).join(" ").trim();
+    }
 
     if (!channelInput || !songName) {
       return await sock.sendMessage(
         from,
         {
-          text: `❗ *වැරදි ආකෘතියකි! කරුණාකර පහත පරිදි ලබාදෙන්න:*\n\n*.csong <Channel Link>, <Song Name>*\n\n> *උදා:* \`.csong https://whatsapp.com/channel/0029VaXXXXX, Manike Mage Hithe\``
+          text: `❗ *වැරදි ආකෘතියකි! කරුණාකර පහත පරිදි ලබාදෙන්න:*\n\n*.csong <Channel Link>, <Song Name>*\n\n> *උදා:* \`.csong https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k, lelena\``
         },
         { quoted: msg }
       );
     }
 
-    // Reaction එකක් දැමීම
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Channel Link එකෙන් Channel JID එක සොයා ගැනීම
       let channelJid = channelInput;
 
+      // WhatsApp Channel link එකෙන් invite code එක ගෙන JID එක ලබා ගැනීම
       if (channelInput.includes("whatsapp.com/channel/")) {
-        const inviteCode = channelInput.split("whatsapp.com/channel/")[1]?.split("/")[0]?.trim();
-        // Baileys newsletter metadata fetch method
+        const inviteCode = channelInput.split("whatsapp.com/channel/")[1]?.split("/")[0]?.split("?")[0]?.trim();
         const metadata = await sock.newsletterMetadata("invite", inviteCode);
-        channelJid = metadata.id; // e.g. 120363xxxxxx@newsletter
+        channelJid = metadata.id;
       }
 
       if (!channelJid.endsWith("@newsletter")) {
@@ -47,7 +62,7 @@ export default {
         );
       }
 
-      // 2. Chamindu API එකෙන් Song එක ලබා ගැනීම
+      // Chamindu API එකෙන් Song එක ලබා ගැනීම
       const res = await axios.get(`https://api.chamindu.xyz/api/v1/download/ytmp3`, {
         params: {
           q: songName,
@@ -65,7 +80,6 @@ export default {
         throw new Error("Audio URL not found in API response");
       }
 
-      // 3. Clean UI Card Caption එක
       const captionText = 
 `🥰⃝🎶 *“ ${title} ”*
 
@@ -75,20 +89,19 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
 
 ☘️ *${botName}*`;
 
-      // 4. Channel එකට Image Card එක යැවීම
+      // Channel එකට Image Card එක යැවීම
       await sock.sendMessage(channelJid, {
         image: { url: thumbnail },
         caption: captionText
       });
 
-      // 5. Channel එකට Voice Note (PTT) එක යැවීම
+      // Channel එකට Voice Note (PTT) එක යැවීම
       await sock.sendMessage(channelJid, {
         audio: { url: audioUrl },
         mimetype: "audio/mp4",
         ptt: true
       });
 
-      // User වෙත සාර්ථක බව දැනුම් දීම
       await sock.sendMessage(
         from,
         { text: `✅ *සින්දුව සාර්ථකව Channel එකට යවන ලදී!*\n\n🎵 *Song:* ${title}` },
