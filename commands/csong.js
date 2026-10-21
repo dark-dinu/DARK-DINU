@@ -7,14 +7,14 @@ const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 global.channelJidCache = global.channelJidCache || new Map();
 
-// ── Native Buffer Downloader ──
+// ── Native Buffer Downloader with 35MB Safety Cap ──
 async function downloadBuffer(url) {
   try {
     const res = await axios.get(url, {
       responseType: "arraybuffer",
       headers: { "User-Agent": UA },
-      timeout: 45000,
-      maxContentLength: 30 * 1024 * 1024
+      timeout: 50000,
+      maxContentLength: 35 * 1024 * 1024
     });
     return Buffer.from(res.data);
   } catch (e) {
@@ -42,13 +42,13 @@ async function searchYouTube(query) {
   }
 }
 
-// ── Chamindu API Stream Resolver ──
+// ── Chamindu API v1 MP3 Resolver (Updated New API) ──
 async function getAudioDownloadUrl(videoUrl) {
   const enc = encodeURIComponent(videoUrl);
   const endpoints = [
-    `https://api.chamindu.site/api/v1/youtube/download?url=${enc}&quality=128kbps&format=mp3&api_key=${API_KEY}`,
-    `https://api.chamindu.site/api/v1/media/ytmp3/dl?url=${enc}&quality=128&api_key=${API_KEY}`,
-    `https://api.chamindu.site/api/v1/media/ytmp4/dl?url=${enc}&quality=360&api_key=${API_KEY}`
+    `https://api.chamindu.site/api/v1/youtube/mp3?url=${enc}&quality=320kbps&api_key=${API_KEY}`,
+    `https://api.chamindu.site/api/v1/youtube/mp3?url=${enc}&quality=128kbps&api_key=${API_KEY}`,
+    `https://api.chamindu.site/api/v1/youtube/download?url=${enc}&quality=128kbps&format=mp3&api_key=${API_KEY}`
   ];
 
   for (const ep of endpoints) {
@@ -57,12 +57,13 @@ async function getAudioDownloadUrl(videoUrl) {
       const data = res.data;
       if (data) {
         const link =
-          data.data?.direct_url ||
           data.data?.download_url ||
-          data.data?.download_link ||
-          data.direct_url ||
+          data.data?.direct_url ||
+          data.data?.url ||
           data.download_url ||
-          data.download_link;
+          data.direct_url ||
+          data.result?.download_url ||
+          data.url;
         if (typeof link === "string" && /^https?:\/\//i.test(link)) return link;
       }
     } catch (_) {}
@@ -91,6 +92,7 @@ export default {
       );
     }
 
+    // Link සහ සින්දුවේ නම වෙන් කර ගැනීම
     const linkMatch = fullText.match(/https?:\/\/(?:www\.)?whatsapp\.com\/channel\/[a-zA-Z0-9_\-\/]+/i);
     let channelLink = "";
     let songName = "";
@@ -110,6 +112,7 @@ export default {
       return await sock.sendMessage(from, { text: "⚠️ කරුණාකර සින්දුවේ නම ලබාදෙන්න!" }, { quoted: msg });
     }
 
+    // Link එකේ අගට /755 වගේ post id ආවත් clean කර inviteCode පමණක් ගැනීම
     let inviteCode = channelLink.split("whatsapp.com/channel/")[1]?.split(/[\/?#]/)[0]?.trim();
     if (!inviteCode) {
       return await sock.sendMessage(from, { text: "❌ වලංගු WhatsApp Channel Link එකක් ලබාදෙන්න!" }, { quoted: msg });
@@ -118,7 +121,7 @@ export default {
     react("⏳");
 
     try {
-      // 1. Channel JID හරියටම Resolve කරගැනීම
+      // 1. Channel JID හරියටම Resolve කිරීම
       let channelJid = global.channelJidCache.get(inviteCode);
 
       if (!channelJid) {
@@ -130,7 +133,7 @@ export default {
           channelJid = meta?.id;
           if (channelJid) global.channelJidCache.set(inviteCode, channelJid);
         } catch (e) {
-          console.error("[CSONG NEWSLETTER ERROR]:", e.message);
+          console.error("[CSONG METADATA ERR]:", e.message);
         }
       }
 
@@ -144,14 +147,14 @@ export default {
         return await sock.sendMessage(from, { text: "❌ සින්දුව සොයාගත නොහැකි විය." }, { quoted: msg });
       }
 
-      // 3. Audio Download Link එක ලබා ගැනීම
+      // 3. Audio Download Link එක ලබා ගැනීම (New API)
       const audioUrl = await getAudioDownloadUrl(video.url);
       if (!audioUrl) {
         react("❌");
-        return await sock.sendMessage(from, { text: "❌ Audio stream link එක ලබාගැනීමට නොහැකි විය." }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ Chamindu API එකෙන් Audio Stream එක ලබාගත නොහැකි විය." }, { quoted: msg });
       }
 
-      // 4. Buffers Download කරගැනීම
+      // 4. Buffers එකවර Download කරගැනීම
       const [rawAudioBuffer, imgBuffer] = await Promise.all([
         downloadBuffer(audioUrl),
         downloadBuffer(video.thumbnail)
@@ -171,11 +174,7 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
 
 | ☘️ *${botName}*`;
 
-      // ===============================================================
-      // 5. CHANNEL-COMPATIBLE MEDIA DISPATCHER
-      // ===============================================================
-
-      // A. Channel Image Card එක යැවීම
+      // 5. Channel එකට Image Card එක යැවීම
       if (imgBuffer) {
         await sock.sendMessage(channelJid, {
           image: imgBuffer,
@@ -185,10 +184,10 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
         await sock.sendMessage(channelJid, { text: cardCaption });
       }
 
-      await delay(2000);
+      // Rate limit එකෙන් drop නොවීමට delay එකක්
+      await delay(1500);
 
-      // B. Channel එකට Audio එක Document එකක් ලෙස යැවීම
-      // (WhatsApp Channels Audio/Voice reject කරන නිසා audio/mpeg document එකක් ලෙස 100% deliver වේ)
+      // 6. Channel එකට සින්දුව Audio Document එකක් ලෙස යැවීම (Channels වල 100% play වේ)
       const cleanFileName = `${video.title.replace(/[^a-zA-Z0-9 ]/g, "").trim() || "song"}.mp3`;
 
       await sock.sendMessage(channelJid, {
@@ -201,13 +200,13 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
       return await sock.sendMessage(
         from,
         {
-          text: `✅ *"${video.title}"*\nChannel එකට Image Card එක සහ Audio File එක සාර්ථකව Post කරන ලදී! 🎶✨`
+          text: `✅ *"${video.title}"*\nChannel එකට Image Card එක සහ සින්දුව සාර්ථකව Post කරන ලදී! 🎶✨`
         },
         { quoted: msg }
       );
 
     } catch (err) {
-      console.error("[CSONG MAIN ERROR]:", err);
+      console.error("[CSONG EXECUTION ERROR]:", err);
       react("❌");
       return await sock.sendMessage(
         from,
