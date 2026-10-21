@@ -4,21 +4,18 @@ export default {
   name: "csong",
   aliases: ["channelsong", "cplay"],
   category: "download",
-  description: "Send song card and PTT voice note directly to a WhatsApp Channel",
+  description: "Send song card and audio directly to a WhatsApp Channel",
 
   async execute({ sock, msg, from, text, args }) {
     const botName = "ʜᴇꜱʜᴀɴ ᴏꜰᴄ";
     const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 
-    // Command එකට පසු ඇති සම්පූර්ණ text එක ලබා ගැනීම
     let fullText = text || (args && args.join(" ")) || "";
-
-    // Command නම සමග ඇලී පැමිණ ඇත්නම් එය ඉවත් කිරීම
     if (fullText.startsWith(".csong")) {
       fullText = fullText.replace(/^\.csong\s*/i, "");
     }
 
-    // Comma (,) මගින් හෝ space මගින් link එක සහ song name එක වෙන් කර ගැනීම
+    // Link එක සහ Song එක නිවැරදිව වෙන් කර ගැනීම
     let channelInput = "";
     let songName = "";
 
@@ -36,7 +33,7 @@ export default {
       return await sock.sendMessage(
         from,
         {
-          text: `❗ *වැරදි ආකෘතියකි! කරුණාකර පහත පරිදි ලබාදෙන්න:*\n\n*.csong <Channel Link>, <Song Name>*\n\n> *උදා:* \`.csong https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k, lelena\``
+          text: `❗ *කරුණාකර නිවැරදිව Link එක සහ සින්දුවේ නම ලබාදෙන්න:*\n\n> *.csong <Channel Link>, <Song Name>*\n\n*උදා:* \`.csong https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k, lelena\``
         },
         { quoted: msg }
       );
@@ -47,22 +44,24 @@ export default {
     try {
       let channelJid = channelInput;
 
-      // WhatsApp Channel link එකෙන් invite code එක ගෙන JID එක ලබා ගැනීම
+      // Channel Invite Link එකෙන් Code එක පමණක් නිවැරදිව වෙන් කිරීම
       if (channelInput.includes("whatsapp.com/channel/")) {
-        const inviteCode = channelInput.split("whatsapp.com/channel/")[1]?.split("/")[0]?.split("?")[0]?.trim();
+        const rawCode = channelInput.split("whatsapp.com/channel/")[1] || "";
+        const inviteCode = rawCode.split(/[?/, ]/)[0].trim();
+
         const metadata = await sock.newsletterMetadata("invite", inviteCode);
         channelJid = metadata.id;
       }
 
-      if (!channelJid.endsWith("@newsletter")) {
+      if (!channelJid || !channelJid.endsWith("@newsletter")) {
         return await sock.sendMessage(
           from,
-          { text: "❌ *Channel Link එක නිවැරදි නැත හෝ Channel JID එක ලබාගත නොහැක.*" },
+          { text: "❌ *Channel එක සොයාගත නොහැක. Link එක නිවැරදිදැයි බලන්න.*" },
           { quoted: msg }
         );
       }
 
-      // Chamindu API එකෙන් Song එක ලබා ගැනීම
+      // Song details ලබා ගැනීම
       const res = await axios.get(`https://api.chamindu.xyz/api/v1/download/ytmp3`, {
         params: {
           q: songName,
@@ -89,17 +88,17 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
 
 ☘️ *${botName}*`;
 
-      // Channel එකට Image Card එක යැවීම
+      // 1. Channel එකට Image Card එක යැවීම
       await sock.sendMessage(channelJid, {
         image: { url: thumbnail },
         caption: captionText
       });
 
-      // Channel එකට Voice Note (PTT) එක යැවීම
+      // 2. Channel එකට Audio එක යැවීම (Channels සඳහා ptt වෙනුවට standard audio ක්‍රියා කරයි)
       await sock.sendMessage(channelJid, {
         audio: { url: audioUrl },
         mimetype: "audio/mp4",
-        ptt: true
+        fileName: `${title}.mp3`
       });
 
       await sock.sendMessage(
@@ -114,7 +113,7 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
       console.error("csong error:", error);
       await sock.sendMessage(
         from,
-        { text: "❌ *දෝෂයක් සිදුවිය! Bot හට අදාළ Channel එකේ Admin බලතල තිබේදැයි සහ Link එක නිවැරදිදැයි පරීක්ෂා කරන්න.*" },
+        { text: "❌ *දෝෂයක් සිදුවිය! Bot අදාළ Channel එකේ Admin ද යන්න සහ API එක ක්‍රියාත්මක දැයි පරීක්ෂා කරන්න.*" },
         { quoted: msg }
       );
     }
