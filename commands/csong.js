@@ -1,7 +1,12 @@
 import axios from "axios";
 import ytSearch from "yt-search";
 import { delay } from "@whiskeysockets/baileys";
+import { spawn } from "child_process";
+import fs from "fs";
+import os from "os";
+import path from "path";
 
+// Chamindu API Key (.env එකෙන් හෝ direct fallback එකෙන් ගනී)
 const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_ec9848130d1aea209f08fb85e0b4720f";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
@@ -23,7 +28,36 @@ async function downloadBuffer(url) {
   }
 }
 
-// ── YouTube Search ──
+// ── MP3 → OGG Opus (Voice Note Converter) ──
+async function toVoiceNote(buffer) {
+  const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  const inp = path.join(os.tmpdir(), `${id}.mp3`);
+  const out = path.join(os.tmpdir(), `${id}.ogg`);
+  try {
+    fs.writeFileSync(inp, buffer);
+    await new Promise((resolve, reject) => {
+      const p = spawn("ffmpeg", [
+        "-y", "-i", inp, "-vn",
+        "-c:a", "libopus", "-b:a", "64k",
+        "-ar", "48000", "-ac", "1",
+        "-f", "ogg", out
+      ]);
+      p.on("error", reject);
+      p.on("close", (code) =>
+        code === 0 ? resolve() : reject(new Error("ffmpeg failed with code: " + code))
+      );
+    });
+    return fs.readFileSync(out);
+  } catch (err) {
+    console.error("[FFMPEG ERROR, FALLBACK TO RAW]:", err.message);
+    return buffer; // FFmpeg නැතිනම් raw buffer එක යවයි
+  } finally {
+    if (fs.existsSync(inp)) fs.unlinkSync(inp);
+    if (fs.existsSync(out)) fs.unlinkSync(out);
+  }
+}
+
+// ── YouTube Search Engine ──
 async function searchYouTube(query) {
   try {
     const res = await ytSearch(query);
@@ -75,12 +109,13 @@ export default {
   name: "csong",
   aliases: ["channelsong", "cvoice", "cplay"],
   category: "channel",
-  description: "Post song card & audio directly to WhatsApp Channel",
+  description: "Post song card & voice note directly to WhatsApp Channel",
 
   async execute({ sock, msg, from, args, config }) {
     const botName = config?.BOT_NAME || "DARK-DINU MD";
     const fullText = (args || []).join(" ").trim();
-    const react = (emoji) => sock.sendMessage(from, { react: { text: emoji, key: msg.key } }).catch(() => {});
+    const react = (emoji) =>
+      sock.sendMessage(from, { react: { text: emoji, key: msg.key } }).catch(() => {});
 
     if (!fullText) {
       return await sock.sendMessage(
@@ -111,6 +146,7 @@ export default {
       return await sock.sendMessage(from, { text: "⚠️ කරුණාකර සින්දුවේ නම ලබාදෙන්න!" }, { quoted: msg });
     }
 
+    // Channel post IDs තිබුණොත් අයින් කර inviteCode එක පිරිසිදුව ලබා ගැනීම
     let inviteCode = channelLink.split("whatsapp.com/channel/")[1]?.split(/[\/?#]/)[0]?.trim();
     if (!inviteCode) {
       return await sock.sendMessage(from, { text: "❌ වලංගු WhatsApp Channel Link එකක් ලබාදෙන්න!" }, { quoted: msg });
@@ -119,7 +155,7 @@ export default {
     react("⏳");
 
     try {
-      // 1. Channel JID හරියටම ලබා ගැනීම (Role Check ඔක්කොම Bypass කර ඇත)
+      // 1. Channel JID ලබා ගැනීම
       let channelJid = global.channelJidCache.get(inviteCode);
 
       if (!channelJid) {
@@ -145,11 +181,11 @@ export default {
         return await sock.sendMessage(from, { text: "❌ සින්දුව සොයාගත නොහැකි විය." }, { quoted: msg });
       }
 
-      // 3. Audio Download URL
+      // 3. Audio Download URL ලබා ගැනීම
       const audioUrl = await getAudioDownloadUrl(video.url);
       if (!audioUrl) {
         react("❌");
-        return await sock.sendMessage(from, { text: "❌ Audio Download Link එක ලබාගත නොහැකි විය." }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ Audio Download Link එක Chamindu API මඟින් ලබාගත නොහැකි විය." }, { quoted: msg });
       }
 
       // 4. Download Media Buffers
@@ -163,7 +199,7 @@ export default {
         return await sock.sendMessage(from, { text: "❌ Audio file එක බාගත වීම අසාර්ථක විය." }, { quoted: msg });
       }
 
-      const cardCaption = 
+      const cardCaption =
 `🥰⃝🎶 *“ ${video.title} ”*
 
 0:00 ◁◁  II  ▷▷ ${video.duration}
@@ -172,28 +208,33 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
 
 | ☘️ *${botName}*`;
 
-      // 5. Direct Channel Posting (No Role Blocks)
-      // A. Post Thumbnail Card
-      await sock.sendMessage(channelJid, {
-        image: imgBuffer,
-        caption: cardCaption
-      });
+      // 5. Channel එකට Post කිරීම
+      // A. Thumbnail Card එක යැවීම
+      if (imgBuffer) {
+        await sock.sendMessage(channelJid, {
+          image: imgBuffer,
+          caption: cardCaption
+        });
+      } else {
+        await sock.sendMessage(channelJid, { text: cardCaption });
+      }
 
       await delay(2000);
 
-      // B. Post MP3 Audio Document
-      const cleanFileName = `${video.title.replace(/[^a-zA-Z0-9 ]/g, "").trim() || "song"}.mp3`;
+      // B. Voice Note (MP3 → OGG Opus) convert කර යැවීම
+      const voiceBuffer = await toVoiceNote(rawAudioBuffer);
+
       await sock.sendMessage(channelJid, {
-        document: rawAudioBuffer,
-        mimetype: "audio/mpeg",
-        fileName: cleanFileName
+        audio: voiceBuffer,
+        mimetype: "audio/ogg; codecs=opus",
+        ptt: true
       });
 
       react("✅");
       return await sock.sendMessage(
         from,
         {
-          text: `✅ *"${video.title}"*\nChannel එකට Image Card එක සහ Audio File එක සාර්ථකව Post කරන ලදී! 🎶✨`
+          text: `✅ *"${video.title}"*\nChannel එකට Image Card එක සහ Voice Note එක සාර්ථකව Post කරන ලදී! 🎶✨`
         },
         { quoted: msg }
       );
