@@ -59,29 +59,56 @@ function getFastWaveform() {
   return bars;
 }
 
-// Direct High-Speed Stream Downloader with Multi-Engine Fallback
+// Direct High-Speed Stream Downloader with Updated Chamindu Toolkit API
 async function getPlayableAudio(videoUrl) {
-  // Engine 1: Chamindu Site API
-  try {
-    const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
-    const res = await axios.get(
-      `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(videoUrl)}&quality=128kbps&format=mp3&api_key=${apiKey}`,
-      { timeout: 15000 }
-    );
-    const dl = res.data?.data?.direct_url || res.data?.data?.download_url || res.data?.direct_url;
-    if (dl) {
-      const audioStream = await axios.get(dl, {
-        responseType: "arraybuffer",
-        timeout: 30000,
-        headers: { "User-Agent": "Mozilla/5.0" }
-      });
-      return Buffer.from(audioStream.data);
-    }
-  } catch (_) {}
+  const apiKey = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+  const encUrl = encodeURIComponent(videoUrl);
 
-  // Engine 2: BK9 Relay
+  // Engine 1: Chamindu youtubetoolkit / mp3 API Endpoints
+  const endpoints = [
+    `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encUrl}&api_key=${apiKey}`,
+    `https://api.chamindu.site/api/v1/youtube/mp3?url=${encUrl}&quality=320kbps&api_key=${apiKey}`,
+    `https://api.chamindu.site/api/v1/youtube/download?url=${encUrl}&quality=128kbps&format=mp3&api_key=${apiKey}`
+  ];
+
+  for (const ep of endpoints) {
+    try {
+      const res = await axios.get(ep, {
+        headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+        timeout: 15000
+      });
+      const data = res.data;
+      if (data) {
+        // Toolkit සහ download endpoints වල link keys auto-resolve කරගැනීම
+        const dl =
+          data.data?.audio?.download_url ||
+          data.data?.audio?.url ||
+          data.data?.download_url ||
+          data.data?.direct_url ||
+          data.data?.url ||
+          data.download_url ||
+          data.direct_url ||
+          data.result?.download_url ||
+          data.result?.url ||
+          data.url;
+
+        if (dl && typeof dl === "string" && /^https?:\/\//i.test(dl)) {
+          const audioStream = await axios.get(dl, {
+            responseType: "arraybuffer",
+            timeout: 35000,
+            headers: { "User-Agent": "Mozilla/5.0" }
+          });
+          if (audioStream.data && audioStream.data.length > 5000) {
+            return Buffer.from(audioStream.data);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Engine 2: BK9 Relay Fallback
   try {
-    const res2 = await axios.get(`https://bk9.fun/download/youtube?url=${encodeURIComponent(videoUrl)}`, { timeout: 12000 });
+    const res2 = await axios.get(`https://bk9.fun/download/youtube?url=${encUrl}`, { timeout: 12000 });
     const dl2 = res2.data?.BK9?.BK8 || res2.data?.BK9?.BK7;
     if (dl2) {
       const stream2 = await axios.get(dl2, { responseType: "arraybuffer", timeout: 30000 });
@@ -89,9 +116,9 @@ async function getPlayableAudio(videoUrl) {
     }
   } catch (_) {}
 
-  // Engine 3: David Cyril Engine
+  // Engine 3: David Cyril Engine Fallback
   try {
-    const res3 = await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`, { timeout: 12000 });
+    const res3 = await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${encUrl}`, { timeout: 12000 });
     const dl3 = res3.data?.result?.download_url || res3.data?.result?.url;
     if (dl3) {
       const stream3 = await axios.get(dl3, { responseType: "arraybuffer", timeout: 30000 });
@@ -314,7 +341,6 @@ _Reply with 1, 2 or 3 to download softly~ (˶˃ ᵕ ˂˶)_
     }
   },
 
-  // Fallback handler if index.js calls onReply directly
   async onReply({ sock, msg, from, body, quotedStanzaId }) {
     const choice = body.trim();
     if (choice !== "1" && choice !== "2" && choice !== "3") return false;
