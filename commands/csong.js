@@ -5,9 +5,17 @@ import { exec } from "child_process";
 import axios from "axios";
 import ytSearch from "yt-search";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
+import { delay } from "@whiskeysockets/baileys";
 
-const ffmpegPath = ffmpegInstaller?.path || "ffmpeg";
-const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_ec9848130d1aea209f08fb85e0b4720f";
+let ffmpegPath = "ffmpeg";
+try {
+  ffmpegPath = ffmpegInstaller?.path || "ffmpeg";
+} catch (_) {
+  ffmpegPath = "ffmpeg";
+}
+
+// අලුත්ම API Key එක (.env එකෙන් හෝ direct key එකෙන් ගනී)
+const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 global.channelJidCache = global.channelJidCache || new Map();
@@ -24,8 +32,8 @@ async function downloadBuffer(url) {
     const res = await axios.get(url, {
       responseType: "arraybuffer",
       headers: { "User-Agent": UA },
-      timeout: 45000,
-      maxContentLength: 35 * 1024 * 1024
+      timeout: 50000,
+      maxContentLength: 45 * 1024 * 1024
     });
     return Buffer.from(res.data);
   } catch (e) {
@@ -33,7 +41,7 @@ async function downloadBuffer(url) {
   }
 }
 
-// ── Low-Latency OGG Opus Voice Note Converter ──
+// ── Low-Latency OGG Opus Voice Note Converter (WhatsApp Native PTT) ──
 function convertToOpusVoice(inputBuffer) {
   return new Promise((resolve) => {
     const tempId = `${Date.now()}_${(Math.random() * 1e9) | 0}`;
@@ -59,7 +67,7 @@ function convertToOpusVoice(inputBuffer) {
   });
 }
 
-// ── Fast Waveform Generator ──
+// ── Fast Waveform Generator (WhatsApp Dynamic Voice Bars) ──
 function getFastWaveform() {
   const bars = new Uint8Array(64);
   for (let i = 0; i < 64; i++) {
@@ -68,7 +76,7 @@ function getFastWaveform() {
   return bars;
 }
 
-// ── YouTube Search ──
+// ── YouTube Search Engine ──
 async function searchYouTube(query) {
   try {
     const res = await ytSearch(query);
@@ -86,12 +94,13 @@ async function searchYouTube(query) {
   }
 }
 
-// ── Chamindu API Stream Resolver ──
+// ── Updated Chamindu Toolkit API Stream Resolver ──
 async function getAudioDownloadUrl(videoUrl) {
   const enc = encodeURIComponent(videoUrl);
   const endpoints = [
+    `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${enc}&api_key=${API_KEY}`,
     `https://api.chamindu.site/api/v1/youtube/mp3?url=${enc}&quality=320kbps&api_key=${API_KEY}`,
-    `https://api.chamindu.site/api/v1/youtube/mp3?url=${enc}&quality=128kbps&api_key=${API_KEY}`
+    `https://api.chamindu.site/api/v1/youtube/download?url=${enc}&quality=128kbps&format=mp3&api_key=${API_KEY}`
   ];
 
   for (const ep of endpoints) {
@@ -100,12 +109,18 @@ async function getAudioDownloadUrl(videoUrl) {
       const data = res.data;
       if (data) {
         const link =
+          data.data?.audio?.download_url ||
+          data.data?.audio?.url ||
           data.data?.download_url ||
           data.data?.direct_url ||
           data.data?.url ||
           data.download_url ||
-          data.direct_url;
-        if (typeof link === "string" && /^https?:\/\//i.test(link)) return link;
+          data.direct_url ||
+          data.result?.download_url ||
+          data.result?.url ||
+          data.url;
+
+        if (link && typeof link === "string" && /^https?:\/\//i.test(link)) return link;
       }
     } catch (_) {}
   }
@@ -133,6 +148,7 @@ export default {
       );
     }
 
+    // Link සහ Song Name වෙන් කර ගැනීම
     const linkMatch = fullText.match(/https?:\/\/(?:www\.)?whatsapp\.com\/channel\/[a-zA-Z0-9_\-\/]+/i);
     let channelLink = "";
     let songName = "";
@@ -152,7 +168,7 @@ export default {
       return await sock.sendMessage(from, { text: "⚠️ කරුණාකර සින්දුවේ නම ලබාදෙන්න!" }, { quoted: msg });
     }
 
-    // Link එකෙන් Invite code එක පිරිසිදුව ගැනීම
+    // Invite code එක පමණක් නිවැරදිව වෙන් කර ගැනීම (අගට post ids ආවත් ඉවත් කරයි)
     let inviteCode = channelLink.split("whatsapp.com/channel/")[1]?.split(/[\/?#]/)[0]?.trim();
     if (!inviteCode) {
       return await sock.sendMessage(from, { text: "❌ වලංගු WhatsApp Channel Link එකක් ලබාදෙන්න!" }, { quoted: msg });
@@ -161,7 +177,7 @@ export default {
     react("⏳");
 
     try {
-      // 1. Channel JID
+      // 1. Channel JID හරියටම Resolve කරගැනීම
       let channelJid = global.channelJidCache.get(inviteCode);
 
       if (!channelJid) {
@@ -185,14 +201,14 @@ export default {
         return await sock.sendMessage(from, { text: "❌ සින්දුව සොයාගත නොහැකි විය." }, { quoted: msg });
       }
 
-      // 3. Audio Download Stream URL (New API)
+      // 3. Audio Stream Link එක Chamindu Toolkit API හරහා ලබා ගැනීම
       const audioUrl = await getAudioDownloadUrl(video.url);
       if (!audioUrl) {
         react("❌");
         return await sock.sendMessage(from, { text: "❌ Audio Stream Link එක ලබාගත නොහැකි විය." }, { quoted: msg });
       }
 
-      // 4. Download Audio & Thumbnail
+      // 4. Download Audio & Thumbnail Buffers
       const [rawAudioBuffer, imgBuffer] = await Promise.all([
         downloadBuffer(audioUrl),
         downloadBuffer(video.thumbnail)
@@ -203,7 +219,7 @@ export default {
         return await sock.sendMessage(from, { text: "❌ Audio file එක download කරගැනීම අසාර්ථක විය." }, { quoted: msg });
       }
 
-      // 5. Convert to Opus Voice
+      // 5. Convert to Opus Voice Note
       const finalVoiceBuffer = await convertToOpusVoice(rawAudioBuffer);
 
       const cardCaption = 
@@ -223,7 +239,10 @@ Use Headphones For Best Experience.... 🧚‍♀️🎵
         });
       }
 
-      // 7. Channel එකට Voice Note (PTT) එක යැවීම (කලින් වැඩ කරපු විදියටම)
+      // Rate limit එකෙන් drop නොවීමට delay එකක්
+      await delay(1500);
+
+      // 7. Channel එකට Voice Note (PTT) එක යැවීම
       await sock.sendMessage(channelJid, {
         audio: finalVoiceBuffer,
         mimetype: "audio/ogg; codecs=opus",
