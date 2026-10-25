@@ -9,7 +9,6 @@ export default {
 
   async execute({ sock, msg, from, args }) {
     try {
-      // 1. Initial reaction
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
       const fullText = args ? (Array.isArray(args) ? args.join(" ") : args) : "";
@@ -17,48 +16,55 @@ export default {
       if (!fullText || !fullText.includes(",")) {
         return await sock.sendMessage(
           from,
-          { text: "ℹ️ *භාවිතය:* `.csong channel_link, song_name`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V, lelena_" },
+          { text: "ℹ️ *භාවිතය:* `.csong channel_link_or_jid, song_name`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V, lelena_" },
           { quoted: msg }
         );
       }
 
-      const [rawChannelLink, ...songQueryParts] = fullText.split(",");
-      const channelLink = rawChannelLink.trim();
+      const [rawTarget, ...songQueryParts] = fullText.split(",");
+      const targetInput = rawTarget.trim();
       const songQuery = songQueryParts.join(",").trim();
 
-      if (!channelLink || !songQuery) {
+      if (!targetInput || !songQuery) {
         return await sock.sendMessage(
           from,
-          { text: "⚠️ Channel Link එක සහ Song Name එක කොමාවකින් වෙන් කර ඇතුළත් කරන්න." },
+          { text: "⚠️ Channel එක සහ Song Name එක කොමාවකින් වෙන් කර ඇතුළත් කරන්න." },
           { quoted: msg }
         );
       }
 
-      // 2. Link එකේ අගට /430 වගේ post id තිබ්බත් channel invite code එක පමණක් නිවැරදිව වෙන් කර ගැනීම
-      const inviteCodeMatch = channelLink.match(/whatsapp\.com\/channel\/([a-zA-Z0-9]{20,28})/i);
-      if (!inviteCodeMatch || !inviteCodeMatch[1]) {
-        return await sock.sendMessage(
-          from,
-          { text: "❌ වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න." },
-          { quoted: msg }
-        );
+      let channelJid = "";
+
+      // කෙලින්ම Newsletter JID එකක් දුන්නොත්
+      if (targetInput.endsWith("@newsletter")) {
+        channelJid = targetInput;
+      } else {
+        // Link එකකින් Invite Code එක පමණක් හරියටම ගැනීම (/430 හෝ වෙන මොනවා තිබ්බත්)
+        const match = targetInput.match(/channel\/([a-zA-Z0-9]{20,28})/i);
+        if (!match || !match[1]) {
+          return await sock.sendMessage(
+            from,
+            { text: "❌ වලංගු WhatsApp Channel Link එකක් ලබාදෙන්න." },
+            { quoted: msg }
+          );
+        }
+
+        const inviteCode = match[1];
+
+        try {
+          const metadata = await sock.newsletterMetadata("invite", inviteCode);
+          channelJid = metadata.id;
+        } catch (err) {
+          console.error("Newsletter Fetch Error:", err);
+          return await sock.sendMessage(
+            from,
+            { text: `❌ Channel එක හඳුනාගත නොහැකි විය!\n\nකාරුණිකව පරීක්ෂා කරන්න:\n1. Bot run වන අංකය එම චැනල් එකේ *Admin* කෙනෙක්ද?\n2. ලින්ක් එක වෙනුවට චැනල් එකේ *JID* (උදා: \`120363xxxxxxxx@newsletter\`) එක ලබා දී උත්සාහ කරන්න.` },
+            { quoted: msg }
+          );
+        }
       }
 
-      const inviteCode = inviteCodeMatch[1];
-      let channelJid;
-
-      try {
-        const metadata = await sock.newsletterMetadata("invite", inviteCode);
-        channelJid = metadata.id; // 120363xxxxxx@newsletter
-      } catch (err) {
-        return await sock.sendMessage(
-          from,
-          { text: "❌ Channel තොරතුරු ලබාගැනීමට නොහැකි විය. Bot එම Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න." },
-          { quoted: msg }
-        );
-      }
-
-      // 3. YouTube Search කර URL එක ලබාගැනීම
+      // YouTube සෙවීම
       let targetUrl = songQuery;
       let title = songQuery;
       let artist = "Official Track";
@@ -86,14 +92,13 @@ export default {
         thumbnail = video.thumbnail;
       }
 
-      // 4. Chamindu API එක Call කිරීම
+      // Chamindu API
       const apiKey = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
       const apiUrl = `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(targetUrl)}&api_key=${apiKey}`;
 
       const response = await axios.get(apiUrl, { timeout: 40000 });
       const apiData = response.data?.result || response.data?.data || response.data;
 
-      // API Response එකෙන් audio download link එක තෝරා ගැනීම
       const audioUrl = apiData?.download?.audio || 
                        apiData?.download_url || 
                        apiData?.audio?.url || 
@@ -109,13 +114,12 @@ export default {
         );
       }
 
-      // තොරතුරු update කරගැනීම (API එකෙන් ආවොත්)
       if (apiData?.title) title = apiData.title;
       if (apiData?.author?.name || apiData?.author) artist = apiData.author?.name || apiData.author;
       if (apiData?.duration) duration = apiData.duration;
       if (apiData?.thumbnail) thumbnail = apiData.thumbnail;
 
-      // 5. Clean & Minimalist Poster Card
+      // Clean Minimalist Song Card
       const cleanCard = 
 `🎶  *${title}*
 
@@ -125,7 +129,7 @@ export default {
 
 🎧  _Listen to the voice note below_`;
 
-      // 6. පියවර 1: Poster Card එක Channel එකට යැවීම
+      // 1. Poster Card
       if (thumbnail) {
         await sock.sendMessage(channelJid, {
           image: { url: thumbnail },
@@ -135,8 +139,7 @@ export default {
         await sock.sendMessage(channelJid, { text: cleanCard });
       }
 
-      // 7. පියවර 2: Audio Buffer එකක් විදියට Voice Note (PTT) එකක් කර Channel එකට යැවීම
-      // URL එක කෙලින්ම pass කිරීමේදී වෙන audio decode issues මඟහරවා ගැනීමට buffer එකක් ලෙස ගනියි
+      // 2. Audio to PTT Voice Note
       const audioBufferRes = await axios.get(audioUrl, { responseType: "arraybuffer", timeout: 60000 });
       const audioBuffer = Buffer.from(audioBufferRes.data);
 
@@ -146,7 +149,6 @@ export default {
         ptt: true
       });
 
-      // සාර්ථක වූ විට Reaction සහ confirmation
       sock.sendMessage(from, { react: { text: "✔️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
