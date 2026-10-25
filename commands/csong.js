@@ -8,18 +8,19 @@ const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
 // Chamindu Active API Key
 const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-// Fast Channel JID Resolver
+// Fast Channel JID Resolver (Cleans any /430 post IDs)
 async function resolveChannelJid(sock, channelInput) {
   let link = (channelInput || '').trim();
   if (link.endsWith('@newsletter')) return link;
 
-  const match = link.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
+  // Regex fixes /430 or any trailing parameters
+  const match = link.match(/whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
   if (match && match[1]) {
-    const inviteCode = match[1].split('/')[0];
+    const inviteCode = match[1];
     try {
       const meta = await Promise.race([
         sock.newsletterMetadata('invite', inviteCode),
-        new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 4000))
+        new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 5000))
       ]);
       if (meta?.id) return meta.id;
     } catch (_) {}
@@ -97,7 +98,7 @@ export default {
     sock.sendMessage(from, { react: { text: '⏳', key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Channel JID එක ලබා ගැනීම
+      // 1. Channel JID හරියටම Clean කර ලබා ගැනීම
       const channelJid = await resolveChannelJid(sock, channelLink);
 
       // 2. YouTube Search
@@ -121,7 +122,7 @@ export default {
         duration = vid.timestamp || '03:45';
       }
 
-      // 3. API එකෙන් Download URL එක ලබා ගැනීම
+      // 3. API එකෙන් Download URL ගැනීම
       const apiResult = await getDownloadLink(videoUrl);
       if (!apiResult?.downloadUrl) {
         sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
@@ -131,7 +132,18 @@ export default {
       const finalTitle = apiResult.title || title;
       const finalThumb = apiResult.thumbnail || thumbnail;
 
-      // 4. Channel Image Card එක Post කිරීම
+      // 4. Thumbnail Image සහ Audio Stream දෙකම Buffers විදියට බාගත කිරීම (Channels වලට යවන්න Buffer එකම ඕන)
+      const [thumbRes, audioRes] = await Promise.all([
+        finalThumb
+          ? axios.get(finalThumb, { responseType: 'arraybuffer', timeout: 10000 }).catch(() => null)
+          : Promise.resolve(null),
+        axios.get(apiResult.downloadUrl, {
+          responseType: 'arraybuffer',
+          timeout: 40000,
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        })
+      ]);
+
       const songCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
@@ -144,9 +156,10 @@ export default {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
 
-      if (finalThumb) {
+      // 5. Post Image Card
+      if (thumbRes?.data) {
         await sock.sendMessage(channelJid, {
-          image: { url: finalThumb },
+          image: Buffer.from(thumbRes.data),
           caption: songCaption
         });
       } else {
@@ -155,15 +168,17 @@ export default {
 
       await delay(1500);
 
-      // 5. Channel එකට Audio එක යැවීම (Playable Audio Stream)
-      // FFmpeg නැති නිසා RAM එක 512MB ඉක්මවා freeze වෙන්නේ නෑ
+      // 6. Post Playable Audio to Channel
+      const audioBuffer = Buffer.from(audioRes.data);
+      const cleanFileName = `${finalTitle.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'song'}.mp3`;
+
       await sock.sendMessage(channelJid, {
-        audio: { url: apiResult.downloadUrl },
+        document: audioBuffer,
         mimetype: 'audio/mpeg',
-        fileName: `${finalTitle.replace(/[^a-zA-Z0-9 ]/g, '')}.mp3`
+        fileName: cleanFileName
       });
 
-      // 6. සාර්ථක බව දැනුම් දීම
+      // 7. Success
       sock.sendMessage(from, { react: { text: '✔️', key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
