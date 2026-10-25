@@ -30,10 +30,22 @@ export default {
   description: "Romantic love quotes with name & live emoji editing animations",
 
   async execute({ sock, msg, from, args, command }) {
-    const cmd = (command || "love").toLowerCase();
+    // 1. User ගහපු Text එකෙන් Command එක හරියටම කඩා ගැනීම (index.js එකෙන් command pass නොවුණත් auto අල්ලයි)
+    const rawText = (
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      msg.message?.imageMessage?.caption ||
+      ""
+    ).trim();
+
+    const usedPrefix = rawText.match(/^[./!#]/)?.[0] || "";
+    const firstWord = rawText.slice(usedPrefix.length).trim().split(/\s+/)[0]?.toLowerCase();
+    
+    // Command එක resolve කර ගැනීම
+    const cmd = (command || firstWord || "love").toLowerCase();
     const inputText = (args || []).join(" ").trim();
 
-    // ── 1. .love සමග නමක් දුන්නොත් (.love Nethu) Romantic Card එක යැවීම ──
+    // ── 2. .love හෝ .adare සමග නමක් දුන්නොත් (.love Nethu) Romantic Card එක යැවීම ──
     if ((cmd === "love" || cmd === "adare") && inputText) {
       sock.sendMessage(from, { react: { text: "💖", key: msg.key } }).catch(() => {});
 
@@ -46,7 +58,7 @@ export default {
       ];
 
       const selectedQuote = nameQuotes[Math.floor(Math.random() * nameQuotes.length)];
-      const compatibilityScore = Math.floor(Math.random() * 6) + 95; // 95% - 100%
+      const compatibilityScore = Math.floor(Math.random() * 6) + 95;
 
       const loveCard = 
 `🌸 ｡ﾟ•┈୨ *MY HEART BELONGS TO YOU* ୧┈•ﾟ｡ 🐾
@@ -84,11 +96,10 @@ export default {
       );
     }
 
-    // ── 2. නමක් නැති විට හෝ අනිත් Command වලදී Live Emoji Edit Animation එක ──
+    // ── 3. නමක් නැති විට හෝ අනිත් Commands (.lol, .sad, .night...) වලදී අදාළ Animation එක යැවීම ──
     const frames = emojiAnimations[cmd] || emojiAnimations.love;
 
     try {
-      // පළමු Emoji එක මුලින්ම යැවීම
       const sentMsg = await sock.sendMessage(
         from,
         { text: frames[0] },
@@ -97,7 +108,6 @@ export default {
 
       if (!sentMsg?.key) return;
 
-      // ඉතිරි Emojis එකින් එක Edit වීම
       for (let i = 1; i < frames.length; i++) {
         await delay(500);
         await sock.sendMessage(from, {
@@ -106,7 +116,7 @@ export default {
         }).catch(() => {});
       }
     } catch (err) {
-      console.error("[LOVE/EMOJI ANIMATION ERROR]:", err.message);
+      console.error("[EMOJI ANIMATION ERROR]:", err.message);
     }
   }
 };
