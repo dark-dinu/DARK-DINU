@@ -5,7 +5,7 @@ export default {
   name: "csong",
   aliases: ["channelsong", "cplay"],
   category: "download",
-  description: "Send clean song card and voice note to a WhatsApp channel using Chamindu API",
+  description: "Send clean song card and voice note to WhatsApp channel",
 
   async execute({ sock, msg, from, args }) {
     try {
@@ -17,7 +17,7 @@ export default {
       if (!fullText || !fullText.includes(",")) {
         return await sock.sendMessage(
           from,
-          { text: "ℹ️ *භාවිතය:* `.csong channel_link, song_name`\n\n_උදා: .csong https://whatsapp.com/channel/xxx, Manike Mage Hithe_" },
+          { text: "ℹ️ *භාවිතය:* `.csong channel_link, song_name`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V, lelena_" },
           { quoted: msg }
         );
       }
@@ -34,8 +34,8 @@ export default {
         );
       }
 
-      // 2. WhatsApp Channel Invite code එකෙන් Newsletter JID එක ගැනීම
-      const inviteCodeMatch = channelLink.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
+      // 2. Link එකේ අගට /430 වගේ post id තිබ්බත් channel invite code එක පමණක් නිවැරදිව වෙන් කර ගැනීම
+      const inviteCodeMatch = channelLink.match(/whatsapp\.com\/channel\/([a-zA-Z0-9]{20,28})/i);
       if (!inviteCodeMatch || !inviteCodeMatch[1]) {
         return await sock.sendMessage(
           from,
@@ -49,19 +49,21 @@ export default {
 
       try {
         const metadata = await sock.newsletterMetadata("invite", inviteCode);
-        channelJid = metadata.id;
+        channelJid = metadata.id; // 120363xxxxxx@newsletter
       } catch (err) {
         return await sock.sendMessage(
           from,
-          { text: "❌ Channel එකේ තොරතුරු ලබාගත නොහැකි විය. Bot එම Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න." },
+          { text: "❌ Channel තොරතුරු ලබාගැනීමට නොහැකි විය. Bot එම Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න." },
           { quoted: msg }
         );
       }
 
-      // 3. YouTube URL එකක් හෝ Song Name එකක්දැයි පරීක්ෂා කර Video URL එක ලබා ගැනීම
+      // 3. YouTube Search කර URL එක ලබාගැනීම
       let targetUrl = songQuery;
-      let searchThumbnail = "";
-      let searchDuration = "";
+      let title = songQuery;
+      let artist = "Official Track";
+      let duration = "--:--";
+      let thumbnail = "";
 
       const isUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/i.test(songQuery);
 
@@ -78,38 +80,42 @@ export default {
         }
 
         targetUrl = video.url;
-        searchThumbnail = video.thumbnail;
-        searchDuration = video.timestamp;
+        title = video.title;
+        artist = video.author?.name || "Official Track";
+        duration = video.timestamp || "--:--";
+        thumbnail = video.thumbnail;
       }
 
       // 4. Chamindu API එක Call කිරීම
       const apiKey = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
       const apiUrl = `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(targetUrl)}&api_key=${apiKey}`;
 
-      const response = await axios.get(apiUrl, { timeout: 35000 });
+      const response = await axios.get(apiUrl, { timeout: 40000 });
       const apiData = response.data?.result || response.data?.data || response.data;
 
-      // API Response එකෙන් audio download URL එක වෙන් කර ගැනීම
+      // API Response එකෙන් audio download link එක තෝරා ගැනීම
       const audioUrl = apiData?.download?.audio || 
                        apiData?.download_url || 
                        apiData?.audio?.url || 
                        apiData?.audio || 
-                       apiData?.url;
+                       apiData?.url ||
+                       apiData?.download?.url;
 
       if (!audioUrl) {
         return await sock.sendMessage(
           from,
-          { text: "❌ සින්දුවේ Audio Download Link එක ලබා ගැනීමට නොහැකි විය." },
+          { text: "❌ සින්දුවේ Audio එක Download කර ගැනීමට නොහැකි විය." },
           { quoted: msg }
         );
       }
 
-      const title = apiData?.title || songQuery;
-      const artist = apiData?.author?.name || apiData?.author || apiData?.channel || "Official Track";
-      const duration = apiData?.duration || searchDuration || "--:--";
-      const thumbnail = apiData?.thumbnail || searchThumbnail;
+      // තොරතුරු update කරගැනීම (API එකෙන් ආවොත්)
+      if (apiData?.title) title = apiData.title;
+      if (apiData?.author?.name || apiData?.author) artist = apiData.author?.name || apiData.author;
+      if (apiData?.duration) duration = apiData.duration;
+      if (apiData?.thumbnail) thumbnail = apiData.thumbnail;
 
-      // Clean & Modern Minimalist Card (No Borders)
+      // 5. Clean & Minimalist Poster Card
       const cleanCard = 
 `🎶  *${title}*
 
@@ -119,7 +125,7 @@ export default {
 
 🎧  _Listen to the voice note below_`;
 
-      // 5. පියවර 1: Song Card (Poster) එක Channel එකට යැවීම
+      // 6. පියවර 1: Poster Card එක Channel එකට යැවීම
       if (thumbnail) {
         await sock.sendMessage(channelJid, {
           image: { url: thumbnail },
@@ -129,14 +135,18 @@ export default {
         await sock.sendMessage(channelJid, { text: cleanCard });
       }
 
-      // 6. පියවර 2: Audio එක PTT Voice Note එකක් ලෙස Channel එකට යැවීම
+      // 7. පියවර 2: Audio Buffer එකක් විදියට Voice Note (PTT) එකක් කර Channel එකට යැවීම
+      // URL එක කෙලින්ම pass කිරීමේදී වෙන audio decode issues මඟහරවා ගැනීමට buffer එකක් ලෙස ගනියි
+      const audioBufferRes = await axios.get(audioUrl, { responseType: "arraybuffer", timeout: 60000 });
+      const audioBuffer = Buffer.from(audioBufferRes.data);
+
       await sock.sendMessage(channelJid, {
-        audio: { url: audioUrl },
+        audio: audioBuffer,
         mimetype: "audio/mp4",
         ptt: true
       });
 
-      // User ට Success Reaction සහ Confirm Message යැවීම
+      // සාර්ථක වූ විට Reaction සහ confirmation
       sock.sendMessage(from, { react: { text: "✔️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
@@ -145,7 +155,7 @@ export default {
       );
 
     } catch (error) {
-      console.error("CSong Chamindu API Error:", error);
+      console.error("CSong Command Error:", error);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
