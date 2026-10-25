@@ -10,7 +10,7 @@ import crypto from "crypto";
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const PREFIX = "[CSONG]";
-const CHAMA_API_KEY = process.env.CHAMA_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const CHAMA_API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
 const MAX_AUDIO_SIZE = 60 * 1024 * 1024;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
@@ -59,15 +59,16 @@ function isOwner({ msg, sender, config }) {
   });
 }
 
-// WhatsApp Channel Link එකෙන් Official 120363... JID එක ලබා ගැනීම
+// 100% Fail-safe Channel Resolver
 async function getChannelJid(sock, input) {
   const value = String(input || "").trim();
 
-  if (/^\d+@newsletter$/.test(value)) {
+  // කෙලින්ම 120363xxx@newsletter එකක් දුන්නොත්
+  if (value.endsWith("@newsletter")) {
     return value;
   }
 
-  const match = value.match(/whatsapp\.com\/channel\/([A-Za-z0-9]{20,28})/i);
+  const match = value.match(/channel\/([A-Za-z0-9]{15,30})/i);
   if (!match) {
     throw new Error("වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න.");
   }
@@ -75,7 +76,7 @@ async function getChannelJid(sock, input) {
   const inviteCode = match[1];
   log("CHANNEL", `Looking up ${inviteCode}`);
 
-  // 1. Baileys official metadata
+  // 1. Baileys newsletterMetadata
   if (typeof sock.newsletterMetadata === "function") {
     try {
       const metadata = await sock.newsletterMetadata("invite", inviteCode);
@@ -84,33 +85,48 @@ async function getChannelJid(sock, input) {
         return metadata.id;
       }
     } catch (e) {
-      log("CHANNEL", `newsletterMetadata error: ${e?.message || e}`);
+      log("CHANNEL", `Baileys metadata failed: ${e?.message || e}`);
     }
   }
 
-  // 2. Web Scrape Backup (HTML Markup එකෙන් Real JID ගැනීම)
+  // 2. Web Scrape Fallback
   try {
     const page = await axios.get(`https://whatsapp.com/channel/${inviteCode}`, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      },
       timeout: 15000
     });
     const html = String(page.data);
-    const jidMatch =
-      html.match(/(120363\d+@newsletter)/i) ||
-      html.match(/newsletter_jid&quot;:&quot;(\d+)&quot;/i);
+    const m = html.match(/(120363\d+@newsletter)/i) || 
+              html.match(/"id":"(120363\d+@newsletter)"/i) ||
+              html.match(/newsletter_jid&quot;:&quot;(\d+)&quot;/i);
 
-    if (jidMatch) {
-      const realJid = jidMatch[1].includes("@newsletter")
-        ? jidMatch[1]
-        : `${jidMatch[1]}@newsletter`;
-      log("CHANNEL", `Resolved via Scrape: ${realJid}`);
-      return realJid;
+    if (m) {
+      const extracted = m[1].includes("@newsletter") ? m[1] : `${m[1]}@newsletter`;
+      log("CHANNEL", `Resolved via Web: ${extracted}`);
+      return extracted;
     }
   } catch (err) {
-    log("CHANNEL", `Scrape error: ${err.message}`);
+    log("CHANNEL", `Web scrape failed: ${err.message}`);
   }
 
-  throw new Error("Channel එක හඳුනාගත නොහැකි විය. Bot එම Channel එකේ Admin ද සහ Link එක හරිදැයි බලන්න.");
+  // 3. Subscribed Newsletters Cache එකෙන් සෙවීම (බොට් Admin ඉන්න Channel List එකෙන්)
+  try {
+    if (typeof sock.newsletterSubscribed === "function") {
+      const subs = await sock.newsletterSubscribed();
+      if (Array.isArray(subs)) {
+        for (const ch of subs) {
+          if (ch.invite_code === inviteCode || ch.id?.includes(inviteCode)) {
+            log("CHANNEL", `Resolved via Subscribed: ${ch.id}`);
+            return ch.id;
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  throw new Error("Channel එක හඳුනාගත නොහැකි විය. Link එක වෙනුවට Channel එකේ JID (120363...@newsletter) එක ලබා දී උත්සාහ කරන්න.");
 }
 
 function getAudioDuration(file) {
@@ -168,11 +184,10 @@ async function downloadBuffer(url, maxSize) {
   return buffer;
 }
 
-// අලුත් Chamindu MP3 Endpoint එක හරහා Audio ලබා ගැනීම
 async function fetchYouTubeDownload(targetYoutubeUrl) {
-  // 1. New Chamindu MP3 Endpoint (320kbps)
+  // New Chamindu MP3 Endpoint
   try {
-    log("DOWNLOAD", "Requesting new Chamindu MP3 API...");
+    log("DOWNLOAD", "Requesting Chamindu MP3 API...");
     const response = await axios.get("https://api.chamindu.site/api/v1/youtube/mp3", {
       params: {
         url: targetYoutubeUrl,
@@ -201,9 +216,9 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
     log("DOWNLOAD", `Primary MP3 endpoint failed: ${err.message}`);
   }
 
-  // 2. Fallback: Chamindu Toolkit / Download Endpoint
+  // Fallback endpoint
   try {
-    log("DOWNLOAD", "Trying Chamindu fallback download endpoint...");
+    log("DOWNLOAD", "Requesting fallback download endpoint...");
     const resFallback = await axios.get("https://api.chamindu.site/api/v1/youtube/download", {
       params: {
         url: targetYoutubeUrl,
@@ -265,7 +280,7 @@ export default {
           "🎵 *CSONG USAGE*\n\n" +
           "`.csong Channel_Link, Song_Name`\n\n" +
           "*උදාහරණය:*\n" +
-          "`.csong https://whatsapp.com/channel/0029VbBtXBMICVfnpV20wl27, lelena`"
+          "`.csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V, ma diha`"
         );
       }
 
@@ -348,7 +363,7 @@ export default {
       const durationSeconds = await getAudioDuration(outputFile);
       const opusData = fs.readFileSync(outputFile);
 
-      // Channel එකේ waveform bar එක ලස්සනට render වීමට bars array එකක්
+      // Channel Waveform Bars
       const waveformBars = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         waveformBars[i] = Math.floor(Math.random() * 75) + 25;
