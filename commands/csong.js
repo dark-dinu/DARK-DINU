@@ -2,18 +2,17 @@ import axios from 'axios';
 import yts from 'yt-search';
 import { delay } from '@whiskeysockets/baileys';
 
-// Default WhatsApp Channel Link
-const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
+// Default Channel Link
+const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V';
 
-// Chamindu Active API Key
+// Active Chamindu API Key
 const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-// Fast Channel JID Resolver (Cleans any /430 post IDs)
+// Fast Channel JID Resolver (ලින්ක් එකේ අගට /430 ආවත් Clean Invite Code එක ගනී)
 async function resolveChannelJid(sock, channelInput) {
   let link = (channelInput || '').trim();
   if (link.endsWith('@newsletter')) return link;
 
-  // Regex fixes /430 or any trailing parameters
   const match = link.match(/whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
   if (match && match[1]) {
     const inviteCode = match[1];
@@ -29,31 +28,41 @@ async function resolveChannelJid(sock, channelInput) {
   return link;
 }
 
-// Chamindu Stream Resolver
-async function getDownloadLink(youtubeUrl) {
-  const enc = encodeURIComponent(youtubeUrl);
+// Chamindu API Stream Resolver
+async function fetchAudioData(targetUrl) {
+  const enc = encodeURIComponent(targetUrl);
   const endpoints = [
     `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${enc}&api_key=${CHAMA_API_KEY}`,
-    `https://api.chamindu.site/api/v1/youtube/mp3?url=${enc}&quality=128kbps&api_key=${CHAMA_API_KEY}`
+    `https://api.chamindu.site/api/v1/youtube/mp3?url=${enc}&quality=128kbps&api_key=${CHAMA_API_KEY}`,
+    `https://api.chamindu.site/api/v1/youtube/download?url=${enc}&quality=128kbps&format=mp3&api_key=${CHAMA_API_KEY}`
   ];
 
   for (const ep of endpoints) {
     try {
-      const res = await axios.get(ep, { timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0' } });
-      const dl =
-        res.data?.data?.audio?.download_url ||
-        res.data?.data?.audio?.url ||
-        res.data?.data?.download_url ||
-        res.data?.data?.direct_url ||
-        res.data?.download_url ||
-        res.data?.direct_url;
+      const { data: res } = await axios.get(ep, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        timeout: 15000
+      });
 
-      if (dl && typeof dl === 'string' && /^https?:\/\//i.test(dl)) {
-        return {
-          downloadUrl: dl,
-          title: res.data?.data?.title || res.data?.title || '',
-          thumbnail: res.data?.data?.thumbnail || res.data?.thumbnail || ''
-        };
+      if (res) {
+        const dl =
+          res.data?.audio?.download_url ||
+          res.data?.audio?.url ||
+          res.data?.download_url ||
+          res.data?.direct_url ||
+          res.data?.url ||
+          res.download_url ||
+          res.direct_url ||
+          res.result?.download_url ||
+          res.result?.url;
+
+        if (dl && typeof dl === 'string' && /^https?:\/\//i.test(dl)) {
+          return {
+            downloadUrl: dl,
+            title: res.data?.title || res.title || res.result?.title || '',
+            thumbnail: res.data?.thumbnail || res.thumbnail || res.result?.thumbnail || ''
+          };
+        }
       }
     } catch (_) {}
   }
@@ -62,9 +71,8 @@ async function getDownloadLink(youtubeUrl) {
 
 export default {
   name: 'csong',
-  aliases: ['cplay', 'channelsong'],
   category: 'channel',
-  description: 'Send song card and playable audio directly to WhatsApp Channel',
+  description: 'Send song card and playable audio player to WhatsApp Channel',
 
   async execute({ sock, msg, from, args }) {
     const fullText = (args || []).join(' ').trim();
@@ -79,7 +87,7 @@ export default {
       return await sock.sendMessage(
         from,
         {
-          text: `⚠️ *භාවිතය:*\n.csong <Song Name>\n\n*වෙනත් චැනල් එකකට නම්:*\n.csong <Channel Link>, <Song Name>`
+          text: `⚠️ *භාවිතය:*\n.csong <Song Name>\n\n*වෙනත් චැනල් එකකට නම්:*\n.csong <Channel Link> , <Song Name>`
         },
         { quoted: msg }
       );
@@ -94,106 +102,104 @@ export default {
       songQuery = parts.slice(1).join(',').trim();
     }
 
-    // Reaction
     sock.sendMessage(from, { react: { text: '⏳', key: msg.key } }).catch(() => {});
 
     try {
-      // 1. Channel JID හරියටම Clean කර ලබා ගැනීම
-      const channelJid = await resolveChannelJid(sock, channelLink);
+      // 1. Channel JID හරියටම Clean කර ගැනීම
+      const targetChannelJid = await resolveChannelJid(sock, channelLink);
 
-      // 2. YouTube Search
-      let videoUrl = songQuery;
-      let title = songQuery;
-      let thumbnail = '';
-      let duration = '03:45';
+      let targetYoutubeUrl = songQuery;
+      let searchedTitle = songQuery;
+      let searchedThumbnail = '';
+      let searchedDuration = '04:11';
 
-      const isUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
+      const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
 
-      if (!isUrl) {
-        const search = await yts(songQuery);
-        if (!search?.videos?.length) {
+      if (!isYoutubeUrl) {
+        const searchResult = await yts(songQuery);
+        if (!searchResult?.videos?.length) {
           sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
           return await sock.sendMessage(from, { text: '❌ සින්දුව YouTube හි සොයාගත නොහැකි විය.' }, { quoted: msg });
         }
-        const vid = search.videos[0];
-        videoUrl = vid.url;
-        title = vid.title;
-        thumbnail = vid.thumbnail;
-        duration = vid.timestamp || '03:45';
+        const video = searchResult.videos[0];
+        targetYoutubeUrl = video.url;
+        searchedTitle = video.title;
+        searchedThumbnail = video.thumbnail;
+        searchedDuration = video.timestamp || '04:11';
       }
 
-      // 3. API එකෙන් Download URL ගැනීම
-      const apiResult = await getDownloadLink(videoUrl);
-      if (!apiResult?.downloadUrl) {
+      // 2. Chamindu API එකෙන් Download URL ගැනීම
+      const ytData = await fetchAudioData(targetYoutubeUrl);
+
+      if (!ytData?.downloadUrl) {
         sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(from, { text: '❌ Audio download link එකක් ලබාගත නොහැකි විය.' }, { quoted: msg });
+        return await sock.sendMessage(from, { text: '❌ YouTube API එකෙන් Audio Stream Link එකක් ලබාගත නොහැකි විය.' }, { quoted: msg });
       }
 
-      const finalTitle = apiResult.title || title;
-      const finalThumb = apiResult.thumbnail || thumbnail;
+      const finalTitle = ytData.title || searchedTitle;
+      const finalThumb = ytData.thumbnail || searchedThumbnail;
 
-      // 4. Thumbnail Image සහ Audio Stream දෙකම Buffers විදියට බාගත කිරීම (Channels වලට යවන්න Buffer එකම ඕන)
-      const [thumbRes, audioRes] = await Promise.all([
+      // 3. Thumbnail Image Buffer සහ Audio Stream එක බාගත කිරීම
+      const [thumbRes, fileResponse] = await Promise.all([
         finalThumb
           ? axios.get(finalThumb, { responseType: 'arraybuffer', timeout: 10000 }).catch(() => null)
           : Promise.resolve(null),
-        axios.get(apiResult.downloadUrl, {
+        axios.get(ytData.downloadUrl, {
           responseType: 'arraybuffer',
-          timeout: 40000,
+          timeout: 45000,
           headers: { 'User-Agent': 'Mozilla/5.0' }
         })
       ]);
 
-      const songCaption = 
-`> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
-
-*❖ ᴛɪᴛʟᴇ :* ${finalTitle}
-
-01:23 ───🔘──────── ${duration}
-⇄     ◁   ❚❚   ▷     ↻
-
-\`\`\`➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶\`\`\`
-
-> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
-
-      // 5. Post Image Card
-      if (thumbRes?.data) {
-        await sock.sendMessage(channelJid, {
-          image: Buffer.from(thumbRes.data),
-          caption: songCaption
-        });
-      } else {
-        await sock.sendMessage(channelJid, { text: songCaption });
+      const mediaBuffer = Buffer.from(fileResponse.data);
+      if (mediaBuffer.length < 5000) {
+        sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(from, { text: '❌ බාගත කළ Audio file එක දෝෂ සහිතයි.' }, { quoted: msg });
       }
 
-      await delay(1500);
+      // 4. Send Song Card Image to Channel (Screenshot එකේ තියෙන Format එකම)
+      const songCardCaption = 
+`│  ✨ H E S H A N   O F C   M U S I C
 
-      // 6. Post Playable Audio to Channel
-      const audioBuffer = Buffer.from(audioRes.data);
-      const cleanFileName = `${finalTitle.replace(/[^a-zA-Z0-9 ]/g, '').trim() || 'song'}.mp3`;
+❖ ᴛɪᴛʟᴇ : ${finalTitle}
 
-      await sock.sendMessage(channelJid, {
-        document: audioBuffer,
-        mimetype: 'audio/mpeg',
-        fileName: cleanFileName
+01:23 ───🔘──────── ${searchedDuration}
+⇄     ◁   ❚❚   ▷     ↻
+
+➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶
+
+│  🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ`;
+
+      if (thumbRes?.data) {
+        await sock.sendMessage(targetChannelJid, {
+          image: Buffer.from(thumbRes.data),
+          caption: songCardCaption
+        });
+      } else {
+        await sock.sendMessage(targetChannelJid, { text: songCardCaption });
+      }
+
+      // Delay to avoid WhatsApp Newsletter rate-limit
+      await delay(2000);
+
+      // 5. Send Playable Audio Player to Channel (PTT = false, Channels වල 100% වැඩ කරන ක්‍රමය)
+      await sock.sendMessage(targetChannelJid, {
+        audio: mediaBuffer,
+        mimetype: 'audio/mp4',
+        ptt: false
       });
 
-      // 7. Success
-      sock.sendMessage(from, { react: { text: '✔️', key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: '✅', key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: `✅ *"${finalTitle}"*\nChannel එකට Song Card එක සහ Audio එක සාර්ථකව Post කරන ලදී! 🎶✨` },
+        { text: `✅ *"${finalTitle}"*\nChannel එකට Song Card එක සහ Audio Player එක සාර්ථකව Post කරන ලදී! 🎶✨` },
         { quoted: msg }
       );
 
-    } catch (err) {
-      console.error('[CSONG ERROR]:', err.message);
+    } catch (error) {
+      console.error('[CSONG ERROR]:', error);
       sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-      return await sock.sendMessage(
-        from,
-        { text: `❌ දෝෂයක් සිදුවිය: ${err.message || 'Failed to dispatch'}` },
-        { quoted: msg }
-      );
+      await sock.sendMessage(from, { text: `❌ දෝෂයක් සිදුවිය: ${error.message}` }, { quoted: msg });
     }
   }
 };
