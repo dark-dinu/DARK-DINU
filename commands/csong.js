@@ -12,7 +12,7 @@ const ffmpegPath = ffmpegInstaller?.path || 'ffmpeg';
 // Default WhatsApp Channel Link
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
 
-// Active Chamindu API Key
+// Chamindu Active API Key
 const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
 function safeUnlink(filePath) {
@@ -21,20 +21,20 @@ function safeUnlink(filePath) {
   } catch (_) {}
 }
 
-// ── Ultra-Fast Low CPU Opus Converter (Non-blocking Child Process) ──
-function fastOpusConvert(inputBuffer) {
+// ── Ultra-Fast Low CPU Opus PTT Converter ──
+function convertToVoice(inputBuffer) {
   return new Promise((resolve) => {
     const tempId = `${Date.now()}_${(Math.random() * 1e9) | 0}`;
-    const tempIn = path.join(os.tmpdir(), `in_${tempId}.mp3`);
-    const tempOut = path.join(os.tmpdir(), `out_${tempId}.ogg`);
+    const tempIn = path.join(os.tmpdir(), `in_${tempId}.bin`);
+    const tempOut = path.join(os.tmpdir(), `vn_${tempId}.ogg`);
 
     fs.writeFile(tempIn, inputBuffer, (err) => {
       if (err) return resolve(inputBuffer);
 
-      // Fast single-pass mono libopus conversion (Instant)
-      const cmd = `"${ffmpegPath}" -y -i "${tempIn}" -vn -c:a libopus -b:a 48k -ar 48000 -ac 1 "${tempOut}"`;
+      // WhatsApp native voice note parameters: mono, 48kHz, 64k bitrate
+      const cmd = `"${ffmpegPath}" -y -i "${tempIn}" -vn -c:a libopus -b:a 64k -ar 48000 -ac 1 -f ogg "${tempOut}"`;
 
-      exec(cmd, { timeout: 25000 }, (execErr) => {
+      exec(cmd, { timeout: 30000 }, (execErr) => {
         safeUnlink(tempIn);
         if (execErr) return resolve(inputBuffer);
 
@@ -48,6 +48,7 @@ function fastOpusConvert(inputBuffer) {
   });
 }
 
+// ── Voice Waveform Bars ──
 function getFastWaveform() {
   const bars = new Uint8Array(64);
   for (let i = 0; i < 64; i++) {
@@ -56,30 +57,29 @@ function getFastWaveform() {
   return bars;
 }
 
-async function resolveChannelJid(sock, channelInput) {
-  let input = (channelInput || '').trim();
-  if (input.endsWith('@newsletter')) return input;
+// ── Fast Channel JID Resolver ──
+async function getChannelJid(sock, channelInput) {
+  let link = (channelInput || '').trim();
+  if (link.endsWith('@newsletter')) return link;
 
-  const match = input.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
+  const match = link.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
   if (match && match[1]) {
     const inviteCode = match[1].split('/')[0];
-    if (typeof sock.newsletterMetadata === 'function') {
-      try {
-        const meta = await Promise.race([
-          sock.newsletterMetadata('invite', inviteCode),
-          new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 5000))
-        ]);
-        if (meta?.id) return meta.id;
-      } catch (_) {}
-    }
+    try {
+      const meta = await Promise.race([
+        sock.newsletterMetadata('invite', inviteCode),
+        new Promise((_, r) => setTimeout(() => r(new Error('timeout')), 4000))
+      ]);
+      if (meta?.id) return meta.id;
+    } catch (_) {}
     return `${inviteCode}@newsletter`;
   }
-  return input;
+  return link;
 }
 
-// ── Chamindu Fast Stream Resolver ──
-async function fetchYouTubeDownload(targetYoutubeUrl) {
-  const enc = encodeURIComponent(targetYoutubeUrl);
+// ── Chamindu API Stream Resolver ──
+async function getDownloadLink(youtubeUrl) {
+  const enc = encodeURIComponent(youtubeUrl);
   const endpoints = [
     `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${enc}&api_key=${CHAMA_API_KEY}`,
     `https://api.chamindu.site/api/v1/youtube/mp3?url=${enc}&quality=128kbps&api_key=${CHAMA_API_KEY}`
@@ -87,28 +87,21 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
 
   for (const ep of endpoints) {
     try {
-      const { data: res } = await axios.get(ep, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        timeout: 12000
-      });
+      const res = await axios.get(ep, { timeout: 12000, headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const dl =
+        res.data?.data?.audio?.download_url ||
+        res.data?.data?.audio?.url ||
+        res.data?.data?.download_url ||
+        res.data?.data?.direct_url ||
+        res.data?.download_url ||
+        res.data?.direct_url;
 
-      if (res) {
-        const dl =
-          res.data?.audio?.download_url ||
-          res.data?.audio?.url ||
-          res.data?.download_url ||
-          res.data?.direct_url ||
-          res.data?.url ||
-          res.download_url ||
-          res.direct_url;
-
-        if (dl && typeof dl === 'string' && /^https?:\/\//i.test(dl)) {
-          return {
-            downloadUrl: dl,
-            title: res.data?.title || res.title || '',
-            thumbnail: res.data?.thumbnail || res.thumbnail || ''
-          };
-        }
+      if (dl && typeof dl === 'string' && /^https?:\/\//i.test(dl)) {
+        return {
+          downloadUrl: dl,
+          title: res.data?.data?.title || res.data?.title || '',
+          thumbnail: res.data?.data?.thumbnail || res.data?.thumbnail || ''
+        };
       }
     } catch (_) {}
   }
@@ -117,8 +110,9 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
 
 export default {
   name: 'csong',
-  desc: 'Send YouTube song as card and playable voice note to a channel',
+  aliases: ['cplay', 'channelsong'],
   category: 'channel',
+  description: 'Send song card and voice note (PTT) to WhatsApp Channel',
 
   async execute({ sock, msg, from, args }) {
     const fullText = (args || []).join(' ').trim();
@@ -133,125 +127,120 @@ export default {
       return await sock.sendMessage(
         from,
         {
-          text:
-            `⚠️ *භාවිතය:*\n\n` +
-            `1️⃣ *Default Channel:* \`.csong <Song Name or YouTube Link>\`\n` +
-            `2️⃣ *Custom Channel:* \`.csong <Channel Link>, <Song Name or YouTube Link>\``
+          text: `⚠️ *භාවිතය:*\n.csong <Song Name>\n\n*වෙනත් චැනල් එකකට නම්:*\n.csong <Channel Link>, <Song Name>`
         },
         { quoted: msg }
       );
     }
 
-    let channelInput = DEFAULT_CHANNEL;
+    let channelLink = DEFAULT_CHANNEL;
     let songQuery = input;
 
     if (input.includes(',')) {
       const parts = input.split(',');
-      channelInput = parts[0].trim();
+      channelLink = parts[0].trim();
       songQuery = parts.slice(1).join(',').trim();
     }
 
     // Reaction
-    sock.sendMessage(from, { react: { text: '🎶', key: msg.key } }).catch(() => {});
+    sock.sendMessage(from, { react: { text: '⏳', key: msg.key } }).catch(() => {});
 
     try {
-      const targetChannelJid = await resolveChannelJid(sock, channelInput);
+      const channelJid = await getChannelJid(sock, channelLink);
 
-      let targetYoutubeUrl = songQuery;
-      let searchedTitle = songQuery;
-      let searchedThumbnail = '';
-      let searchedDuration = '03:45';
+      let videoUrl = songQuery;
+      let title = songQuery;
+      let thumbnail = '';
+      let duration = '03:45';
 
-      const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
+      const isUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
 
-      if (!isYoutubeUrl) {
-        const searchResult = await yts(songQuery);
-        if (!searchResult?.videos?.length) {
+      if (!isUrl) {
+        const search = await yts(songQuery);
+        if (!search?.videos?.length) {
           sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-          return await sock.sendMessage(from, { text: '❌ සින්දුව YouTube හි සොයාගත නොහැකි විය.' }, { quoted: msg });
+          return await sock.sendMessage(from, { text: '❌ සින්දුව සොයාගත නොහැකි විය.' }, { quoted: msg });
         }
-        const video = searchResult.videos[0];
-        targetYoutubeUrl = video.url;
-        searchedTitle = video.title;
-        searchedThumbnail = video.thumbnail;
-        searchedDuration = video.timestamp || '03:45';
+        const vid = search.videos[0];
+        videoUrl = vid.url;
+        title = vid.title;
+        thumbnail = vid.thumbnail;
+        duration = vid.timestamp || '03:45';
       }
 
-      // 1. API හරහා download url ලබා ගැනීම
-      const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
-
-      if (!ytData?.downloadUrl) {
+      // API Stream Resolver
+      const apiResult = await getDownloadLink(videoUrl);
+      if (!apiResult?.downloadUrl) {
         sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(from, { text: '❌ YouTube API එකෙන් download link එකක් ලබාගත නොහැකි විය.' }, { quoted: msg });
+        return await sock.sendMessage(from, { text: '❌ Audio download link එකක් ලබාගත නොහැකි විය.' }, { quoted: msg });
       }
 
-      const finalTitle = ytData.title || searchedTitle;
-      const finalThumb = ytData.thumbnail || searchedThumbnail;
+      const finalTitle = apiResult.title || title;
+      const finalThumb = apiResult.thumbnail || thumbnail;
 
-      // 2. Audio & Thumbnail Buffers Parallel Download (High Speed)
-      const [mediaRes, thumbRes] = await Promise.all([
-        axios.get(ytData.downloadUrl, {
-          responseType: 'arraybuffer',
-          timeout: 40000,
-          headers: { 'User-Agent': 'Mozilla/5.0' }
-        }),
-        finalThumb
-          ? axios.get(finalThumb, { responseType: 'arraybuffer', timeout: 10000 }).catch(() => null)
-          : Promise.resolve(null)
-      ]);
-
-      const mediaBuffer = Buffer.from(mediaRes.data);
-      if (mediaBuffer.length < 5000) {
-        sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(from, { text: '❌ බාගත කළ ගොනුව දෝෂ සහිතයි.' }, { quoted: msg });
-      }
-
-      // 3. Post Image Card to Channel
-      const songCardCaption =
+      // 1. Post Image Card to Channel
+      const songCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
 *❖ ᴛɪᴛʟᴇ :* ${finalTitle}
 
-01:23 ───🔘──────── ${searchedDuration}
+01:23 ───🔘──────── ${duration}
 ⇄     ◁   ❚❚   ▷     ↻
 
 \`\`\`➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶\`\`\`
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
 
-      if (thumbRes?.data) {
-        await sock.sendMessage(targetChannelJid, {
-          image: Buffer.from(thumbRes.data),
-          caption: songCardCaption
+      if (finalThumb) {
+        await sock.sendMessage(channelJid, {
+          image: { url: finalThumb },
+          caption: songCaption
         });
       } else {
-        await sock.sendMessage(targetChannelJid, { text: songCardCaption });
+        await sock.sendMessage(channelJid, { text: songCaption });
       }
 
-      // 4. Ultra-Fast Opus Voice Conversion
-      const opusBuffer = await fastOpusConvert(mediaBuffer);
+      // 2. Download Raw Audio Stream
+      const audioRes = await axios.get(apiResult.downloadUrl, {
+        responseType: 'arraybuffer',
+        timeout: 40000,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+
+      const rawBuffer = Buffer.from(audioRes.data);
+      if (rawBuffer.length < 5000) {
+        throw new Error('Downloaded audio buffer is too small');
+      }
+
+      // 3. Fast OGG Opus Voice Conversion
+      const voiceBuffer = await convertToVoice(rawBuffer);
 
       await delay(1200);
 
-      // 5. Post Voice Note (PTT) to Channel
-      await sock.sendMessage(targetChannelJid, {
-        audio: opusBuffer,
+      // 4. Send as Native WhatsApp Voice Note (PTT)
+      await sock.sendMessage(channelJid, {
+        audio: voiceBuffer,
         mimetype: 'audio/ogg; codecs=opus',
         ptt: true,
         waveform: getFastWaveform()
       });
 
-      sock.sendMessage(from, { react: { text: '✅', key: msg.key } }).catch(() => {});
+      // 5. Done
+      sock.sendMessage(from, { react: { text: '✔️', key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: `✅ *Success!* Song card එක සහ Voice note එක Channel එකට සාර්ථකව Post කරන ලදී.` },
+        { text: `✅ *"${finalTitle}"*\nSong card එක සහ Voice Note එක Channel එකට සාර්ථකව Post කරන ලදී! 🎙️🔥` },
         { quoted: msg }
       );
 
-    } catch (error) {
-      console.error('Csong Error:', error);
+    } catch (err) {
+      console.error('[CSONG ERR]:', err.message);
       sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-      await sock.sendMessage(from, { text: `❌ දෝෂයක් සිදුවිය: ${error.message}` }, { quoted: msg });
+      return await sock.sendMessage(
+        from,
+        { text: `❌ දෝෂයක් සිදුවිය: ${err.message || 'Failed to dispatch voice'}` },
+        { quoted: msg }
+      );
     }
   }
 };
