@@ -1,12 +1,14 @@
 import axios from "axios";
 import ytSearch from "yt-search";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import { spawn } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
 
-const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
-const MAX_SECONDS = 15 * 60; // 15 minutes limit
+// Hardcoded Chamindu API Key & Endpoints
+const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const MAX_SECONDS = 15 * 60; // උපරිම විනාඩි 15
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -42,9 +44,9 @@ function findAudioUrl(data) {
   return found[0] && score(found[0]) > 0 ? found[0].url : null;
 }
 
-// Multi-API Fetch Engine (Chamindu -> Vreden -> David Cyril)
+// Chamindu API එකෙන් කෙලින්ම Data ගැනීම (Secondary Fallbacks සහිතව)
 async function fetchSongDetails(videoUrl, videoTitle) {
-  // 1. Chamindu Toolkit API
+  // 1. Chamindu Toolkit API (Direct Hardcoded Key)
   try {
     const res = await axios.get(
       `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(videoUrl)}&api_key=${API_KEY}`,
@@ -62,10 +64,10 @@ async function fetchSongDetails(videoUrl, videoTitle) {
       };
     }
   } catch (e) {
-    console.error("Chamindu API primary failed:", e?.response?.data || e.message);
+    console.error("Chamindu API error:", e?.response?.data || e.message);
   }
 
-  // 2. Backup API 1: Vreden Play API
+  // 2. Backup Fallback 1: Vreden Play API
   try {
     const res = await axios.get(`https://api.vreden.my.id/api/ytplaymp3?query=${encodeURIComponent(videoTitle)}`, { timeout: 30000 });
     const result = res.data?.result;
@@ -79,10 +81,10 @@ async function fetchSongDetails(videoUrl, videoTitle) {
       };
     }
   } catch (e) {
-    console.error("Vreden backup failed:", e?.message || e);
+    console.error("Vreden backup error:", e?.message || e);
   }
 
-  // 3. Backup API 2: David Cyril API
+  // 3. Backup Fallback 2: David Cyril API
   try {
     const res = await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`, { timeout: 30000 });
     const result = res.data?.result;
@@ -96,7 +98,7 @@ async function fetchSongDetails(videoUrl, videoTitle) {
       };
     }
   } catch (e) {
-    console.error("David Cyril backup failed:", e?.message || e);
+    console.error("David Cyril backup error:", e?.message || e);
   }
 
   return null;
@@ -111,50 +113,6 @@ function extractCode(raw) {
   return plain.length >= 15 ? plain : null;
 }
 
-function findNewsletterId(obj) {
-  let out = null;
-  const walk = (n) => {
-    if (out || !n) return;
-    if (typeof n === "string") {
-      const m = n.match(/(\d{15,}@newsletter)/);
-      if (m) out = m[1];
-      return;
-    }
-    if (typeof n === "object") Object.values(n).forEach(walk);
-  };
-  walk(obj);
-  return out;
-}
-
-async function rawInviteQuery(sock, code) {
-  const queryIds = ["6563316087068696", "9926858900719341", "6620195908089573"];
-  let lastErr;
-  for (const id of queryIds) {
-    try {
-      const payload = {
-        variables: {
-          input: { key: code, type: "INVITE", view_role: "GUEST" },
-          fetch_viewer_metadata: true,
-          fetch_full_image: true,
-          fetch_creation_time: true,
-        },
-      };
-      const result = await sock.query({
-        tag: "iq",
-        attrs: { to: "s.whatsapp.net", type: "get", xmlns: "w:mex" },
-        content: [{ tag: "query", attrs: { query_id: id }, content: Buffer.from(JSON.stringify(payload)) }],
-      });
-      const child = (result?.content || []).find((c) => c.tag === "result");
-      const json = JSON.parse(child.content.toString());
-      const jid = findNewsletterId(json);
-      if (jid) return jid;
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr || new Error("raw query: JID not found");
-}
-
 async function getChannelJid(sock, rawTarget, errors) {
   if (/@newsletter$/.test(rawTarget)) return rawTarget;
 
@@ -164,49 +122,21 @@ async function getChannelJid(sock, rawTarget, errors) {
 
   const done = (jid) => { jidCache.set(code, jid); return jid; };
 
-  // 1. Baileys newsletterMetadata
   if (typeof sock.newsletterMetadata === "function") {
-    for (const call of [
-      () => sock.newsletterMetadata("invite", code),
-      () => sock.newsletterMetadata("INVITE", code),
-      () => sock.newsletterMetadata(code),
-    ]) {
-      try {
-        const res = await call();
-        const jid = res?.id || findNewsletterId(res);
-        if (jid) return done(jid);
-      } catch (e) {
-        errors.push(`metadata: ${e?.message || e}`);
-      }
+    try {
+      const res = await sock.newsletterMetadata("invite", code);
+      if (res?.id) return done(res.id);
+    } catch (e) {
+      errors.push(`metadata error: ${e?.message || e}`);
     }
   } else {
-    errors.push("sock.newsletterMetadata function not found");
-  }
-
-  // 2. Raw WMex query fallback
-  try {
-    const jid = await rawInviteQuery(sock, code);
-    if (jid) return done(jid);
-  } catch (e) {
-    errors.push(`raw: ${e?.message || e}`);
-  }
-
-  // 3. Web HTML Scraping fallback
-  try {
-    const page = await axios.get(`https://whatsapp.com/channel/${code}`, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-      timeout: 15000,
-    });
-    const jid = findNewsletterId(String(page.data));
-    if (jid) return done(jid);
-    errors.push("web: JID not found in markup");
-  } catch (e) {
-    errors.push(`web: ${e?.message || e}`);
+    errors.push("sock.newsletterMetadata ශ්‍රිතය හමු නොවීය");
   }
 
   return null;
 }
 
+// @ffmpeg-installer/ffmpeg path එක මඟින් නිවැරදිව Opus Voice Note එකකට හැරවීම
 function toOpus(inputBuffer) {
   return new Promise((resolve, reject) => {
     const id = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -219,7 +149,9 @@ function toOpus(inputBuffer) {
 
     fs.writeFileSync(inFile, inputBuffer);
 
-    const ff = spawn("ffmpeg", [
+    const ffmpegPath = ffmpegInstaller.path || "ffmpeg";
+
+    const ff = spawn(ffmpegPath, [
       "-y", "-i", inFile,
       "-vn", "-map_metadata", "-1",
       "-c:a", "libopus", "-b:a", "48k", "-ar", "48000", "-ac", "1",
@@ -228,7 +160,10 @@ function toOpus(inputBuffer) {
 
     ff.on("error", (err) => { cleanup(); reject(err); });
     ff.on("close", (code) => {
-      if (code !== 0 || !fs.existsSync(outFile)) { cleanup(); return reject(new Error(`ffmpeg exit ${code}`)); }
+      if (code !== 0 || !fs.existsSync(outFile)) { 
+        cleanup(); 
+        return reject(new Error(`ffmpeg exit code: ${code}`)); 
+      }
       const out = fs.readFileSync(outFile);
       cleanup();
       resolve(out);
@@ -241,12 +176,22 @@ async function download(url, timeout = 90000) {
     responseType: "arraybuffer",
     timeout,
     maxContentLength: 80 * 1024 * 1024,
-    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+    headers: { "User-Agent": "Mozilla/5.0" },
   });
   return Buffer.from(res.data);
 }
 
-/* ---------- Command Implementation ---------- */
+function formatDuration(sec) {
+  if (!sec) return "--:--";
+  if (typeof sec === "string" && sec.includes(":")) return sec;
+  const totalSeconds = parseInt(sec, 10);
+  if (isNaN(totalSeconds)) return "--:--";
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${s < 10 ? "0" : ""}${s}`;
+}
+
+/* ---------- Command ---------- */
 
 export default {
   name: "csong",
@@ -275,13 +220,17 @@ export default {
 
       if (!songQuery) return await reply("❌ සින්දුවේ නම ඇතුළත් කරන්න.");
 
-      // 1. Channel JID සොයා ගැනීම
+      // 1. Channel JID හඳුනා ගැනීම
       const lookupErrors = [];
       const channelJid = await getChannelJid(sock, rawTarget, lookupErrors);
-      if (channelJid === "INVALID") return await reply("❌ වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න.");
+      
+      if (channelJid === "INVALID") {
+        return await reply("❌ වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න.");
+      }
+      
       if (!channelJid) {
         return await reply(
-          "❌ Channel එක හඳුනාගත නොහැකි විය.\n\n_හේතුව:_ Bot එම Channel එකේ Admin බව සහ Link එක නිවැරදි බව පරීක්ෂා කරන්න."
+          `❌ Channel එක සොයාගත නොහැකි විය.\n\n_දෝෂය:_ ${lookupErrors.join("\n") || "Unknown"}\n\n*සටහන:* Bot එම Channel එකේ Admin ද සහ Link එක නිවැරදිදැයි බලන්න.`
         );
       }
 
@@ -293,28 +242,29 @@ export default {
         return await reply("❌ මේ වීඩියෝව විනාඩි 15 ට වඩා දිග වැඩියි.");
       }
 
-      // 3. API Engine එකෙන් Song Data & Audio URL ලබාගැනීම
+      // 3. Audio & Details ලබා ගැනීම
       const songData = await fetchSongDetails(video.url, video.title);
       if (!songData || !songData.audioUrl) {
-        return await reply("❌ මේ මොහොතේ සින්දුවේ Audio එක ලබා ගැනීමට නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න.");
+        return await reply("❌ මේ මොහොතේ Audio link එක ලබා ගැනීමට නොහැකි විය.");
       }
 
       const title = songData.title || video.title;
       const artist = songData.artist || video.author?.name || "Official Track";
-      const duration = songData.duration || video.timestamp || "--:--";
+      const duration = formatDuration(songData.duration || video.seconds || video.timestamp);
       const thumbnail = songData.thumbnail || video.thumbnail;
 
-      // 4. Audio Download කර Voice Note (Opus) එකට Convert කිරීම
+      // 4. Download & Voice Note Conversion
       let audioBuffer = await download(songData.audioUrl);
       let mimetype = "audio/ogg; codecs=opus";
+      
       try {
         audioBuffer = await toOpus(audioBuffer);
       } catch (e) {
-        console.error("FFmpeg not available or failed, falling back to mp4:", e.message);
+        console.error("Opus convert failed, fallback to audio/mp4:", e.message);
         mimetype = "audio/mp4";
       }
 
-      // 5. Clean Poster Card එක Channel එකට යැවීම
+      // 5. Clean Card එක Channel එකට යැවීම
       const cleanCard =
 `🎶  *${title}*
 
@@ -341,18 +291,22 @@ export default {
       await sleep(1000);
 
       // 6. Voice note (PTT Waveform) Channel එකට යැවීම
-      await sock.sendMessage(channelJid, {
-        audio: audioBuffer,
-        mimetype,
-        ptt: true,
-      });
+      try {
+        await sock.sendMessage(channelJid, {
+          audio: audioBuffer,
+          mimetype,
+          ptt: true,
+        });
+      } catch (sendErr) {
+        throw new Error(`Channel එකට Voice Note යැවීමට නොහැකි විය (Bot Admin ද බලන්න): ${sendErr.message}`);
+      }
 
       react("✔️");
       await reply(`✅ *Channel එකට සාර්ථකව Upload කරන ලදී!*\n\n🎵 *${title}*`);
     } catch (error) {
       console.error("CSong Final Error:", error);
       react("❌");
-      await reply(`⚠️ Error එකක් ආවා: ${error?.response?.data?.message || error.message || error}`);
+      await reply(`⚠️ Error එකක් ආවා: ${error?.message || error}`);
     }
   },
 };
