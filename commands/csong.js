@@ -3,34 +3,131 @@ import yts from "yt-search";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 import fs from "fs";
-import path from "path";
 import os from "os";
+import path from "path";
+import crypto from "crypto";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const CHAMA_API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const PREFIX = "[CSONG]";
+const CHAMA_API_KEY = process.env.CHAMA_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const MAX_AUDIO_SIZE = 60 * 1024 * 1024;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
-const ALLOWED_USERS = [
-  "15947733680169",
-  "15947733680169@lid",
-  "94719845166",
-  "94719845166@s.whatsapp.net"
-];
+function log(step, message) {
+  console.log(`${PREFIX} ${step}: ${message}`);
+}
 
-// Audio එකේ duration එක තත්පර වලින් ලබා ගැනීම
-function getAudioDuration(filePath) {
+function cleanup(file) {
+  try {
+    if (file && fs.existsSync(file)) {
+      fs.unlinkSync(file);
+    }
+  } catch (error) {
+    log("CLEANUP", error.message);
+  }
+}
+
+function getOwners(config) {
+  return [
+    "15947733680169",
+    "94719845166",
+    ...(Array.isArray(config?.OWNER_NUMBERS) ? config.OWNER_NUMBERS : [])
+  ].map((value) => String(value).replace(/\D/g, ""));
+}
+
+function isOwner({ msg, sender, config }) {
+  if (msg?.key?.fromMe) return true;
+
+  const identities = [
+    sender,
+    msg?.key?.participant,
+    msg?.key?.participantAlt,
+    msg?.key?.remoteJid,
+    msg?.key?.remoteJidAlt
+  ];
+
+  const owners = getOwners(config);
+
+  return identities.some((value) => {
+    if (!value) return false;
+    const number = String(value)
+      .split("@")[0]
+      .split(":")[0]
+      .replace(/\D/g, "");
+    return owners.includes(number);
+  });
+}
+
+// WhatsApp Channel Link එකෙන් Official 120363... JID එක ලබා ගැනීම
+async function getChannelJid(sock, input) {
+  const value = String(input || "").trim();
+
+  if (/^\d+@newsletter$/.test(value)) {
+    return value;
+  }
+
+  const match = value.match(/whatsapp\.com\/channel\/([A-Za-z0-9]{20,28})/i);
+  if (!match) {
+    throw new Error("වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න.");
+  }
+
+  const inviteCode = match[1];
+  log("CHANNEL", `Looking up ${inviteCode}`);
+
+  // 1. Baileys official metadata
+  if (typeof sock.newsletterMetadata === "function") {
+    try {
+      const metadata = await sock.newsletterMetadata("invite", inviteCode);
+      if (metadata?.id && String(metadata.id).endsWith("@newsletter")) {
+        log("CHANNEL", `Resolved via Baileys: ${metadata.id}`);
+        return metadata.id;
+      }
+    } catch (e) {
+      log("CHANNEL", `newsletterMetadata error: ${e?.message || e}`);
+    }
+  }
+
+  // 2. Web Scrape Backup (HTML Markup එකෙන් Real JID ගැනීම)
+  try {
+    const page = await axios.get(`https://whatsapp.com/channel/${inviteCode}`, {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+      timeout: 15000
+    });
+    const html = String(page.data);
+    const jidMatch =
+      html.match(/(120363\d+@newsletter)/i) ||
+      html.match(/newsletter_jid&quot;:&quot;(\d+)&quot;/i);
+
+    if (jidMatch) {
+      const realJid = jidMatch[1].includes("@newsletter")
+        ? jidMatch[1]
+        : `${jidMatch[1]}@newsletter`;
+      log("CHANNEL", `Resolved via Scrape: ${realJid}`);
+      return realJid;
+    }
+  } catch (err) {
+    log("CHANNEL", `Scrape error: ${err.message}`);
+  }
+
+  throw new Error("Channel එක හඳුනාගත නොහැකි විය. Bot එම Channel එකේ Admin ද සහ Link එක හරිදැයි බලන්න.");
+}
+
+function getAudioDuration(file) {
   return new Promise((resolve) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err || !metadata?.format?.duration) return resolve(180);
-      resolve(Math.round(metadata.format.duration));
+    ffmpeg.ffprobe(file, (error, metadata) => {
+      const duration = Number(metadata?.format?.duration);
+      if (error || !Number.isFinite(duration) || duration <= 0) {
+        return resolve(180);
+      }
+      resolve(Math.round(duration));
     });
   });
 }
 
-// WhatsApp Channel එකට Playable Voice Note (Opus PTT) බවට හරවන function එක
-function convertToOpusPtt(inputPath, outputPath) {
+function convertToOpus(input, output) {
   return new Promise((resolve, reject) => {
-    ffmpeg(inputPath)
+    ffmpeg(input)
       .noVideo()
       .audioCodec("libopus")
       .audioChannels(1)
@@ -38,244 +135,251 @@ function convertToOpusPtt(inputPath, outputPath) {
       .audioBitrate("64k")
       .format("ogg")
       .outputOptions([
-        "-avoid_negative_ts make_zero",
-        "-map_metadata -1"
+        "-avoid_negative_ts", "make_zero",
+        "-map_metadata", "-1"
       ])
-      .on("end", () => resolve(outputPath))
-      .on("error", (err) => reject(err))
-      .save(outputPath);
+      .on("end", () => {
+        if (!fs.existsSync(output) || fs.statSync(output).size < 1000) {
+          return reject(new Error("Opus audio file එක හිස්."));
+        }
+        resolve(output);
+      })
+      .on("error", reject)
+      .save(output);
   });
 }
 
-// Channel Invite Code එකෙන් නියම 120363... JID එක ලබා ගැනීම
-async function getChannelJid(sock, channelInput) {
-  let input = channelInput.trim();
-  if (input.endsWith("@newsletter")) return input;
-
-  const match = input.match(/channel\/([a-zA-Z0-9]{20,28})/i);
-  if (!match || !match[1]) {
-    throw new Error("වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න.");
-  }
-
-  const inviteCode = match[1];
-
-  // 1. Baileys official metadata lookup
-  try {
-    const meta = await sock.newsletterMetadata("invite", inviteCode);
-    if (meta?.id && String(meta.id).endsWith("@newsletter")) {
-      return meta.id;
+async function downloadBuffer(url, maxSize) {
+  const response = await axios.get(url, {
+    responseType: "arraybuffer",
+    timeout: 120000,
+    maxContentLength: maxSize,
+    maxBodyLength: maxSize,
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+      Accept: "*/*"
     }
-  } catch (err) {
-    console.warn("newsletterMetadata failed, trying scrape fallback...");
-  }
+  });
 
-  // 2. Web scrape fallback
-  try {
-    const page = await axios.get(`https://whatsapp.com/channel/${inviteCode}`, {
-      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-      timeout: 15000,
-    });
-    const html = String(page.data);
-    const m = html.match(/(120363\d+@newsletter)/i) || 
-              html.match(/newsletter_jid&quot;:&quot;(\d+)&quot;/i);
-    if (m) {
-      return m[1].includes("@newsletter") ? m[1] : `${m[1]}@newsletter`;
-    }
-  } catch (e) {
-    console.error("Scrape fallback failed:", e.message);
+  const buffer = Buffer.from(response.data);
+  if (!buffer.length || buffer.length > maxSize) {
+    throw new Error("Downloaded file එකේ size එක වැරදියි.");
   }
-
-  throw new Error("Channel එක හඳුනාගත නොහැකි විය. Bot එම Channel එකේ Admin ද බලන්න.");
+  return buffer;
 }
 
-// Chamindu API එකෙන් YouTube Audio එක ලබා ගැනීම
+// අලුත් Chamindu MP3 Endpoint එක හරහා Audio ලබා ගැනීම
 async function fetchYouTubeDownload(targetYoutubeUrl) {
+  // 1. New Chamindu MP3 Endpoint (320kbps)
   try {
-    const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=128k&format=mp3&api_key=${CHAMA_API_KEY}`;
-    const { data: res } = await axios.get(directUrl, { timeout: 45000 });
-    const dl = res?.download_url || res?.data?.download_url || res?.result?.download_url;
-    if (dl) {
-      return { 
-        downloadUrl: dl, 
-        title: res?.title || res?.data?.title || "", 
-        thumbnail: res?.thumbnail || res?.data?.thumbnail || "" 
+    log("DOWNLOAD", "Requesting new Chamindu MP3 API...");
+    const response = await axios.get("https://api.chamindu.site/api/v1/youtube/mp3", {
+      params: {
+        url: targetYoutubeUrl,
+        quality: "320kbps",
+        api_key: CHAMA_API_KEY
+      },
+      timeout: 60000
+    });
+
+    const data = response.data;
+    const downloadUrl =
+      data?.download_url ||
+      data?.data?.download_url ||
+      data?.result?.download_url ||
+      data?.downloadUrl ||
+      data?.url;
+
+    if (downloadUrl && /^https?:\/\//i.test(downloadUrl)) {
+      return {
+        downloadUrl,
+        title: data?.title || data?.data?.title || data?.result?.title || "",
+        thumbnail: data?.thumbnail || data?.data?.thumbnail || data?.result?.thumbnail || ""
       };
     }
   } catch (err) {
-    console.warn("Direct MP3 failed, trying MP4 format...");
+    log("DOWNLOAD", `Primary MP3 endpoint failed: ${err.message}`);
   }
 
+  // 2. Fallback: Chamindu Toolkit / Download Endpoint
   try {
-    const videoUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=360p&format=mp4&api_key=${CHAMA_API_KEY}`;
-    const { data: res2 } = await axios.get(videoUrl, { timeout: 45000 });
-    const dl2 = res2?.download_url || res2?.data?.download_url || res2?.result?.download_url;
-    if (dl2) {
-      return { 
-        downloadUrl: dl2, 
-        title: res2?.title || res2?.data?.title || "", 
-        thumbnail: res2?.thumbnail || res2?.data?.thumbnail || "" 
+    log("DOWNLOAD", "Trying Chamindu fallback download endpoint...");
+    const resFallback = await axios.get("https://api.chamindu.site/api/v1/youtube/download", {
+      params: {
+        url: targetYoutubeUrl,
+        quality: "128k",
+        format: "mp3",
+        api_key: CHAMA_API_KEY
+      },
+      timeout: 45000
+    });
+
+    const data2 = resFallback.data;
+    const dl2 =
+      data2?.download_url ||
+      data2?.data?.download_url ||
+      data2?.result?.download_url;
+
+    if (dl2 && /^https?:\/\//i.test(dl2)) {
+      return {
+        downloadUrl: dl2,
+        title: data2?.title || data2?.data?.title || "",
+        thumbnail: data2?.thumbnail || data2?.data?.thumbnail || ""
       };
     }
-  } catch (e) {
-    console.error("YouTube download error:", e.message);
+  } catch (err2) {
+    log("DOWNLOAD", `Fallback endpoint failed: ${err2.message}`);
   }
 
-  return null;
+  throw new Error("YouTube download API එකෙන් download link එකක් ලබා ගැනීමට නොහැකි විය.");
 }
 
 export default {
   name: "csong",
   aliases: ["channelsong", "cs"],
   category: "music",
-  description: "Send YouTube song as card and playable voice note to a channel",
+  description: "Send song poster and voice note to WhatsApp Channel",
 
   async execute({ sock, msg, from, args, sender, config }) {
-    // 1. Authorization (LID, fromMe, Developer Number)
-    const isFromMe = Boolean(msg.key?.fromMe);
-    const participant = msg.key?.participant || "";
-    const rawSender = String(sender || "");
-    const rawFrom = String(from || "");
+    let inputFile;
+    let outputFile;
 
-    const allIdentities = [rawSender, rawFrom, participant].join(" ");
-    const isAuthorized =
-      isFromMe ||
-      ALLOWED_USERS.some((target) => allIdentities.includes(target)) ||
-      (config?.OWNER_NUMBERS && config.OWNER_NUMBERS.some((num) => allIdentities.includes(num)));
-
-    if (!isAuthorized) {
-      return await sock.sendMessage(from, { 
-        text: "❌ *Access Denied:* මෙම command එක භාවිතා කළ හැක්කේ Bot Owner සහ Developer ට පමණි." 
-      }, { quoted: msg });
-    }
-
-    const fullText = (args || []).join(" ").trim();
-
-    if (!fullText.includes(",")) {
-      return await sock.sendMessage(from, { 
-        text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n\`.csong <Channel Link>, <Song Name>\`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbBtXBMICVfnpV20wl27, lelena_` 
-      }, { quoted: msg });
-    }
-
-    const commaIndex = fullText.indexOf(",");
-    const channelInput = fullText.slice(0, commaIndex).trim();
-    const songQuery = fullText.slice(commaIndex + 1).trim();
-
-    if (!channelInput || !songQuery) {
-      return await sock.sendMessage(from, { 
-        text: "❌ කරුණාකර Channel Link එක සහ Song Name එක ඇතුළත් කරන්න." 
-      }, { quoted: msg });
-    }
-
-    await sock.sendMessage(from, { text: "⏳ Processing song card & voice note for channel..." }, { quoted: msg });
-
-    const tempDir = os.tmpdir();
-    const tempInputFile = path.join(tempDir, `raw_${Date.now()}.bin`);
-    const tempOutputFile = path.join(tempDir, `vn_${Date.now()}.ogg`);
+    const reply = async (text) => {
+      try {
+        await sock.sendMessage(from, { text }, { quoted: msg });
+      } catch (error) {
+        log("REPLY", error.message);
+      }
+    };
 
     try {
-      // Channel JID එක ලබා ගැනීම
-      const targetChannelJid = await getChannelJid(sock, channelInput);
+      if (!isOwner({ msg, sender, config })) {
+        return await reply("❌ මේ command එක භාවිතා කිරීමට අවසර නැහැ (Bot Owner / Dev Only).");
+      }
 
-      let targetYoutubeUrl = songQuery;
-      let searchedTitle = songQuery;
-      let searchedThumbnail = "";
-      let searchedDuration = "03:45";
+      const fullText = (args || []).join(" ").trim();
+      const comma = fullText.indexOf(",");
 
-      const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
-      
-      if (!isYoutubeUrl) {
-        const searchResult = await yts(songQuery);
-        if (!searchResult?.videos?.length) {
-          return await sock.sendMessage(from, { text: "❌ YouTube හි අදාළ සින්දුව හමු නොවීය." }, { quoted: msg });
+      if (comma < 0) {
+        return await reply(
+          "🎵 *CSONG USAGE*\n\n" +
+          "`.csong Channel_Link, Song_Name`\n\n" +
+          "*උදාහරණය:*\n" +
+          "`.csong https://whatsapp.com/channel/0029VbBtXBMICVfnpV20wl27, lelena`"
+        );
+      }
+
+      const channelInput = fullText.slice(0, comma).trim();
+      const songQuery = fullText.slice(comma + 1).trim();
+
+      if (!channelInput || !songQuery) {
+        return await reply("❌ Channel link එක සහ Song name එක ඇතුළත් කරන්න.");
+      }
+
+      await reply(
+        "⏳ *HESHAN OFC MUSIC*\n\n" +
+        "🎵 Song එක සොයමින් පවතී...\n" +
+        "🖼️ Poster සහ Voice Note Channel එකට සූදානම් කරනවා."
+      );
+
+      // 1. Channel JID
+      const channelJid = await getChannelJid(sock, channelInput);
+
+      // 2. YouTube Search
+      let video;
+      if (/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery)) {
+        video = {
+          url: songQuery.startsWith("http") ? songQuery : `https://${songQuery}`,
+          title: songQuery,
+          thumbnail: "",
+          timestamp: "03:45"
+        };
+      } else {
+        const search = await yts(songQuery);
+        video = search?.videos?.[0];
+        if (!video?.url) {
+          throw new Error("YouTube හි සින්දුව හමු වුණේ නැහැ.");
         }
-        const video = searchResult.videos[0];
-        targetYoutubeUrl = video.url;
-        searchedTitle = video.title;
-        searchedThumbnail = video.thumbnail;
-        searchedDuration = video.timestamp || "03:45";
       }
 
-      const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
+      log("SEARCH", video.title || songQuery);
 
-      if (!ytData?.downloadUrl) {
-        return await sock.sendMessage(from, { text: "❌ YouTube Download Link එක ලබා ගැනීමට නොහැකි විය." }, { quoted: msg });
-      }
+      // 3. New API Call
+      const yt = await fetchYouTubeDownload(video.url);
+      const title = yt.title || video.title || songQuery;
+      const thumbnail = yt.thumbnail || video.thumbnail || "";
+      const durationStr = video.timestamp || "03:45";
 
-      const finalTitle = ytData.title || searchedTitle;
-      const finalThumbnail = ytData.thumbnail || searchedThumbnail;
-
-      // 1. Song Card Caption (ස්ක්‍රීන්ෂොට් එකේ ඇති නිවැරදි Format එක)
-      const songCardCaption = 
+      // 4. Send Poster Card to Channel
+      if (thumbnail) {
+        try {
+          const image = await downloadBuffer(thumbnail, MAX_IMAGE_SIZE);
+          const caption = 
 `│ 🎵⃝✨ H E S H A N   O F C   M U S I C
 
-❖ TITLE : ${finalTitle}
+❖ TITLE : ${title}
 
-01:23 ───🔘──────── ${searchedDuration}
+01:23 ───🔘──────── ${durationStr}
 ⇄     ◁   ❚❚   ▷     ↻
 
 ➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶
 
 │ 🕊️ HESHAN OFC : SONG HUB`;
 
-      // 2. Poster Card Image එක Channel එකට යැවීම
-      if (finalThumbnail) {
-        const thumbRes = await axios.get(finalThumbnail, { responseType: "arraybuffer", timeout: 20000 });
-        await sock.sendMessage(targetChannelJid, {
-          image: Buffer.from(thumbRes.data),
-          caption: songCardCaption
-        });
-      }
-
-      // 3. Audio File එක බාගත කිරීම
-      const fileResponse = await axios({
-        url: ytData.downloadUrl,
-        method: "GET",
-        responseType: "arraybuffer",
-        timeout: 120000,
-        headers: { 
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-          "Accept": "*/*"
+          await sock.sendMessage(channelJid, {
+            image,
+            caption
+          });
+          log("POSTER", "Card send completed");
+        } catch (error) {
+          log("POSTER ERROR", error.message);
         }
-      });
-
-      const mediaBuffer = Buffer.from(fileResponse.data);
-      if (mediaBuffer.length < 10000) {
-        return await sock.sendMessage(from, { text: "❌ බාගත වූ audio ගොනුව අසම්පූර්ණයි." }, { quoted: msg });
       }
 
-      fs.writeFileSync(tempInputFile, mediaBuffer);
+      // 5. Download Audio & Convert to Opus Waveform PTT
+      inputFile = path.join(os.tmpdir(), `csong_${crypto.randomUUID()}.bin`);
+      outputFile = path.join(os.tmpdir(), `csong_${crypto.randomUUID()}.ogg`);
 
-      // 4. FFmpeg මඟින් True WhatsApp Opus PTT එකට Convert කිරීම
-      await convertToOpusPtt(tempInputFile, tempOutputFile);
-      const audioSeconds = await getAudioDuration(tempOutputFile);
+      const audioBuffer = await downloadBuffer(yt.downloadUrl, MAX_AUDIO_SIZE);
+      fs.writeFileSync(inputFile, audioBuffer);
+      log("AUDIO", `Downloaded ${audioBuffer.length} bytes`);
 
-      // 5. Channel එකේ waveform bar එක ලස්සනට render වීමට random waveform data එකක් සෑදීම
+      await convertToOpus(inputFile, outputFile);
+      const durationSeconds = await getAudioDuration(outputFile);
+      const opusData = fs.readFileSync(outputFile);
+
+      // Channel එකේ waveform bar එක ලස්සනට render වීමට bars array එකක්
       const waveformBars = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         waveformBars[i] = Math.floor(Math.random() * 75) + 25;
       }
 
-      const opusAudioBuffer = fs.readFileSync(tempOutputFile);
-
-      // 6. Playable Voice Note (PTT Waveform) එක Channel එකට යැවීම
-      await sock.sendMessage(targetChannelJid, {
-        audio: opusAudioBuffer,
+      // 6. Send Voice Note to Channel
+      await sock.sendMessage(channelJid, {
+        audio: opusData,
         mimetype: "audio/ogg; codecs=opus",
         ptt: true,
-        seconds: audioSeconds,
+        seconds: durationSeconds,
         waveform: waveformBars
       });
+      log("AUDIO", "Voice Note send completed");
 
-      await sock.sendMessage(from, { 
-        text: `✅ *සාර්ථකයි!* Song Card එක සහ Voice Note එක Channel එකට Upload කරන ලදී.` 
-      }, { quoted: msg });
-
+      await reply(
+        "✅ *CSONG COMPLETED!*\n\n" +
+        `🎵 *Title:* ${title}\n` +
+        `⏱️ *Duration:* ${durationStr}\n\n` +
+        "🖼️ Song Poster සහ 🎤 Voice Note සාර්ථකව Channel එකට Upload කරන ලදී."
+      );
     } catch (error) {
-      console.error("[Csong Send Error]:", error);
-      await sock.sendMessage(from, { text: `❌ දෝෂයක් සිදු විය: ${error.message || error}` }, { quoted: msg });
+      log("FATAL", error.stack || error.message);
+      await reply(
+        "❌ *CSONG FAILED*\n\n" +
+        `${error.message || error}\n\n` +
+        "_කරුණාකර Bot අදාළ Channel එකේ Admin ද සහ Link එක නිවැරදිදැයි බලන්න._"
+      );
     } finally {
-      if (fs.existsSync(tempInputFile)) fs.unlinkSync(tempInputFile);
-      if (fs.existsSync(tempOutputFile)) fs.unlinkSync(tempOutputFile);
+      cleanup(inputFile);
+      cleanup(outputFile);
     }
   }
 };
