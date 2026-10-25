@@ -8,10 +8,7 @@ import os from "os";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-// Active Chamindu API Key
 const CHAMA_API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
-
-// Developer & Owner Numbers
 const DEVELOPER_NUMBER = "94719845166";
 
 function getDuration(filePath) {
@@ -54,7 +51,7 @@ async function resolveChannelJid(sock, channelInput) {
         const meta = await sock.newsletterMetadata("invite", inviteCode);
         if (meta?.id) return meta.id;
       } catch (e) {
-        console.error("Newsletter meta error:", e);
+        console.error("Newsletter metadata lookup failed:", e?.message || e);
       }
     }
     return `${inviteCode}@newsletter`;
@@ -75,7 +72,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
       };
     }
   } catch (err) {
-    console.warn("Direct MP3 fetch failed, trying MP4 format...");
+    console.warn("Direct MP3 fetch failed, trying MP4 format fallback...");
   }
 
   try {
@@ -90,7 +87,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
       };
     }
   } catch (e) {
-    console.error("YouTube API Error:", e.message);
+    console.error("YouTube download API error:", e?.message || e);
   }
 
   return null;
@@ -98,26 +95,29 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
 
 export default {
   name: "csong",
-  alias: ["channelsong", "cs"],
-  desc: "Send YouTube song as card and playable voice note to a channel",
+  aliases: ["channelsong", "cs"],
   category: "music",
-  run: async ({ sock, msg, jid, args, isOwner }) => {
-    // 1. Developer සහ Owner තහවුරු කිරීම
-    const sender = msg.key.participant || msg.key.remoteJid || "";
-    const cleanSender = sender.replace(/[^0-9]/g, "");
-    const isDev = cleanSender.includes(DEVELOPER_NUMBER);
+  description: "Send YouTube song as card and playable voice note to a channel",
+
+  async execute({ sock, msg, from, args, sender, config }) {
+    // 1. Developer සහ Owner පරීක්ෂාව
+    const botPhone = (sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+    const cleanSender = String(sender || "").split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+    
+    const isDev = cleanSender === DEVELOPER_NUMBER;
+    const isOwner = cleanSender === botPhone || (config?.OWNER_NUMBERS && config.OWNER_NUMBERS.includes(cleanSender));
 
     if (!isDev && !isOwner) {
-      return await sock.sendMessage(jid, { 
+      return await sock.sendMessage(from, { 
         text: "❌ *Access Denied:* මෙම command එක භාවිතා කළ හැක්කේ Bot Owner සහ Developer ට පමණි." 
       }, { quoted: msg });
     }
 
-    const fullText = (Array.isArray(args) ? args.join(" ") : String(args || "")).trim();
+    const fullText = (args || []).join(" ").trim();
 
-    // 2. Format එක පරීක්ෂා කිරීම: .csong link, song_name
+    // 2. Input Format පරීක්ෂාව (.csong channel_link, song_name)
     if (!fullText.includes(",")) {
-      return await sock.sendMessage(jid, { 
+      return await sock.sendMessage(from, { 
         text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n\`.csong <Channel Link>, <Song Name>\`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T, lelena_` 
       }, { quoted: msg });
     }
@@ -127,12 +127,12 @@ export default {
     const songQuery = fullText.slice(commaIndex + 1).trim();
 
     if (!channelInput || !songQuery) {
-      return await sock.sendMessage(jid, { 
+      return await sock.sendMessage(from, { 
         text: "❌ කරුණාකර Channel Link එක සහ Song Name එක කොමාවකින් වෙන් කර ඇතුළත් කරන්න." 
       }, { quoted: msg });
     }
 
-    await sock.sendMessage(jid, { text: "⏳ Processing song card & voice note for channel..." }, { quoted: msg });
+    await sock.sendMessage(from, { text: "⏳ Processing song card & voice note for channel..." }, { quoted: msg });
 
     const tempDir = os.tmpdir();
     const tempInputFile = path.join(tempDir, `raw_${Date.now()}.bin`);
@@ -151,7 +151,7 @@ export default {
       if (!isYoutubeUrl) {
         const searchResult = await yts(songQuery);
         if (!searchResult?.videos?.length) {
-          return await sock.sendMessage(jid, { text: "❌ YouTube හි අදාළ සින්දුව සොයාගත නොහැකි විය." }, { quoted: msg });
+          return await sock.sendMessage(from, { text: "❌ YouTube හි අදාළ සින්දුව සොයාගත නොහැකි විය." }, { quoted: msg });
         }
         const video = searchResult.videos[0];
         targetYoutubeUrl = video.url;
@@ -163,13 +163,13 @@ export default {
       const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
 
       if (!ytData?.downloadUrl) {
-        return await sock.sendMessage(jid, { text: "❌ YouTube Download Link එක ලබා ගැනීමට නොහැකි විය." }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ YouTube Download Link එක ලබා ගැනීමට නොහැකි විය. API Key හෝ Server තත්ත්වය පරීක්ෂා කරන්න." }, { quoted: msg });
       }
 
       const finalTitle = ytData.title || searchedTitle;
       const finalThumbnail = ytData.thumbnail || searchedThumbnail;
 
-      // 1. Song Card Image එක Channel එකට යැවීම
+      // Song Card Image Caption
       const songCardCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
@@ -182,6 +182,7 @@ export default {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
 
+      // 1. Song Card එක Channel එකට යැවීම
       if (finalThumbnail) {
         await sock.sendMessage(targetChannelJid, {
           image: { url: finalThumbnail },
@@ -189,7 +190,7 @@ export default {
         });
       }
 
-      // 2. Download Media Buffer
+      // 2. Media Download කිරීම
       const fileResponse = await axios({
         url: ytData.downloadUrl,
         method: "GET",
@@ -204,16 +205,16 @@ export default {
       const mediaBuffer = Buffer.from(fileResponse.data);
 
       if (mediaBuffer.length < 10000) {
-        return await sock.sendMessage(jid, { text: "❌ බාගත වූ audio file එක අසම්පූර්ණයි. නැවත උත්සාහ කරන්න." }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ බාගත වූ audio file එක අසම්පූර්ණයි. නැවත උත්සාහ කරන්න." }, { quoted: msg });
       }
 
       fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // 3. Convert to WhatsApp Opus PTT
+      // 3. Opus PTT එකට convert කිරීම
       await convertToOpus(tempInputFile, tempOutputFile);
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // 4. Generate Waveform Bars
+      // 4. Waveform Bars හැදීම
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
@@ -230,13 +231,13 @@ export default {
         waveform: dummyWaveform
       });
 
-      await sock.sendMessage(jid, { 
+      await sock.sendMessage(from, { 
         text: `✅ *සාර්ථකයි!* Song Card එක සහ Voice Note එක Channel එකට Upload කරන ලදී.` 
       }, { quoted: msg });
 
     } catch (error) {
-      console.error("Csong Error:", error);
-      await sock.sendMessage(jid, { text: `❌ දෝෂයක් සිදු විය: ${error.message}` }, { quoted: msg });
+      console.error("[Csong Execution Error]:", error);
+      await sock.sendMessage(from, { text: `❌ දෝෂයක් සිදු විය: ${error.message || error}` }, { quoted: msg });
     } finally {
       if (fs.existsSync(tempInputFile)) fs.unlinkSync(tempInputFile);
       if (fs.existsSync(tempOutputFile)) fs.unlinkSync(tempOutputFile);
