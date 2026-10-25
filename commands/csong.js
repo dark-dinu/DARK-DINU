@@ -5,11 +5,10 @@ export default {
   name: "csong",
   aliases: ["channelsong", "cplay"],
   category: "download",
-  description: "Send clean song card and voice note to any WhatsApp channel",
+  description: "Send song card and voice note to WhatsApp channel",
 
   async execute({ sock, msg, from, args }) {
     try {
-      // 1. Processing Reaction
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
       const fullText = args ? (Array.isArray(args) ? args.join(" ") : args) : "";
@@ -17,34 +16,29 @@ export default {
       if (!fullText || !fullText.includes(",")) {
         return await sock.sendMessage(
           from,
-          { text: "ℹ️ *භාවිතා කරන ආකාරය:*\n`.csong <channel_link>, <song_name>`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V, lelena_" },
+          { text: "ℹ️ *භාවිතය:* `.csong channel_link, song_name`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAQYhXDZ4Lfo9K5gh1V, lelena_" },
           { quoted: msg }
         );
       }
 
-      // Link එක සහ Song name එක වෙන් කර ගැනීම
       const commaIndex = fullText.indexOf(",");
-      const rawChannelLink = fullText.slice(0, commaIndex).trim();
+      const rawTarget = fullText.slice(0, commaIndex).trim();
       const songQuery = fullText.slice(commaIndex + 1).trim();
-
-      if (!rawChannelLink || !songQuery) {
-        return await sock.sendMessage(
-          from,
-          { text: "⚠️ කරුණාකර Channel Link එක සහ Song Name එක කොමාවකින් වෙන් කර ඇතුළත් කරන්න." },
-          { quoted: msg }
-        );
-      }
 
       let channelJid = "";
 
-      // කෙලින්ම JID එකක් දුන්නොත්
-      if (rawChannelLink.endsWith("@newsletter")) {
-        channelJid = rawChannelLink;
+      // 1. කෙලින්ම JID එකක් දැම්මොත්
+      if (rawTarget.endsWith("@newsletter")) {
+        channelJid = rawTarget;
       } else {
-        // ලින්ක් එකේ අගට /430 හෝ වෙන මොනවා තිබ්බත් නියම 22-char invite code එක (0029V...) පමණක් හරියටම වෙන් කර ගැනීම
-        const codeMatch = rawChannelLink.match(/channel\/([a-zA-Z0-9]{20,24})/i);
-        
-        if (!codeMatch || !codeMatch[1]) {
+        // 2. Link එකෙන් Invite code එක පමණක් Clean කර ගැනීම
+        const cleanCode = rawTarget
+          .replace(/https?:\/\/(www\.)?whatsapp\.com\/channel\//i, "")
+          .split("/")[0]
+          .split("?")[0]
+          .trim();
+
+        if (!cleanCode || cleanCode.length < 15) {
           return await sock.sendMessage(
             from,
             { text: "❌ වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න." },
@@ -52,43 +46,55 @@ export default {
           );
         }
 
-        const inviteCode = codeMatch[1];
-
         try {
-          const metadata = await sock.newsletterMetadata("invite", inviteCode);
-          if (!metadata?.id) throw new Error("Metadata ID not found");
-          channelJid = metadata.id;
-        } catch (err) {
-          console.error("Newsletter Fetch Error:", err);
-          return await sock.sendMessage(
-            from,
-            { text: "❌ Channel තොරතුරු ලබාගැනීමට නොහැකි විය!\n\nකාරුණිකව පරීක්ෂා කරන්න:\n1. Bot run වන WhatsApp අංකය අදාළ Channel එකේ *Admin* කෙනෙක්ද?\n2. Channel link එක නිවැරදිද?" },
-            { quoted: msg }
-          );
+          // Baileys official newsletter fetch
+          const res = await sock.newsletterMetadata("invite", cleanCode);
+          channelJid = res?.id;
+        } catch (e) {
+          // Alternative fallback: JID එක generate කර බැලීම
+          console.error("Invite metadata error:", e);
+        }
+
+        // Invite API එක block වුණොත් Web preview එකෙන් metadata සොයාගැනීම (Bypass)
+        if (!channelJid) {
+          try {
+            const pageRes = await axios.get(`https://whatsapp.com/channel/${cleanCode}`, {
+              headers: { "User-Agent": "Mozilla/5.0" }
+            });
+            const jidMatch = pageRes.data.match(/newsletter_jid&quot;:&quot;(120363[0-9]+@newsletter)&quot;/i) ||
+                             pageRes.data.match(/"(120363[0-9]+@newsletter)"/i);
+            if (jidMatch && jidMatch[1]) {
+              channelJid = jidMatch[1];
+            }
+          } catch (scrapeErr) {
+            console.error("Scrape fallback failed:", scrapeErr);
+          }
         }
       }
 
-      // 2. YouTube Search
+      if (!channelJid) {
+        return await sock.sendMessage(
+          from,
+          { text: "❌ Channel එක සොයාගත නොහැකි විය. කරුණාකර Bot එම Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න." },
+          { quoted: msg }
+        );
+      }
+
+      // 3. YouTube සෙවීම
       const searchResult = await ytSearch(songQuery);
       const video = searchResult?.videos?.[0];
 
       if (!video) {
         return await sock.sendMessage(
           from,
-          { text: "❌ අදාළ නමින් සින්දුවක් සොයා ගැනීමට නොහැකි විය." },
+          { text: "❌ අදාළ නමින් සින්දුවක් හමු නොවීය." },
           { quoted: msg }
         );
       }
 
-      const targetUrl = video.url;
-      let title = video.title;
-      let artist = video.author?.name || "Official Track";
-      let duration = video.timestamp || "--:--";
-      let thumbnail = video.thumbnail;
-
-      // 3. Chamindu API එකෙන් Audio Download URL එක ලබා ගැනීම
+      // 4. Chamindu API එකෙන් Download URL ගැනීම
       const apiKey = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
-      const apiUrl = `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(targetUrl)}&api_key=${apiKey}`;
+      const apiUrl = `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(video.url)}&api_key=${apiKey}`;
 
       const response = await axios.get(apiUrl, { timeout: 45000 });
       const apiData = response.data?.result || response.data?.data || response.data;
@@ -103,17 +109,17 @@ export default {
       if (!audioUrl) {
         return await sock.sendMessage(
           from,
-          { text: "❌ සින්දුවේ Audio එක Download කර ගැනීමට නොහැකි විය." },
+          { text: "❌ සින්දුවේ Audio එක ලබා ගැනීමට නොහැකි විය." },
           { quoted: msg }
         );
       }
 
-      if (apiData?.title) title = apiData.title;
-      if (apiData?.author?.name || apiData?.author) artist = apiData.author?.name || apiData.author;
-      if (apiData?.duration) duration = apiData.duration;
-      if (apiData?.thumbnail) thumbnail = apiData.thumbnail;
+      const title = apiData?.title || video.title;
+      const artist = apiData?.author?.name || video.author?.name || "Official Track";
+      const duration = apiData?.duration || video.timestamp || "--:--";
+      const thumbnail = apiData?.thumbnail || video.thumbnail;
 
-      // 4. Clean Minimalist Song Card (No box borders)
+      // 5. Clean Card එක Channel එකට යැවීම
       const cleanCard = 
 `🎶  *${title}*
 
@@ -123,7 +129,6 @@ export default {
 
 🎧  _Listen to the voice note below_`;
 
-      // 5. පියවර 1: Poster Card එක Channel එකට යැවීම
       if (thumbnail) {
         await sock.sendMessage(channelJid, {
           image: { url: thumbnail },
@@ -133,9 +138,9 @@ export default {
         await sock.sendMessage(channelJid, { text: cleanCard });
       }
 
-      // 6. පියවර 2: Audio Buffer එකක් විදියට Voice Note (PTT) එකක් කර Channel එකට යැවීම
-      const audioBufferRes = await axios.get(audioUrl, { responseType: "arraybuffer", timeout: 60000 });
-      const audioBuffer = Buffer.from(audioBufferRes.data);
+      // 6. Voice Note එක (PTT) Channel එකට යැවීම
+      const audioRes = await axios.get(audioUrl, { responseType: "arraybuffer", timeout: 60000 });
+      const audioBuffer = Buffer.from(audioRes.data);
 
       await sock.sendMessage(channelJid, {
         audio: audioBuffer,
@@ -143,20 +148,19 @@ export default {
         ptt: true
       });
 
-      // User ට Success Reaction සහ Confirmation යැවීම
       sock.sendMessage(from, { react: { text: "✔️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `✅ *Uploaded to Channel!*\n\n🎵 *${title}*` },
+        { text: `✅ *Channel එකට සාර්ථකව Upload කරන ලදී!*\n\n🎵 *${title}*` },
         { quoted: msg }
       );
 
     } catch (error) {
-      console.error("CSong Command Error:", error);
+      console.error("CSong Error:", error);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `⚠️ දෝෂයක් සිදු විය: ${error?.response?.data?.message || error.message || error}` },
+        { text: `⚠️ Error එකක් ආවා: ${error?.response?.data?.message || error.message || error}` },
         { quoted: msg }
       );
     }
