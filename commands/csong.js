@@ -5,7 +5,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-const CHAMINDU_API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
 const MAX_SECONDS = 15 * 60; // 15 minutes limit
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -29,11 +29,11 @@ function findAudioUrl(data) {
 
   const score = (f) => {
     let s = 0;
-    if (/audio|mp3|m4a|aac|opus/.test(f.key)) s += 5;
-    if (/download|dl/.test(f.key)) s += 3;
-    if (/\.(mp3|m4a|aac|opus|ogg)(\?|$)/i.test(f.url)) s += 4;
-    if (/thumb|image|avatar|poster|cover|channel/.test(f.key)) s -= 10;
-    if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(f.url)) s -= 10;
+    if (/audio|mp3|m4a|aac|opus/.test(f.key)) s += 6;
+    if (/download|dl|link/.test(f.key)) s += 3;
+    if (/\.(mp3|m4a|aac|opus|ogg)(\?|$)/i.test(f.url)) s += 5;
+    if (/thumb|image|avatar|poster|cover|channel|photo/.test(f.key)) s -= 12;
+    if (/\.(jpg|jpeg|png|webp)(\?|$)/i.test(f.url)) s -= 12;
     if (/video|mp4/.test(f.key) && !/audio/.test(f.key)) s -= 4;
     return s;
   };
@@ -42,97 +42,166 @@ function findAudioUrl(data) {
   return found[0] && score(found[0]) > 0 ? found[0].url : null;
 }
 
-// Multi-API Fetch Engine (Chamindu -> Vreden -> DavidCyril)
-async function fetchSongData(videoUrl, videoTitle) {
-  // 1. Chamindu API
+// Multi-API Fetch Engine (Chamindu -> Vreden -> David Cyril)
+async function fetchSongDetails(videoUrl, videoTitle) {
+  // 1. Chamindu Toolkit API
   try {
     const res = await axios.get(
-      `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(videoUrl)}&api_key=${CHAMINDU_API_KEY}`,
+      `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(videoUrl)}&api_key=${API_KEY}`,
       { timeout: 35000 }
     );
-    const audio = findAudioUrl(res.data?.result || res.data?.data || res.data);
-    if (audio) {
-      const d = res.data?.result || res.data?.data || res.data;
+    const body = res.data?.result || res.data?.data || res.data;
+    const directUrl = findAudioUrl(body);
+    if (directUrl) {
       return {
-        audioUrl: audio,
-        title: d?.title || videoTitle,
-        artist: d?.author?.name || d?.author || "YouTube Track",
-        thumbnail: d?.thumbnail || null,
-        duration: d?.duration || null
+        audioUrl: directUrl,
+        title: body?.title || videoTitle,
+        artist: body?.author?.name || body?.author || "YouTube Artist",
+        thumbnail: typeof body?.thumbnail === "string" ? body.thumbnail : null,
+        duration: body?.duration || null
       };
     }
   } catch (e) {
-    console.error("Chamindu API error:", e?.message || e);
+    console.error("Chamindu API primary failed:", e?.response?.data || e.message);
   }
 
-  // 2. Fallback: Vreden API
+  // 2. Backup API 1: Vreden Play API
   try {
-    const res = await axios.get(`https://api.vreden.my.id/api/ytplaymp3?query=${encodeURIComponent(videoTitle)}`, { timeout: 35000 });
-    const r = res.data?.result;
-    if (r?.download?.url) {
+    const res = await axios.get(`https://api.vreden.my.id/api/ytplaymp3?query=${encodeURIComponent(videoTitle)}`, { timeout: 30000 });
+    const result = res.data?.result;
+    if (result?.download?.url) {
       return {
-        audioUrl: r.download.url,
-        title: r.title || videoTitle,
-        artist: r.author?.name || "YouTube Track",
-        thumbnail: r.thumbnail || null,
-        duration: r.duration || null
+        audioUrl: result.download.url,
+        title: result.title || videoTitle,
+        artist: result.author?.name || "YouTube Artist",
+        thumbnail: result.thumbnail || null,
+        duration: result.duration || null
       };
     }
   } catch (e) {
-    console.error("Vreden API error:", e?.message || e);
+    console.error("Vreden backup failed:", e?.message || e);
   }
 
-  // 3. Fallback: David Cyril API
+  // 3. Backup API 2: David Cyril API
   try {
-    const res = await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`, { timeout: 35000 });
-    const r = res.data?.result;
-    if (r?.download_url) {
+    const res = await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`, { timeout: 30000 });
+    const result = res.data?.result;
+    if (result?.download_url) {
       return {
-        audioUrl: r.download_url,
-        title: r.title || videoTitle,
-        artist: "YouTube Track",
+        audioUrl: result.download_url,
+        title: result.title || videoTitle,
+        artist: "YouTube Artist",
         thumbnail: null,
         duration: null
       };
     }
   } catch (e) {
-    console.error("David Cyril API error:", e?.message || e);
+    console.error("David Cyril backup failed:", e?.message || e);
   }
 
   return null;
 }
 
-async function getChannelJid(sock, rawTarget) {
-  if (rawTarget.endsWith("@newsletter")) return rawTarget;
+const jidCache = new Map();
 
-  const code = rawTarget
-    .replace(/https?:\/\/(www\.)?whatsapp\.com\/channel\//i, "")
-    .split("/")[0]
-    .split("?")[0]
-    .trim();
+function extractCode(raw) {
+  const m = String(raw).match(/channel\/([A-Za-z0-9_-]{15,})/i);
+  if (m) return m[1].split(/[/?#]/)[0];
+  const plain = String(raw).trim().split(/[/?\s#]/)[0];
+  return plain.length >= 15 ? plain : null;
+}
 
-  if (!code || code.length < 15) return "INVALID";
+function findNewsletterId(obj) {
+  let out = null;
+  const walk = (n) => {
+    if (out || !n) return;
+    if (typeof n === "string") {
+      const m = n.match(/(\d{15,}@newsletter)/);
+      if (m) out = m[1];
+      return;
+    }
+    if (typeof n === "object") Object.values(n).forEach(walk);
+  };
+  walk(obj);
+  return out;
+}
 
-  // 1. Baileys official
-  try {
-    const res = await sock.newsletterMetadata("invite", code);
-    if (res?.id) return res.id;
-  } catch (e) {
-    console.error("newsletterMetadata error:", e?.message || e);
+async function rawInviteQuery(sock, code) {
+  const queryIds = ["6563316087068696", "9926858900719341", "6620195908089573"];
+  let lastErr;
+  for (const id of queryIds) {
+    try {
+      const payload = {
+        variables: {
+          input: { key: code, type: "INVITE", view_role: "GUEST" },
+          fetch_viewer_metadata: true,
+          fetch_full_image: true,
+          fetch_creation_time: true,
+        },
+      };
+      const result = await sock.query({
+        tag: "iq",
+        attrs: { to: "s.whatsapp.net", type: "get", xmlns: "w:mex" },
+        content: [{ tag: "query", attrs: { query_id: id }, content: Buffer.from(JSON.stringify(payload)) }],
+      });
+      const child = (result?.content || []).find((c) => c.tag === "result");
+      const json = JSON.parse(child.content.toString());
+      const jid = findNewsletterId(json);
+      if (jid) return jid;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error("raw query: JID not found");
+}
+
+async function getChannelJid(sock, rawTarget, errors) {
+  if (/@newsletter$/.test(rawTarget)) return rawTarget;
+
+  const code = extractCode(rawTarget);
+  if (!code) return "INVALID";
+  if (jidCache.has(code)) return jidCache.get(code);
+
+  const done = (jid) => { jidCache.set(code, jid); return jid; };
+
+  // 1. Baileys newsletterMetadata
+  if (typeof sock.newsletterMetadata === "function") {
+    for (const call of [
+      () => sock.newsletterMetadata("invite", code),
+      () => sock.newsletterMetadata("INVITE", code),
+      () => sock.newsletterMetadata(code),
+    ]) {
+      try {
+        const res = await call();
+        const jid = res?.id || findNewsletterId(res);
+        if (jid) return done(jid);
+      } catch (e) {
+        errors.push(`metadata: ${e?.message || e}`);
+      }
+    }
+  } else {
+    errors.push("sock.newsletterMetadata function not found");
   }
 
-  // 2. Web page scrape fallback
+  // 2. Raw WMex query fallback
+  try {
+    const jid = await rawInviteQuery(sock, code);
+    if (jid) return done(jid);
+  } catch (e) {
+    errors.push(`raw: ${e?.message || e}`);
+  }
+
+  // 3. Web HTML Scraping fallback
   try {
     const page = await axios.get(`https://whatsapp.com/channel/${code}`, {
-      headers: { "User-Agent": "Mozilla/5.0" },
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
       timeout: 15000,
     });
-    const m =
-      String(page.data).match(/(120363\d+@newsletter)/i) ||
-      String(page.data).match(/newsletter_jid&quot;:&quot;(\d+)&quot;/i);
-    if (m) return m[1].includes("@") ? m[1] : `${m[1]}@newsletter`;
+    const jid = findNewsletterId(String(page.data));
+    if (jid) return done(jid);
+    errors.push("web: JID not found in markup");
   } catch (e) {
-    console.error("Scrape fallback failed:", e?.message || e);
+    errors.push(`web: ${e?.message || e}`);
   }
 
   return null;
@@ -171,13 +240,13 @@ async function download(url, timeout = 90000) {
   const res = await axios.get(url, {
     responseType: "arraybuffer",
     timeout,
-    maxContentLength: 70 * 1024 * 1024,
-    headers: { "User-Agent": "Mozilla/5.0" },
+    maxContentLength: 80 * 1024 * 1024,
+    headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
   });
   return Buffer.from(res.data);
 }
 
-/* ---------- Command ---------- */
+/* ---------- Command Implementation ---------- */
 
 export default {
   name: "csong",
@@ -207,10 +276,13 @@ export default {
       if (!songQuery) return await reply("❌ සින්දුවේ නම ඇතුළත් කරන්න.");
 
       // 1. Channel JID සොයා ගැනීම
-      const channelJid = await getChannelJid(sock, rawTarget);
+      const lookupErrors = [];
+      const channelJid = await getChannelJid(sock, rawTarget, lookupErrors);
       if (channelJid === "INVALID") return await reply("❌ වලංගු WhatsApp Channel Link එකක් ඇතුළත් කරන්න.");
       if (!channelJid) {
-        return await reply("❌ Channel එක සොයාගත නොහැකි විය. Link එක නිවැරදිද සහ Bot එම Channel එකේ Admin කෙනෙක්දැයි බලන්න.");
+        return await reply(
+          "❌ Channel එක හඳුනාගත නොහැකි විය.\n\n_හේතුව:_ Bot එම Channel එකේ Admin බව සහ Link එක නිවැරදි බව පරීක්ෂා කරන්න."
+        );
       }
 
       // 2. YouTube Search
@@ -218,32 +290,31 @@ export default {
       const video = searchResult?.videos?.[0];
       if (!video) return await reply("❌ අදාළ නමින් සින්දුවක් හමු නොවීය.");
       if (video.seconds && video.seconds > MAX_SECONDS) {
-        return await reply("❌ වීඩියෝව විනාඩි 15 ට වඩා දිග වැඩියි.");
+        return await reply("❌ මේ වීඩියෝව විනාඩි 15 ට වඩා දිග වැඩියි.");
       }
 
-      // 3. Multi-API Engine එක හරහා Audio ලබා ගැනීම
-      const songInfo = await fetchSongData(video.url, video.title);
-
-      if (!songInfo || !songInfo.audioUrl) {
-        return await reply("❌ මේ මොහොතේ සින්දුවේ Audio එක Download කර ගැනීමට නොහැකි විය. පසුව උත්සාහ කරන්න.");
+      // 3. API Engine එකෙන් Song Data & Audio URL ලබාගැනීම
+      const songData = await fetchSongDetails(video.url, video.title);
+      if (!songData || !songData.audioUrl) {
+        return await reply("❌ මේ මොහොතේ සින්දුවේ Audio එක ලබා ගැනීමට නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න.");
       }
 
-      const title = songInfo.title || video.title;
-      const artist = songInfo.artist || video.author?.name || "Official Track";
-      const duration = songInfo.duration || video.timestamp || "--:--";
-      const thumbnail = songInfo.thumbnail || video.thumbnail;
+      const title = songData.title || video.title;
+      const artist = songData.artist || video.author?.name || "Official Track";
+      const duration = songData.duration || video.timestamp || "--:--";
+      const thumbnail = songData.thumbnail || video.thumbnail;
 
-      // 4. Audio Download + Voice Note (Opus) Convert
-      let audioBuffer = await download(songInfo.audioUrl);
+      // 4. Audio Download කර Voice Note (Opus) එකට Convert කිරීම
+      let audioBuffer = await download(songData.audioUrl);
       let mimetype = "audio/ogg; codecs=opus";
       try {
         audioBuffer = await toOpus(audioBuffer);
       } catch (e) {
-        console.error("ffmpeg convert failed, fallback to original m4a/mp3:", e.message);
+        console.error("FFmpeg not available or failed, falling back to mp4:", e.message);
         mimetype = "audio/mp4";
       }
 
-      // 5. Clean Poster Card -> Channel
+      // 5. Clean Poster Card එක Channel එකට යැවීම
       const cleanCard =
 `🎶  *${title}*
 
@@ -263,11 +334,13 @@ export default {
           console.error("Thumbnail send failed:", e?.message || e);
         }
       }
-      if (!sentCard) await sock.sendMessage(channelJid, { text: cleanCard });
+      if (!sentCard) {
+        await sock.sendMessage(channelJid, { text: cleanCard });
+      }
 
-      await sleep(800);
+      await sleep(1000);
 
-      // 6. Voice note (PTT) -> Channel
+      // 6. Voice note (PTT Waveform) Channel එකට යැවීම
       await sock.sendMessage(channelJid, {
         audio: audioBuffer,
         mimetype,
@@ -277,7 +350,7 @@ export default {
       react("✔️");
       await reply(`✅ *Channel එකට සාර්ථකව Upload කරන ලදී!*\n\n🎵 *${title}*`);
     } catch (error) {
-      console.error("CSong Error:", error);
+      console.error("CSong Final Error:", error);
       react("❌");
       await reply(`⚠️ Error එකක් ආවා: ${error?.response?.data?.message || error.message || error}`);
     }
