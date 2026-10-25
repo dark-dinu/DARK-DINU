@@ -1,13 +1,6 @@
 import axios from 'axios';
 import yts from 'yt-search';
-import { exec } from 'child_process';
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { delay } from '@whiskeysockets/baileys';
-
-const ffmpegPath = ffmpegInstaller?.path || 'ffmpeg';
 
 // Default WhatsApp Channel Link
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
@@ -15,50 +8,8 @@ const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
 // Chamindu Active API Key
 const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-function safeUnlink(filePath) {
-  try {
-    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  } catch (_) {}
-}
-
-// ── Ultra-Fast Low CPU Opus PTT Converter ──
-function convertToVoice(inputBuffer) {
-  return new Promise((resolve) => {
-    const tempId = `${Date.now()}_${(Math.random() * 1e9) | 0}`;
-    const tempIn = path.join(os.tmpdir(), `in_${tempId}.bin`);
-    const tempOut = path.join(os.tmpdir(), `vn_${tempId}.ogg`);
-
-    fs.writeFile(tempIn, inputBuffer, (err) => {
-      if (err) return resolve(inputBuffer);
-
-      // WhatsApp native voice note parameters: mono, 48kHz, 64k bitrate
-      const cmd = `"${ffmpegPath}" -y -i "${tempIn}" -vn -c:a libopus -b:a 64k -ar 48000 -ac 1 -f ogg "${tempOut}"`;
-
-      exec(cmd, { timeout: 30000 }, (execErr) => {
-        safeUnlink(tempIn);
-        if (execErr) return resolve(inputBuffer);
-
-        fs.readFile(tempOut, (readErr, outBuf) => {
-          safeUnlink(tempOut);
-          if (readErr || !outBuf) return resolve(inputBuffer);
-          resolve(outBuf);
-        });
-      });
-    });
-  });
-}
-
-// ── Voice Waveform Bars ──
-function getFastWaveform() {
-  const bars = new Uint8Array(64);
-  for (let i = 0; i < 64; i++) {
-    bars[i] = ((Math.random() * 65) | 0) + 15;
-  }
-  return bars;
-}
-
-// ── Fast Channel JID Resolver ──
-async function getChannelJid(sock, channelInput) {
+// Fast Channel JID Resolver
+async function resolveChannelJid(sock, channelInput) {
   let link = (channelInput || '').trim();
   if (link.endsWith('@newsletter')) return link;
 
@@ -77,7 +28,7 @@ async function getChannelJid(sock, channelInput) {
   return link;
 }
 
-// ── Chamindu API Stream Resolver ──
+// Chamindu Stream Resolver
 async function getDownloadLink(youtubeUrl) {
   const enc = encodeURIComponent(youtubeUrl);
   const endpoints = [
@@ -112,7 +63,7 @@ export default {
   name: 'csong',
   aliases: ['cplay', 'channelsong'],
   category: 'channel',
-  description: 'Send song card and voice note (PTT) to WhatsApp Channel',
+  description: 'Send song card and playable audio directly to WhatsApp Channel',
 
   async execute({ sock, msg, from, args }) {
     const fullText = (args || []).join(' ').trim();
@@ -146,8 +97,10 @@ export default {
     sock.sendMessage(from, { react: { text: '⏳', key: msg.key } }).catch(() => {});
 
     try {
-      const channelJid = await getChannelJid(sock, channelLink);
+      // 1. Channel JID එක ලබා ගැනීම
+      const channelJid = await resolveChannelJid(sock, channelLink);
 
+      // 2. YouTube Search
       let videoUrl = songQuery;
       let title = songQuery;
       let thumbnail = '';
@@ -159,7 +112,7 @@ export default {
         const search = await yts(songQuery);
         if (!search?.videos?.length) {
           sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-          return await sock.sendMessage(from, { text: '❌ සින්දුව සොයාගත නොහැකි විය.' }, { quoted: msg });
+          return await sock.sendMessage(from, { text: '❌ සින්දුව YouTube හි සොයාගත නොහැකි විය.' }, { quoted: msg });
         }
         const vid = search.videos[0];
         videoUrl = vid.url;
@@ -168,7 +121,7 @@ export default {
         duration = vid.timestamp || '03:45';
       }
 
-      // API Stream Resolver
+      // 3. API එකෙන් Download URL එක ලබා ගැනීම
       const apiResult = await getDownloadLink(videoUrl);
       if (!apiResult?.downloadUrl) {
         sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
@@ -178,7 +131,7 @@ export default {
       const finalTitle = apiResult.title || title;
       const finalThumb = apiResult.thumbnail || thumbnail;
 
-      // 1. Post Image Card to Channel
+      // 4. Channel Image Card එක Post කිරීම
       const songCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
@@ -200,45 +153,30 @@ export default {
         await sock.sendMessage(channelJid, { text: songCaption });
       }
 
-      // 2. Download Raw Audio Stream
-      const audioRes = await axios.get(apiResult.downloadUrl, {
-        responseType: 'arraybuffer',
-        timeout: 40000,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
+      await delay(1500);
 
-      const rawBuffer = Buffer.from(audioRes.data);
-      if (rawBuffer.length < 5000) {
-        throw new Error('Downloaded audio buffer is too small');
-      }
-
-      // 3. Fast OGG Opus Voice Conversion
-      const voiceBuffer = await convertToVoice(rawBuffer);
-
-      await delay(1200);
-
-      // 4. Send as Native WhatsApp Voice Note (PTT)
+      // 5. Channel එකට Audio එක යැවීම (Playable Audio Stream)
+      // FFmpeg නැති නිසා RAM එක 512MB ඉක්මවා freeze වෙන්නේ නෑ
       await sock.sendMessage(channelJid, {
-        audio: voiceBuffer,
-        mimetype: 'audio/ogg; codecs=opus',
-        ptt: true,
-        waveform: getFastWaveform()
+        audio: { url: apiResult.downloadUrl },
+        mimetype: 'audio/mpeg',
+        fileName: `${finalTitle.replace(/[^a-zA-Z0-9 ]/g, '')}.mp3`
       });
 
-      // 5. Done
+      // 6. සාර්ථක බව දැනුම් දීම
       sock.sendMessage(from, { react: { text: '✔️', key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: `✅ *"${finalTitle}"*\nSong card එක සහ Voice Note එක Channel එකට සාර්ථකව Post කරන ලදී! 🎙️🔥` },
+        { text: `✅ *"${finalTitle}"*\nChannel එකට Song Card එක සහ Audio එක සාර්ථකව Post කරන ලදී! 🎶✨` },
         { quoted: msg }
       );
 
     } catch (err) {
-      console.error('[CSONG ERR]:', err.message);
+      console.error('[CSONG ERROR]:', err.message);
       sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
-        { text: `❌ දෝෂයක් සිදුවිය: ${err.message || 'Failed to dispatch voice'}` },
+        { text: `❌ දෝෂයක් සිදුවිය: ${err.message || 'Failed to dispatch'}` },
         { quoted: msg }
       );
     }
