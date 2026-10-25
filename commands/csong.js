@@ -10,11 +10,11 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const CHAMA_API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
 
-// Developer & Owner Identifiers (Phone Numbers, LID, & Custom IDs)
-const DEVELOPER_IDS = [
-  "94719845166",
+// Allowed identifiers (LID, Phone number, JIDs)
+const ALLOWED_USERS = [
   "15947733680169",
   "15947733680169@lid",
+  "94719845166",
   "94719845166@s.whatsapp.net"
 ];
 
@@ -50,7 +50,7 @@ async function resolveChannelJid(sock, channelInput) {
   let input = channelInput.trim();
   if (input.endsWith("@newsletter")) return input;
 
-  const match = input.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]{20,28})/i);
+  const match = input.match(/channel\/([a-zA-Z0-9]{20,28})/i);
   if (match && match[1]) {
     const inviteCode = match[1];
     if (typeof sock.newsletterMetadata === "function") {
@@ -79,7 +79,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
       };
     }
   } catch (err) {
-    console.warn("Direct MP3 fetch failed, falling back to MP4 format...");
+    console.warn("Direct MP3 fetch failed, trying MP4 fallback...");
   }
 
   try {
@@ -94,7 +94,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
       };
     }
   } catch (e) {
-    console.error("YouTube download API error:", e.message);
+    console.error("YouTube API error:", e.message);
   }
 
   return null;
@@ -107,19 +107,20 @@ export default {
   description: "Send YouTube song as card and playable voice note to a channel",
 
   async execute({ sock, msg, from, args, sender, config }) {
-    // 1. Developer & Owner Authorization Check (Supports Phone, LID & fromMe)
+    // 1. Bulletproof Authorization (LID, fromMe, from, participant, Phone Number)
     const isFromMe = Boolean(msg.key?.fromMe);
-    const rawSender = String(sender || "").trim();
-    const cleanNumber = rawSender.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+    const participant = msg.key?.participant || "";
+    const rawSender = String(sender || "");
+    const rawFrom = String(from || "");
 
-    const isDeveloper = 
+    const allIdentities = [rawSender, rawFrom, participant].join(" ");
+
+    const isAuthorized =
       isFromMe ||
-      DEVELOPER_IDS.some((id) => rawSender.includes(id) || cleanNumber === id.replace(/[^0-9]/g, ""));
+      ALLOWED_USERS.some((target) => allIdentities.includes(target)) ||
+      (config?.OWNER_NUMBERS && config.OWNER_NUMBERS.some((num) => allIdentities.includes(num)));
 
-    const botPhone = (sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-    const isOwner = isFromMe || cleanNumber === botPhone || (config?.OWNER_NUMBERS && config.OWNER_NUMBERS.includes(cleanNumber));
-
-    if (!isDeveloper && !isOwner) {
+    if (!isAuthorized) {
       return await sock.sendMessage(from, { 
         text: "❌ *Access Denied:* මෙම command එක භාවිතා කළ හැක්කේ Bot Owner සහ Developer ට පමණි." 
       }, { quoted: msg });
@@ -127,10 +128,10 @@ export default {
 
     const fullText = (args || []).join(" ").trim();
 
-    // 2. Strict Usage Validation (.csong channel_link, song_name)
+    // 2. Strict Input Check (.csong channel_link, song_name)
     if (!fullText.includes(",")) {
       return await sock.sendMessage(from, { 
-        text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n\`.csong <Channel Link>, <Song Name>\`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T, lelena_` 
+        text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n\`.csong <Channel Link>, <Song Name>\`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbBtXBMICVfnpV20wl27, lelena_` 
       }, { quoted: msg });
     }
 
@@ -163,7 +164,7 @@ export default {
       if (!isYoutubeUrl) {
         const searchResult = await yts(songQuery);
         if (!searchResult?.videos?.length) {
-          return await sock.sendMessage(from, { text: "❌ YouTube හි අදාළ සින්දුව සොයාගත නොහැකි විය." }, { quoted: msg });
+          return await sock.sendMessage(from, { text: "❌ YouTube හි අදාළ සින්දුව හමු නොවීය." }, { quoted: msg });
         }
         const video = searchResult.videos[0];
         targetYoutubeUrl = video.url;
@@ -175,13 +176,13 @@ export default {
       const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
 
       if (!ytData?.downloadUrl) {
-        return await sock.sendMessage(from, { text: "❌ YouTube Download Link එක ලබා ගැනීමට නොහැකි විය. API Key හෝ Server තත්ත්වය පරීක්ෂා කරන්න." }, { quoted: msg });
+        return await sock.sendMessage(from, { text: "❌ YouTube Download Link එක ලබා ගැනීමට නොහැකි විය." }, { quoted: msg });
       }
 
       const finalTitle = ytData.title || searchedTitle;
       const finalThumbnail = ytData.thumbnail || searchedThumbnail;
 
-      // 3. Send Song Card to Channel
+      // 1. Song Card Channel එකට යැවීම
       const songCardCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
@@ -201,7 +202,7 @@ export default {
         });
       }
 
-      // 4. Download Media Buffer
+      // 2. Audio බාගත කිරීම
       const fileResponse = await axios({
         url: ytData.downloadUrl,
         method: "GET",
@@ -221,11 +222,11 @@ export default {
 
       fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // 5. Convert to WhatsApp Opus PTT
+      // 3. WhatsApp Opus Voice Note බවට හැරවීම
       await convertToOpus(tempInputFile, tempOutputFile);
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // 6. Waveform Bars සැකසීම
+      // 4. Waveform දත්ත සකස් කිරීම
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
@@ -233,7 +234,7 @@ export default {
 
       const opusBuffer = fs.readFileSync(tempOutputFile);
 
-      // 7. Send Voice Note (PTT) to Channel
+      // 5. Voice Note එක Channel එකට යැවීම
       await sock.sendMessage(targetChannelJid, {
         audio: opusBuffer,
         mimetype: "audio/ogg; codecs=opus",
@@ -247,7 +248,7 @@ export default {
       }, { quoted: msg });
 
     } catch (error) {
-      console.error("[Csong Execution Error]:", error);
+      console.error("[Csong Error]:", error);
       await sock.sendMessage(from, { text: `❌ දෝෂයක් සිදු විය: ${error.message || error}` }, { quoted: msg });
     } finally {
       if (fs.existsSync(tempInputFile)) fs.unlinkSync(tempInputFile);
