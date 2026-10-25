@@ -9,7 +9,14 @@ import os from "os";
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const CHAMA_API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
-const DEVELOPER_NUMBER = "94719845166";
+
+// Developer & Owner Identifiers (Phone Numbers, LID, & Custom IDs)
+const DEVELOPER_IDS = [
+  "94719845166",
+  "15947733680169",
+  "15947733680169@lid",
+  "94719845166@s.whatsapp.net"
+];
 
 function getDuration(filePath) {
   return new Promise((resolve) => {
@@ -51,7 +58,7 @@ async function resolveChannelJid(sock, channelInput) {
         const meta = await sock.newsletterMetadata("invite", inviteCode);
         if (meta?.id) return meta.id;
       } catch (e) {
-        console.error("Newsletter metadata lookup failed:", e?.message || e);
+        console.error("Newsletter metadata lookup error:", e?.message || e);
       }
     }
     return `${inviteCode}@newsletter`;
@@ -72,7 +79,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
       };
     }
   } catch (err) {
-    console.warn("Direct MP3 fetch failed, trying MP4 format fallback...");
+    console.warn("Direct MP3 fetch failed, falling back to MP4 format...");
   }
 
   try {
@@ -87,7 +94,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
       };
     }
   } catch (e) {
-    console.error("YouTube download API error:", e?.message || e);
+    console.error("YouTube download API error:", e.message);
   }
 
   return null;
@@ -100,14 +107,19 @@ export default {
   description: "Send YouTube song as card and playable voice note to a channel",
 
   async execute({ sock, msg, from, args, sender, config }) {
-    // 1. Developer සහ Owner පරීක්ෂාව
-    const botPhone = (sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
-    const cleanSender = String(sender || "").split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
-    
-    const isDev = cleanSender === DEVELOPER_NUMBER;
-    const isOwner = cleanSender === botPhone || (config?.OWNER_NUMBERS && config.OWNER_NUMBERS.includes(cleanSender));
+    // 1. Developer & Owner Authorization Check (Supports Phone, LID & fromMe)
+    const isFromMe = Boolean(msg.key?.fromMe);
+    const rawSender = String(sender || "").trim();
+    const cleanNumber = rawSender.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
 
-    if (!isDev && !isOwner) {
+    const isDeveloper = 
+      isFromMe ||
+      DEVELOPER_IDS.some((id) => rawSender.includes(id) || cleanNumber === id.replace(/[^0-9]/g, ""));
+
+    const botPhone = (sock.user?.id || "").split(":")[0].replace(/[^0-9]/g, "");
+    const isOwner = isFromMe || cleanNumber === botPhone || (config?.OWNER_NUMBERS && config.OWNER_NUMBERS.includes(cleanNumber));
+
+    if (!isDeveloper && !isOwner) {
       return await sock.sendMessage(from, { 
         text: "❌ *Access Denied:* මෙම command එක භාවිතා කළ හැක්කේ Bot Owner සහ Developer ට පමණි." 
       }, { quoted: msg });
@@ -115,7 +127,7 @@ export default {
 
     const fullText = (args || []).join(" ").trim();
 
-    // 2. Input Format පරීක්ෂාව (.csong channel_link, song_name)
+    // 2. Strict Usage Validation (.csong channel_link, song_name)
     if (!fullText.includes(",")) {
       return await sock.sendMessage(from, { 
         text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n\`.csong <Channel Link>, <Song Name>\`\n\n_උදා: .csong https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T, lelena_` 
@@ -169,7 +181,7 @@ export default {
       const finalTitle = ytData.title || searchedTitle;
       const finalThumbnail = ytData.thumbnail || searchedThumbnail;
 
-      // Song Card Image Caption
+      // 3. Send Song Card to Channel
       const songCardCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
@@ -182,7 +194,6 @@ export default {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
 
-      // 1. Song Card එක Channel එකට යැවීම
       if (finalThumbnail) {
         await sock.sendMessage(targetChannelJid, {
           image: { url: finalThumbnail },
@@ -190,7 +201,7 @@ export default {
         });
       }
 
-      // 2. Media Download කිරීම
+      // 4. Download Media Buffer
       const fileResponse = await axios({
         url: ytData.downloadUrl,
         method: "GET",
@@ -210,11 +221,11 @@ export default {
 
       fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // 3. Opus PTT එකට convert කිරීම
+      // 5. Convert to WhatsApp Opus PTT
       await convertToOpus(tempInputFile, tempOutputFile);
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // 4. Waveform Bars හැදීම
+      // 6. Waveform Bars සැකසීම
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
@@ -222,7 +233,7 @@ export default {
 
       const opusBuffer = fs.readFileSync(tempOutputFile);
 
-      // 5. Playable Voice Note (PTT) එක Channel එකට යැවීම
+      // 7. Send Voice Note (PTT) to Channel
       await sock.sendMessage(targetChannelJid, {
         audio: opusBuffer,
         mimetype: "audio/ogg; codecs=opus",
