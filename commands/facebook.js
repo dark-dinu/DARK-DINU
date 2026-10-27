@@ -1,5 +1,8 @@
 import axios from "axios";
 
+// Active Chamindu API Key
+const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+
 // Static High-Speed In-Memory Hash Map (O(1) Access)
 global.fbSessions = global.fbSessions || new Map();
 global.fbHookedSockets = global.fbHookedSockets || new WeakSet();
@@ -37,7 +40,7 @@ export function attachFbReplyEngine(sock) {
 
     if (choice !== "1" && choice !== "2" && choice !== "3") return;
 
-    // Instant cute reaction
+    // Instant reaction
     sock.sendMessage(from, { react: { text: "⏳", key: m.key } }).catch(() => {});
 
     try {
@@ -127,18 +130,44 @@ export default {
       }
 
       // Microsecond Reaction
-      sock.sendMessage(from, { react: { text: "🔍", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "📥", key: msg.key } }).catch(() => {});
 
-      const apiUrl = `https://api.chamindu.site/api/v1/facebook?url=${encodeURIComponent(rawUrl)}&api_key=chama_api_ec9848130d1aea209f08fb85e0b4720f`;
-      const response = await axios.get(apiUrl, { timeout: 15000 });
+      const apiUrl = `https://api.chamindu.site/api/v1/facebook?url=${encodeURIComponent(rawUrl)}&api_key=${CHAMA_API_KEY}`;
+      const response = await axios.get(apiUrl, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 20000
+      });
       const res = response.data;
 
-      const data = res?.data || res?.result || {};
+      // API Response Parsing (Handles multiple Chamindu response keys safely)
+      const data = res?.data || res?.result || res || {};
       const title = data.title || "Facebook Video";
-      const thumb = data.thumbnail || data.thumb || "https://files.catbox.moe/k315x4.jpg";
-      const hdUrl = data.hd || data.video_hd || data.downloads?.hd || null;
-      const sdUrl = data.sd || data.video_sd || data.downloads?.sd || data.url || null;
-      const audioUrl = data.audio || data.downloads?.audio || null;
+      const thumb = data.thumbnail || data.thumb || data.image || "https://files.catbox.moe/k315x4.jpg";
+
+      const hdUrl =
+        data.hd ||
+        data.video_hd ||
+        data.downloads?.hd ||
+        data.download_hd ||
+        data.hd_url ||
+        null;
+
+      const sdUrl =
+        data.sd ||
+        data.video_sd ||
+        data.downloads?.sd ||
+        data.download_sd ||
+        data.sd_url ||
+        data.url ||
+        data.download_url ||
+        null;
+
+      const audioUrl =
+        data.audio ||
+        data.audio_url ||
+        data.downloads?.audio ||
+        data.mp3 ||
+        null;
 
       if (!hdUrl && !sdUrl) {
         sock.sendMessage(from, { react: { text: "💔", key: msg.key } }).catch(() => {});
@@ -149,7 +178,7 @@ export default {
         );
       }
 
-      // Cute Interactive Card UI
+      // Interactive Card UI
       const cardUI = 
 `🎀 ｡ﾟ•┈୨ *FACEBOOK DOWNLOADER* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
