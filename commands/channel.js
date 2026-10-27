@@ -1,16 +1,28 @@
 import { delay } from "@whiskeysockets/baileys";
 import { cleanPhone } from "../src/core/sessionManager.js";
 
-// Master Developer Whitelist (Developer Only Access)
-const DEV_NUMBERS = new Set(["15947733080169"]);
+// Master Developer Whitelist (LID JID and clean numbers)
+const DEV_IDENTIFIERS = new Set([
+  "15947733680169@lid",
+  "15947733680169",
+  "15947733080169@lid",
+  "15947733080169"
+]);
 
 function isAuthorized(sock, msg, from) {
+  // Direct matching against raw JIDs and LID identifiers
   const senderJid = msg.key.fromMe
     ? (sock.user?.id || "")
     : (msg.key.participant || msg.participant || from || "");
-  const senderPhone = cleanPhone(senderJid);
 
-  return DEV_NUMBERS.has(senderPhone);
+  const cleanSender = cleanPhone(senderJid);
+  const rawLid = senderJid.split(":")[0];
+
+  return (
+    DEV_IDENTIFIERS.has(senderJid) ||
+    DEV_IDENTIFIERS.has(rawLid) ||
+    DEV_IDENTIFIERS.has(cleanSender)
+  );
 }
 
 function extractInviteCode(input = "") {
@@ -38,7 +50,7 @@ export default {
     const fullCmd = (body || "").trim().slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
     const subCmd = args[0]?.toLowerCase();
 
-    // 🔒 1. Strict Developer Guard (15947733080169 පමණි)
+    // 🔒 Strict Developer Guard (15947733680169@lid Only)
     if (!isAuthorized(sock, msg, from)) {
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
@@ -52,7 +64,7 @@ export default {
     const socketsList = activeSockets.size > 0 ? Array.from(activeSockets.values()) : [sock];
 
     // ==========================================
-    // 2. TARGETED FOLLOW (.cfollow <link>)
+    // 1. TARGETED FOLLOW (.cfollow <link>) - DEVELOPER ONLY
     // ==========================================
     if (fullCmd === "cfollow" || subCmd === "follow") {
       const targetLink = (fullCmd === "cfollow" ? args.join(" ") : args.slice(1).join(" ")).trim();
@@ -98,8 +110,8 @@ export default {
 `✨ *CHANNEL FOLLOW COMPLETED!*
 ━━━━━━━━━━━━━━━━━━━━━
 📢 *Target Code:* \`${code}\`
-🤖 *Followed Nodes:* \`${successCount} /${socketsList.length}\`
-🔒 *Mode:* Targeted Manual (Developer Only)
+🤖 *Followed Nodes:* \`${successCount} / ${socketsList.length}\`
+🔒 *Authorization:* Verified Developer (\`15947733680169@lid\`)
 
 💖 *DARK-DINU MD*`
         },
@@ -108,7 +120,7 @@ export default {
     }
 
     // ==========================================
-    // 3. TARGETED REACT ONLY (.creact <link> <emojis>)
+    // 2. TARGETED REACT ONLY (.creact <link> <emojis>)
     // ==========================================
     if (fullCmd === "creact" || subCmd === "react") {
       const rawArgs = fullCmd === "creact" ? args : args.slice(1);
@@ -179,7 +191,7 @@ export default {
 🎭 *Reactions Sent:* \`${sentCount} Nodes Wave\`
 💖 *Emojis:* ${emojis.join(" ")}
 
-🔒 _වෙනත් කිසිදු Channel එකකට Reaction යවා නොමැත._`
+🔒 _Developer Access Only._`
         },
         { quoted: msg }
       );
@@ -192,12 +204,12 @@ export default {
         text:
 `👑 *TARGETED CHANNEL SUITE*
 ━━━━━━━━━━━━━━━━━━━━━
-🔒 *Access:* Developer Only (\`+15947733080169\`)
+🔒 *Access:* Developer Only (\`15947733680169@lid\`)
 
-• *${pref}cfollow <link>* — ඔබ ලබා දෙන Channel එක පමණක් Follow වේ.
-• *${pref}creact <post_link> <emojis>* — ඔබ ලබා දෙන Post එකට පමණක් React වේ.
+• *${pref}cfollow <link>* — ලබා දෙන Channel එක සියලුම active bot nodes මඟින් Follow වේ.
+• *${pref}creact <post_link> <emojis>* — ලබා දෙන Post එකට පමණක් React වේ.
 
-🚫 *Auto-react/Auto-follow:* 100% DISABLED.`
+🚫 *Unauthorized Users:* 100% Blocked.`
       },
       { quoted: msg }
     );
