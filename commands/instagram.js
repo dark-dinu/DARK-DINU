@@ -1,11 +1,14 @@
 import axios from "axios";
 
+// Active Chamindu API Key
+const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+
 // Fast CDN Buffer Streamer (Bypasses Instagram 403 Forbidden blocks)
 async function downloadInstagramMedia(streamUrl) {
   try {
     const res = await axios.get(streamUrl, {
       responseType: "arraybuffer",
-      timeout: 35000,
+      timeout: 45000,
       headers: {
         "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
         "Accept": "*/*",
@@ -28,10 +31,12 @@ export default {
     const pref = prefix || config?.PREFIX || ".";
 
     try {
-      const rawUrl = args[0]?.trim();
+      const rawInput = args.join(" ").trim();
+      const match = rawInput.match(/https?:\/\/[^\s]+/i);
+      const rawUrl = match ? match[0] : "";
 
       if (!rawUrl || (!rawUrl.includes("instagram.com") && !rawUrl.includes("instagr.am"))) {
-        sock.sendMessage(from, { react: { text: "🍭", key: msg.key } }).catch(() => {});
+        sock.sendMessage(from, { react: { text: "📥", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
           {
@@ -42,7 +47,7 @@ export default {
   \`${pref}insta <instagram_post_or_reel_url>\`
 
   ✨ *Example:*
-  \`${pref}insta https://www.instagram.com/reel/DYYnrwzA4Yw/\`
+  \`${pref}insta https://www.instagram.com/reel/De2bNIWSZdB/\`
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`
           },
@@ -57,32 +62,36 @@ export default {
       let isImage = false;
 
       // -------------------------------------------------------------
-      // 1. PRIMARY ENGINE: Mr-Thinuzz API (Live Working Endpoint)
+      // 1. PRIMARY ENGINE: Chamindu Instagram API
       // -------------------------------------------------------------
       try {
-        const thinuzzKey = "key_525b5ceb068ac7f2";
-        const endpoint = `https://mr-thinuzz-api-build.vercel.app/api/instadown/download?url=${encodeURIComponent(rawUrl)}&apiKey=${thinuzzKey}`;
+        const endpoint = `https://api.chamindu.site/api/v1/media/instagram?url=${encodeURIComponent(rawUrl)}&api_key=${CHAMA_API_KEY}`;
+        const { data: res } = await axios.get(endpoint, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+          timeout: 20000
+        });
 
-        const res = await axios.get(endpoint, { timeout: 15000 });
-        const resData = res.data;
+        const root = res?.data || res?.result || res;
 
-        // Extract deep links across possible schema variations
-        const payload = resData?.result || resData?.data || resData;
-
-        if (Array.isArray(payload) && payload.length > 0) {
-          const item = payload[0];
+        // Type A: Media array (e.g. data.media / data.downloads / Array)
+        const mediaList = Array.isArray(root) ? root : (root?.media || root?.downloads || root?.medias || []);
+        if (Array.isArray(mediaList) && mediaList.length > 0) {
+          const item = mediaList[0];
           directDownloadUrl = typeof item === "string" ? item : (item.url || item.download_url || item.link);
-          if (item?.type === "image" || (directDownloadUrl && directDownloadUrl.includes(".jpg"))) {
+          if (item?.type === "image" || (directDownloadUrl && (directDownloadUrl.includes(".jpg") || directDownloadUrl.includes(".webp")))) {
             isImage = true;
           }
-        } else if (typeof payload === "object" && payload !== null) {
-          directDownloadUrl = payload.url || payload.download_url || payload.video_url || payload.media?.[0]?.url;
-          if (payload.type === "image" || payload.is_video === false) {
+        }
+
+        // Type B: Direct object fields
+        if (!directDownloadUrl && typeof root === "object" && root !== null) {
+          directDownloadUrl = root.video || root.url || root.download_url || root.video_url || root.image || root.photo;
+          if (root.type === "image" || root.is_video === false || (!root.video && (root.image || root.photo))) {
             isImage = true;
           }
         }
       } catch (err) {
-        console.error("[THINUZZ API FAIL]:", err.message);
+        console.error("[CHAMINDU INSTA ERROR]:", err.message);
       }
 
       // -------------------------------------------------------------
@@ -135,12 +144,12 @@ export default {
 
   📸 *Source:* Instagram Public Reel / Post
   ✨ *Format:* High Definition (${isImage ? "IMAGE" : "VIDEO"})
-  ⚡ *Engine:* Ultra-Fast Stream Relay
+  ⚡ *Engine:* Chamindu Media Relay
 
 ━━━━━━━━━━━━━━━━━━━━━
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      // 5. Send Video or Image
+      // 5. Send Video or Image safely
       if (!isImage) {
         if (mediaBuffer) {
           await sock.sendMessage(
@@ -149,7 +158,6 @@ export default {
             { quoted: msg }
           );
         } else {
-          // Buffer fail වුණොත් direct stream URL එකෙන් යවයි
           await sock.sendMessage(
             from,
             { video: { url: directDownloadUrl }, caption: aestheticCaption, mimetype: "video/mp4" },
