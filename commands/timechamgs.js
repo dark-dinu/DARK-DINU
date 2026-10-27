@@ -5,9 +5,12 @@ global.autoSendSessions = global.autoSendSessions || new Map();
 global.autoSendRunnerActive = global.autoSendRunnerActive || false;
 global.autoSendHookedSockets = global.autoSendHookedSockets || new WeakSet();
 
+// Channel Invite Code එක /827 ආදී post numbers තිබුණත් නිවැරදිව වෙන් කරගැනීම
 function extractChannelInviteCode(input = "") {
-  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
-  return match ? match[1] : input.trim();
+  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z_-]{20,28})/i);
+  if (match) return match[1];
+  const simpleMatch = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z_-]+)/i);
+  return simpleMatch ? simpleMatch[1] : input.trim();
 }
 
 async function resolveChannelJid(sock, input) {
@@ -19,10 +22,10 @@ async function resolveChannelJid(sock, input) {
   try {
     if (typeof sock.newsletterMetadata === "function") {
       const meta = await sock.newsletterMetadata("invite", code);
-      return meta?.id || null;
+      if (meta?.id) return meta.id;
     }
   } catch (_) {}
-  return null;
+  return code ? `${code}@newsletter` : null;
 }
 
 function unwrapMessage(msg) {
@@ -90,46 +93,48 @@ async function dispatchToChannel(sock, task) {
   }
 }
 
+// 🔴 Auto-Send Daemon: Restart වූවත් MongoDB හරහා auto-resume වේ
 export function startAutoSendDaemon(sock) {
   if (global.autoSendRunnerActive) return;
   global.autoSendRunnerActive = true;
 
   setInterval(async () => {
-    if (!global.sessionStatePool || global.sessionStatePool.size === 0) return;
+    try {
+      const activeSockets = global.activeSockets || new Map();
+      if (activeSockets.size === 0 && !sock) return;
 
-    const now = Date.now();
+      // Global pool එක හෝ MongoDB සෘජුව read කර active sessions පරික්ෂා කිරීම
+      const pool = global.sessionStatePool || new Map();
+      const now = Date.now();
 
-    for (const [botPhone, sessionState] of global.sessionStatePool.entries()) {
-      const posts = sessionState.channelPosts || [];
-      let updated = false;
+      // Active sockets loop කර එක් එක් session එකේ channelPosts පරික්ෂා කිරීම
+      for (const [, s] of activeSockets.entries()) {
+        const botPhone = cleanPhone(s.user?.id || "");
+        if (!botPhone) continue;
 
-      for (const task of posts) {
-        if (now - (task.lastSentTime || 0) >= task.intervalMs) {
-          task.lastSentTime = now;
-          updated = true;
+        let sessionState = pool.get(botPhone);
+        if (!sessionState) {
+          sessionState = await initializeSessionState(botPhone);
+        }
 
-          const activeSockets = global.activeSockets || new Map();
-          let targetSocket = null;
+        const posts = sessionState?.channelPosts || [];
+        let updated = false;
 
-          for (const [, s] of activeSockets.entries()) {
-            if (cleanPhone(s.user?.id || "") === botPhone) {
-              targetSocket = s;
-              break;
-            }
-          }
-          if (!targetSocket && cleanPhone(sock.user?.id || "") === botPhone) {
-            targetSocket = sock;
-          }
+        for (const task of posts) {
+          if (now - (task.lastSentTime || 0) >= task.intervalMs) {
+            task.lastSentTime = now;
+            updated = true;
 
-          if (targetSocket) {
-            await dispatchToChannel(targetSocket, task);
+            await dispatchToChannel(s, task);
           }
         }
-      }
 
-      if (updated) {
-        await updateSessionDataList(botPhone, "channelPosts", posts);
+        if (updated) {
+          await updateSessionDataList(botPhone, "channelPosts", posts);
+        }
       }
+    } catch (err) {
+      console.error("[AUTOSEND DAEMON ERROR]:", err.message);
     }
   }, 10000);
 }
@@ -137,6 +142,9 @@ export function startAutoSendDaemon(sock) {
 export function hookAutoSendReplyEngine(sock) {
   if (!sock || global.autoSendHookedSockets.has(sock)) return;
   global.autoSendHookedSockets.add(sock);
+
+  // Background daemon එක initialize කර තැබීම
+  startAutoSendDaemon(sock);
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
