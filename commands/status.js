@@ -15,7 +15,7 @@ function getSettings(botPhone) {
     global.statusSettings.set(botPhone, {
       seen: true,
       react: true,
-      emoji: "💚"
+      emoji: "🥰"
     });
   }
   return global.statusSettings.get(botPhone);
@@ -100,7 +100,7 @@ async function deliverStatusMedia(sock, msg, from, targetStatusMsg) {
     const isVideo = Boolean(statusObj.videoMessage);
     const isAudio = Boolean(statusObj.audioMessage);
 
-    const defaultCaption = "> *🕷️ 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐒𝐓𝐀𝐓𝐔𝐒 𝐒𝐀𝐕𝐄𝐑 🐦‍🔥*";
+    const defaultCaption = "> *🕷️ 𝐃𝐀𝐑𝐊-𝐃𝐈𝐍𝐔 𝐒𝐓𝐀𝐓𝐔𝐒 𝐒𝐀𝐕𝐄𝐑 📥*";
 
     if (isImage || isVideo || isAudio) {
       const buffer = await downloadMediaMessage(
