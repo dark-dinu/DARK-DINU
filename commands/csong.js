@@ -11,7 +11,6 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
 const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-// Convert audio cleanly to standard MP3/M4A for Channels
 function convertToAudio(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -25,26 +24,25 @@ function convertToAudio(inputPath, outputPath) {
   });
 }
 
-// Extract exact Channel Invite code even if Post ID (/827) is included
+// 🔴 Fix: /827 වගේ post id තිබුණත් clean channel ID එකම ගන්නා function එක
 async function resolveChannelJid(sock, channelInput) {
   let input = (channelInput || '').trim();
   if (input.endsWith('@newsletter')) return input;
 
-  // Handles: whatsapp.com/channel/0029Vb... or whatsapp.com/channel/0029Vb.../827
-  const match = input.match(/whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
-  if (match && match[1]) {
-    const inviteCode = match[1];
-    if (typeof sock.newsletterMetadata === 'function') {
-      try {
-        const meta = await sock.newsletterMetadata('invite', inviteCode);
-        if (meta?.id) return meta.id;
-      } catch (e) {
-        console.error('Newsletter meta error:', e.message);
-      }
+  // regex එකෙන් / අග තියෙන post id කපා channel code එක පමණක් ගනී
+  const match = input.match(/whatsapp\.com\/channel\/([a-zA-Z0-9_-]{20,28})/i);
+  const inviteCode = match ? match[1] : input.split('/').filter(Boolean).pop();
+
+  if (inviteCode && typeof sock.newsletterMetadata === 'function') {
+    try {
+      const meta = await sock.newsletterMetadata('invite', inviteCode);
+      if (meta?.id) return meta.id;
+    } catch (e) {
+      console.error('[NEWSLETTER META ERROR]:', e.message);
     }
-    return `${inviteCode}@newsletter`;
   }
-  return input;
+
+  return `${inviteCode}@newsletter`;
 }
 
 async function fetchYouTubeDownload(targetYoutubeUrl) {
@@ -83,7 +81,7 @@ export default {
   name: 'csong',
   aliases: ['channelsong', 'cs', 'cplay'],
   category: 'owner',
-  description: 'Send YouTube song as card and audio file to a channel',
+  description: 'Send YouTube song as card and audio file directly to a channel',
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || '.';
@@ -104,9 +102,9 @@ export default {
 2️⃣ \`${pref}csong <Channel Link>, <Song Name>\`
 
 ✨ *උදාහරණයක්:*
-\`${pref}csong https://whatsapp.com/channel/0029VbBtXBMICVfnpV20wl27, aida awe hineta mage\`
+\`${pref}csong https://whatsapp.com/channel/0029VbBtXBMICVfnpV20wl27, ayida awe hineta mage\`
 
-⚠️ *සටහන:* Channel Link එකේ අගට Post ID (උදා: /827) නොදා Channel එකේ ප්‍රධාන Link එක පමණක් දමන්න.`
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
       }, { quoted: msg });
     }
 
@@ -122,7 +120,7 @@ export default {
     sock.sendMessage(from, { react: { text: '⏳', key: msg.key } }).catch(() => {});
 
     const waitMsg = await sock.sendMessage(from, { 
-      text: `⚡ *DARK-DINU CORE:* ගීතය සකසමින් පවතී...\n🎵 *Song:* \`${songQuery}\`` 
+      text: `⚡ *DARK-DINU CORE:* චැනල් එකට ගීතය සකසමින් පවතී...\n🎵 *Song:* \`${songQuery}\`` 
     }, { quoted: msg });
 
     const tempDir = os.tmpdir();
@@ -162,7 +160,7 @@ export default {
       const finalTitle = ytData.title || searchedTitle;
       const finalThumbnail = ytData.thumbnail || searchedThumbnail || 'https://files.catbox.moe/k315x4.jpg';
 
-      // 1. Send Song Card Image to Target Channel
+      // 1. Send Song Poster/Card to Channel
       const songCardCaption = 
 `> *🎵⃝✨ D A R K   D I N U   M U S I C*
 
@@ -171,7 +169,7 @@ export default {
 01:23 ───🔘──────── ${searchedDuration}
 ⇄     ◁   ❚❚   ▷     ↻
 
-\`\`\`➥ Enjoy the audio vibe & tap a reaction! 🥰🎶\`\`\`
+\`\`\`➥ Enjoy the audio track & tap a reaction! 🥰🎶\`\`\`
 
 > *👑 ᴅᴀʀᴋ-ᴅɪɴᴜ ᴄᴏʀᴇ • ꜱᴏɴɢ ʜᴜʙ*`;
 
@@ -181,7 +179,7 @@ export default {
           caption: songCardCaption
         });
       } catch (err) {
-        console.error('Channel Card Error (Make sure bot is admin):', err.message);
+        console.error('[CARD POST FAILED]:', err.message);
       }
 
       // 2. Download Media Buffer
@@ -196,17 +194,16 @@ export default {
         }
       });
 
-      const mediaBuffer = Buffer.from(fileResponse.data);
-      fs.writeFileSync(tempInputFile, mediaBuffer);
+      fs.writeFileSync(tempInputFile, Buffer.from(fileResponse.data));
 
       // 3. Convert to Clean MP3
       await convertToAudio(tempInputFile, tempOutputFile);
       const audioBuffer = fs.readFileSync(tempOutputFile);
 
-      // 4. Send Audio directly to Channel (No PTT to prevent channel drop)
+      // 4. Send Playable Audio to Channel (ptt: false - WhatsApp Channel Drop නොවීමට)
       await sock.sendMessage(targetChannelJid, {
         audio: audioBuffer,
-        mimetype: 'audio/mpeg',
+        mimetype: 'audio/mp4',
         fileName: `${finalTitle.replace(/[^a-zA-Z0-9 ]/g, '')}.mp3`,
         ptt: false
       });
@@ -231,7 +228,7 @@ export default {
       console.error('[CSONG ERROR]:', error);
       sock.sendMessage(from, { react: { text: '⚠️', key: msg.key } }).catch(() => {});
       await sock.sendMessage(from, { 
-        text: `❌ *Upload Failed:* ${error.message}\n\n💡 *Note:* Bot අංකය අදාළ Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න.` 
+        text: `❌ *Upload Failed:* ${error.message}` 
       }, { quoted: msg });
     } finally {
       try {
