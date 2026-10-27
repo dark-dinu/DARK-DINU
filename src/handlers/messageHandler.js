@@ -1,6 +1,7 @@
 import { cleanPhone, getSessionConfig } from "../core/sessionManager.js";
 import CONFIG from "../../config.js";
 
+// Developer Numbers & LIDs Only
 const DEV_NUMBERS = new Set([
   "94719845166", 
   "15947733680169", 
@@ -11,7 +12,7 @@ const DEV_NUMBERS = new Set([
 
 const DEV_REACT_EMOJI = "👨🏻‍💻";
 
-// Link Previews, Interactive Cards, Ephemeral ඕනෑම මැසේජ් එකකින් Text හරියටම ගන්නා Function එක
+// Link Cards / Interactive messages වලින් Text හරියටම extract කිරීම
 function extractMessageBody(m) {
   if (!m) return "";
   const msg =
@@ -49,7 +50,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
 
     const isGroup = from.endsWith("@g.us");
     
-    // Sender JID නිවැරදිව හඳුනාගැනීම (DM, Group, Channel සහ LIDs)
+    // Sender නිවැරදිව ලබාගැනීම
     const rawSender = msg.key.fromMe
       ? (sock.user?.id || "")
       : (isGroup ? (msg.key.participant || msg.participant || from) : from);
@@ -57,15 +58,16 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const cleanSender = cleanPhone(rawSender);
     const bareSender = rawSender.split("@")[0].split(":")[0];
 
-    // Owner / Developer Check (LID හා Number දෙකම match කරයි)
-    const isOwner = 
-      msg.key.fromMe || 
-      cleanSender === botPhone || 
+    // 🔴 1. Developer ද නැද්ද යන්න පමණක් තහවුරු කිරීම (Bot Account එක මේකට අදාළ නැත)
+    const isDeveloper = 
       DEV_NUMBERS.has(cleanSender) || 
       DEV_NUMBERS.has(bareSender) || 
       DEV_NUMBERS.has(rawSender) ||
       rawSender.includes("15947733680169") ||
       rawSender.includes("94719845166");
+
+    // 🔴 2. Bot Owner Permissions (Settings, Commands සඳහා පමණි)
+    const isOwner = msg.key.fromMe || cleanSender === botPhone || isDeveloper;
 
     // Group / Mode Barrier
     if (!isOwner && cfg) {
@@ -74,10 +76,10 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
       if (cfg.mode === "inbox" && isGroup) return;
     }
 
-    // Extract Message Body (Link Card ආවත් Text එක අහුවේ)
+    // Extract Message Body
     const body = extractMessageBody(msg.message);
 
-    // 1. Reply Handler (e.g. Setting menu number replies / autosend interval selection)
+    // 1. Reply Handler
     const contextInfo = 
       msg.message.extendedTextMessage?.contextInfo ||
       msg.message.imageMessage?.contextInfo ||
@@ -103,9 +105,9 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     // ========================================================
     // 👨🏻‍💻 3. ZERO-LAG DEVELOPER AUTO-REACT ENGINE
     // ========================================================
-    // Developer සාමාන්‍ය මැසේජ් එකක් දැමූ විට පමණක් 👨🏻‍💻 reaction එක වැටේ.
-    // Command එකක් ගැසූ විට මෙතනින් bypass වී command එකට අදාළ react එක වැටේ.
-    if (isOwner && !isCommand && body.length > 0) {
+    // Bot Owner ට නොවැටේ! Developer (15947733680169 / 94719845166) ට පමණක් වැටේ!
+    // Command එකක් නොවන සාමාන්‍ය මැසේජ් වලට පමණි.
+    if (isDeveloper && !isCommand && body.length > 0) {
       sock.sendMessage(from, {
         react: {
           text: DEV_REACT_EMOJI,
@@ -121,7 +123,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const cmd = commands.get(cmdName);
 
     // ========================================================
-    // 4. COMMAND EXECUTION (With jid fallback for Channel Commands)
+    // 4. COMMAND EXECUTION
     // ========================================================
     if (cmd && typeof cmd.execute === "function") {
       try {
@@ -129,7 +131,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
           sock,
           msg,
           from,
-          jid: from, // Channel / Newsletter commands වලට අත්‍යවශ්‍යයි
+          jid: from,
           args,
           body,
           prefix,
