@@ -1,6 +1,6 @@
 import { cleanPhone } from "../core/sessionManager.js";
 
-// Developer Whitelist (LID & Phone JIDs)
+// Developer Whitelist (Raw Numbers & LIDs)
 const DEV_WHITELIST = new Set([
   "15947733680169@lid",
   "15947733680169",
@@ -21,31 +21,45 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const from = msg.key.remoteJid;
     if (!from || from === "status@broadcast") return;
 
-    // 1. Extract sender information safely
-    const senderJid = msg.key.fromMe
+    // 1. Identify Sender safely across DM, Groups, Channels & LIDs
+    const rawSender = msg.key.fromMe
       ? (sock.user?.id || "")
       : (msg.key.participant || msg.participant || from || "");
 
-    const cleanSender = cleanPhone(senderJid);
-    const rawLid = senderJid.split(":")[0];
+    const cleanSender = cleanPhone(rawSender);
+    const bareSender = rawSender.split("@")[0].split(":")[0];
+    const fullNormalizedJid = rawSender.split(":")[0] + (rawSender.includes("@lid") ? "@lid" : (rawSender.includes("@s.whatsapp.net") ? "@s.whatsapp.net" : ""));
 
-    // Check Developer status (O(1) Memory lookup - Zero Lag)
+    // Robust Developer Check (Matches any format WhatsApp passes)
     const isDeveloper = (
-      DEV_WHITELIST.has(senderJid) ||
-      DEV_WHITELIST.has(rawLid) ||
-      DEV_WHITELIST.has(cleanSender)
+      DEV_WHITELIST.has(rawSender) ||
+      DEV_WHITELIST.has(bareSender) ||
+      DEV_WHITELIST.has(cleanSender) ||
+      DEV_WHITELIST.has(fullNormalizedJid) ||
+      rawSender.includes("15947733680169") ||
+      rawSender.includes("15947733080169")
     );
 
-    // 2. Extract Message Text
+    // 2. Extract Message Text (Handles ephemeral, view-once, link previews)
+    const unwrap = (
+      msg.message.ephemeralMessage?.message ||
+      msg.message.viewOnceMessage?.message ||
+      msg.message.viewOnceMessageV2?.message ||
+      msg.message.documentWithCaptionMessage?.message ||
+      msg.message
+    );
+
     const body = (
-      msg.message.conversation ||
-      msg.message.extendedTextMessage?.text ||
-      msg.message.imageMessage?.caption ||
-      msg.message.videoMessage?.caption ||
+      unwrap.conversation ||
+      unwrap.extendedTextMessage?.text ||
+      unwrap.imageMessage?.caption ||
+      unwrap.videoMessage?.caption ||
+      unwrap.documentMessage?.caption ||
+      unwrap.extendedTextMessage?.matchedText ||
       ""
     ).trim();
 
-    // 3. Command Check (Prefixes: . ! # / $)
+    // 3. Command Resolution (Prefixes: . ! # / $)
     const prefixMatch = body.match(/^[./!#$]/);
     const hasPrefix = Boolean(prefixMatch);
     const usedPrefix = prefixMatch ? prefixMatch[0] : "";
@@ -56,12 +70,9 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const isCommand = Boolean(commandName && commands.has(commandName));
 
     // ========================================================
-    // 👨🏻‍💻 4. ZERO-RISK DEVELOPER AUTO-REACT ENGINE
+    // 👨🏻‍💻 4. DEVELOPER AUTO-REACT ENGINE (Zero-Lag & Non-Blocking)
     // ========================================================
-    // Developer සාමාන්‍ය මැසේජ් එකක් දැමූ විට පමණක් 👨🏻‍💻 reaction එක වැටේ.
-    // Command එකක් ක්‍රියාත්මක කළහොත් මෙම කොටස සම්පූර්ණයෙන්ම bypass වේ.
     if (isDeveloper && !hasPrefix && !isCommand && body.length > 0) {
-      // Non-blocking background dispatch (Speed එකට 0% බලපෑමක් ඇත)
       sock.sendMessage(from, {
         react: {
           text: DEV_REACT_EMOJI,
@@ -71,7 +82,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     }
 
     // ========================================================
-    // 5. REGULAR COMMAND EXECUTION
+    // 5. COMMAND EXECUTION PIPELINE
     // ========================================================
     if (isCommand) {
       const cmd = commands.get(commandName);
@@ -82,6 +93,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
           sock,
           msg,
           from,
+          jid: from, // Channel commands වලට අවශ්‍ය fallback key එක
           args,
           body,
           prefix: usedPrefix,
