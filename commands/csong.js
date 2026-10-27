@@ -8,45 +8,30 @@ import os from 'os';
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-// Default WhatsApp Channel Link
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
-
-// Active Chamindu API Key
 const CHAMA_API_KEY = process.env.CHAMINDU_API_KEY || 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-function getDuration(filePath) {
-  return new Promise((resolve) => {
-    ffmpeg.ffprobe(filePath, (err, metadata) => {
-      if (err || !metadata?.format?.duration) return resolve(60);
-      resolve(Math.round(metadata.format.duration));
-    });
-  });
-}
-
-function convertToOpus(inputPath, outputPath) {
+// Convert audio cleanly to standard MP3/M4A for Channels
+function convertToAudio(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
       .noVideo()
-      .audioCodec('libopus')
-      .audioChannels(1)
-      .audioFrequency(48000)
-      .audioBitrate('64k')
-      .format('ogg')
-      .outputOptions([
-        '-avoid_negative_ts make_zero',
-        '-map_metadata -1'
-      ])
+      .audioCodec('libmp3lame')
+      .audioBitrate('128k')
+      .format('mp3')
       .on('end', () => resolve(outputPath))
       .on('error', (err) => reject(err))
       .save(outputPath);
   });
 }
 
+// Extract exact Channel Invite code even if Post ID (/827) is included
 async function resolveChannelJid(sock, channelInput) {
   let input = (channelInput || '').trim();
   if (input.endsWith('@newsletter')) return input;
 
-  const match = input.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
+  // Handles: whatsapp.com/channel/0029Vb... or whatsapp.com/channel/0029Vb.../827
+  const match = input.match(/whatsapp\.com\/channel\/([a-zA-Z0-9_-]+)/i);
   if (match && match[1]) {
     const inviteCode = match[1];
     if (typeof sock.newsletterMetadata === 'function') {
@@ -54,7 +39,7 @@ async function resolveChannelJid(sock, channelInput) {
         const meta = await sock.newsletterMetadata('invite', inviteCode);
         if (meta?.id) return meta.id;
       } catch (e) {
-        console.error('Newsletter metadata fetch error:', e.message);
+        console.error('Newsletter meta error:', e.message);
       }
     }
     return `${inviteCode}@newsletter`;
@@ -63,7 +48,6 @@ async function resolveChannelJid(sock, channelInput) {
 }
 
 async function fetchYouTubeDownload(targetYoutubeUrl) {
-  // 1. First Attempt: MP3 Format
   try {
     const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=128k&format=mp3&api_key=${CHAMA_API_KEY}`;
     const { data: res } = await axios.get(directUrl, { timeout: 35000 });
@@ -77,7 +61,6 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
     }
   } catch (_) {}
 
-  // 2. Fallback Attempt: MP4 Format (FFmpeg converts to Opus cleanly)
   try {
     const videoUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=360p&format=mp4&api_key=${CHAMA_API_KEY}`;
     const { data: res2 } = await axios.get(videoUrl, { timeout: 35000 });
@@ -100,7 +83,7 @@ export default {
   name: 'csong',
   aliases: ['channelsong', 'cs', 'cplay'],
   category: 'owner',
-  description: 'Send YouTube song as card and playable voice note to a channel',
+  description: 'Send YouTube song as card and audio file to a channel',
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || '.';
@@ -117,13 +100,13 @@ export default {
 `🌸 ｡ﾟ•┈୨ *CHANNEL SONG SENDER* ୧┈•ﾟ｡ 🐾
 
 🍭 *භාවිතා කරන ආකාරය:*
-1️⃣ *Default Channel:* \`${pref}csong <Song Name or YouTube Link>\`
-2️⃣ *Custom Channel:* \`${pref}csong <Channel Link>, <Song Name>\`
+1️⃣ \`${pref}csong <Song Name>\`
+2️⃣ \`${pref}csong <Channel Link>, <Song Name>\`
 
 ✨ *උදාහරණයක්:*
-\`${pref}csong Nethu Lagata Wela\`
+\`${pref}csong https://whatsapp.com/channel/0029VbBtXBMICVfnpV20wl27, aida awe hineta mage\`
 
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+⚠️ *සටහන:* Channel Link එකේ අගට Post ID (උදා: /827) නොදා Channel එකේ ප්‍රධාන Link එක පමණක් දමන්න.`
       }, { quoted: msg });
     }
 
@@ -139,12 +122,12 @@ export default {
     sock.sendMessage(from, { react: { text: '⏳', key: msg.key } }).catch(() => {});
 
     const waitMsg = await sock.sendMessage(from, { 
-      text: `⚡ *DARK-DINU CORE:* Processing song card & playable voice note for channel...\n🎵 *Query:* \`${songQuery}\`` 
+      text: `⚡ *DARK-DINU CORE:* ගීතය සකසමින් පවතී...\n🎵 *Song:* \`${songQuery}\`` 
     }, { quoted: msg });
 
     const tempDir = os.tmpdir();
-    const tempInputFile = path.join(tempDir, `raw_${Date.now()}_${Math.floor(Math.random() * 1000)}.bin`);
-    const tempOutputFile = path.join(tempDir, `vn_${Date.now()}_${Math.floor(Math.random() * 1000)}.ogg`);
+    const tempInputFile = path.join(tempDir, `raw_${Date.now()}.bin`);
+    const tempOutputFile = path.join(tempDir, `audio_${Date.now()}.mp3`);
 
     try {
       const targetChannelJid = await resolveChannelJid(sock, channelInput);
@@ -173,13 +156,13 @@ export default {
 
       if (!ytData?.downloadUrl) {
         sock.sendMessage(from, { react: { text: '❌', key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(from, { text: '❌ YouTube API මඟින් ඩවුන්ලෝඩ් ලින්ක් එක ලබාගැනීමට නොහැකි විය. පසුව නැවත උත්සාහ කරන්න.' }, { quoted: msg });
+        return await sock.sendMessage(from, { text: '❌ YouTube API Download Link එක ලබාගැනීමට නොහැකි විය.' }, { quoted: msg });
       }
 
       const finalTitle = ytData.title || searchedTitle;
       const finalThumbnail = ytData.thumbnail || searchedThumbnail || 'https://files.catbox.moe/k315x4.jpg';
 
-      // 1. Send Aesthetic Music Card to Target Channel
+      // 1. Send Song Card Image to Target Channel
       const songCardCaption = 
 `> *🎵⃝✨ D A R K   D I N U   M U S I C*
 
@@ -197,8 +180,8 @@ export default {
           image: { url: finalThumbnail },
           caption: songCardCaption
         });
-      } catch (e) {
-        console.warn('Channel Image dispatch warning:', e.message);
+      } catch (err) {
+        console.error('Channel Card Error (Make sure bot is admin):', err.message);
       }
 
       // 2. Download Media Buffer
@@ -214,32 +197,18 @@ export default {
       });
 
       const mediaBuffer = Buffer.from(fileResponse.data);
-
-      if (mediaBuffer.length < 10000) {
-        throw new Error('Downloaded audio stream was empty or corrupt');
-      }
-
       fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // 3. Convert to WhatsApp Native Opus Voice Note
-      await convertToOpus(tempInputFile, tempOutputFile);
-      const audioSeconds = await getDuration(tempOutputFile);
+      // 3. Convert to Clean MP3
+      await convertToAudio(tempInputFile, tempOutputFile);
+      const audioBuffer = fs.readFileSync(tempOutputFile);
 
-      // 4. Generate 64-bar Realistic Voice Waveform
-      const dummyWaveform = new Uint8Array(64);
-      for (let i = 0; i < 64; i++) {
-        dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
-      }
-
-      const opusBuffer = fs.readFileSync(tempOutputFile);
-
-      // 5. Send Playable Voice Note (PTT) directly to Channel
+      // 4. Send Audio directly to Channel (No PTT to prevent channel drop)
       await sock.sendMessage(targetChannelJid, {
-        audio: opusBuffer,
-        mimetype: 'audio/ogg; codecs=opus',
-        ptt: true,
-        seconds: audioSeconds,
-        waveform: dummyWaveform
+        audio: audioBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: `${finalTitle.replace(/[^a-zA-Z0-9 ]/g, '')}.mp3`,
+        ptt: false
       });
 
       sock.sendMessage(from, { react: { text: '✅', key: msg.key } }).catch(() => {});
@@ -253,8 +222,7 @@ export default {
 `✨ *CHANNEL UPLOAD SUCCESSFUL!*
 ━━━━━━━━━━━━━━━━━━━━━
 🎵 *Title:* \`${finalTitle}\`
-📢 *Channel:* \`${targetChannelJid}\`
-🎙️ *Type:* High-Quality PTT Voice Note
+📢 *Channel ID:* \`${targetChannelJid}\`
 
 💖 *DARK-DINU MD*` 
       }, { quoted: msg });
@@ -262,9 +230,10 @@ export default {
     } catch (error) {
       console.error('[CSONG ERROR]:', error);
       sock.sendMessage(from, { react: { text: '⚠️', key: msg.key } }).catch(() => {});
-      await sock.sendMessage(from, { text: `❌ *Error:* ${error.message}` }, { quoted: msg });
+      await sock.sendMessage(from, { 
+        text: `❌ *Upload Failed:* ${error.message}\n\n💡 *Note:* Bot අංකය අදාළ Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න.` 
+      }, { quoted: msg });
     } finally {
-      // Safe Cleanup
       try {
         if (fs.existsSync(tempInputFile)) fs.unlinkSync(tempInputFile);
         if (fs.existsSync(tempOutputFile)) fs.unlinkSync(tempOutputFile);
