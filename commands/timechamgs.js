@@ -5,11 +5,10 @@ global.autoSendSessions = global.autoSendSessions || new Map();
 global.autoSendRunnerActive = global.autoSendRunnerActive || false;
 global.autoSendHookedSockets = global.autoSendHookedSockets || new WeakSet();
 
-// Channel Invite Code එක /827 ආදී post numbers තිබුණත් නිවැරදිව වෙන් කරගැනීම
 function extractChannelInviteCode(input = "") {
-  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z_-]{20,28})/i);
+  const match = input.match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]{20,28})/i);
   if (match) return match[1];
-  const simpleMatch = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z_-]+)/i);
+  const simpleMatch = input.match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]+)/i);
   return simpleMatch ? simpleMatch[1] : input.trim();
 }
 
@@ -39,6 +38,7 @@ function unwrapMessage(msg) {
   );
 }
 
+// 🔴 Link Preview / Extended Text / Normal Text ඕනෑම message එකකින් 100% text එක extract කරගැනීම
 function extractFullPostText(quotedMsg) {
   const unwrap = unwrapMessage(quotedMsg);
   if (!unwrap) return "";
@@ -51,6 +51,7 @@ function extractFullPostText(quotedMsg) {
     unwrap.documentMessage?.caption ||
     unwrap.extendedTextMessage?.matchedText ||
     unwrap.extendedTextMessage?.description ||
+    unwrap.extendedTextMessage?.title ||
     ""
   ).trim();
 }
@@ -93,7 +94,6 @@ async function dispatchToChannel(sock, task) {
   }
 }
 
-// 🔴 Auto-Send Daemon: Restart වූවත් MongoDB හරහා auto-resume වේ
 export function startAutoSendDaemon(sock) {
   if (global.autoSendRunnerActive) return;
   global.autoSendRunnerActive = true;
@@ -103,11 +103,9 @@ export function startAutoSendDaemon(sock) {
       const activeSockets = global.activeSockets || new Map();
       if (activeSockets.size === 0 && !sock) return;
 
-      // Global pool එක හෝ MongoDB සෘජුව read කර active sessions පරික්ෂා කිරීම
       const pool = global.sessionStatePool || new Map();
       const now = Date.now();
 
-      // Active sockets loop කර එක් එක් session එකේ channelPosts පරික්ෂා කිරීම
       for (const [, s] of activeSockets.entries()) {
         const botPhone = cleanPhone(s.user?.id || "");
         if (!botPhone) continue;
@@ -124,7 +122,6 @@ export function startAutoSendDaemon(sock) {
           if (now - (task.lastSentTime || 0) >= task.intervalMs) {
             task.lastSentTime = now;
             updated = true;
-
             await dispatchToChannel(s, task);
           }
         }
@@ -143,7 +140,6 @@ export function hookAutoSendReplyEngine(sock) {
   if (!sock || global.autoSendHookedSockets.has(sock)) return;
   global.autoSendHookedSockets.add(sock);
 
-  // Background daemon එක initialize කර තැබීම
   startAutoSendDaemon(sock);
 
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
@@ -214,17 +210,17 @@ _The schedule is strictly locked to this bot session and MongoDB! (˶˃ ᵕ ˂˶
 
 export default {
   name: "autosend",
-  aliases: ["delautosend", "listautosend"],
+  aliases: ["delautosend", "listautosend", "timechannel", "auto"],
   category: "owner",
-  description: "Schedule massive posts or images to channels recurringly per session",
+  description: "Schedule posts or images to channels recurringly per session",
 
   async execute({ sock, msg, from, args, body, prefix, config }) {
     startAutoSendDaemon(sock);
     hookAutoSendReplyEngine(sock);
 
     const pref = prefix || config?.PREFIX || ".";
-    const fullBody = body.trim();
-    const cleanCmd = fullBody.slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
+    const fullBody = (body || "").trim();
+    const cleanCmd = fullBody.slice(pref.length).trim().split(/\s+/)[0]?.toLowerCase();
     const botPhone = cleanPhone(sock.user?.id || "");
     const session = await initializeSessionState(botPhone);
     const posts = session.channelPosts || [];
@@ -267,24 +263,27 @@ export default {
     }
 
     // 3. MAIN COMMAND: .autosend <channel_link>
-    const targetChannelLink = args[0]?.trim();
+    const targetChannelLink = args.find((a) => a.includes("whatsapp.com/channel") || a.includes("@newsletter")) || args[0]?.trim();
+
     if (!targetChannelLink) {
-      return await sock.sendMessage(from, { text: `🌸 *Usage:* Reply to post/image with \`${pref}autosend <channel_link>\`` }, { quoted: msg });
+      return await sock.sendMessage(from, { 
+        text: `🌸 *භාවිතා කරන ආකාරය:*\nඔබට Channel එකට Schedule කිරීමට අවශ්‍ය Post එකට Reply කර පහත ලෙස යවන්න:\n\`${pref}autosend <channel_link>\`` 
+      }, { quoted: msg });
     }
 
     const unwrapRoot = unwrapMessage(msg.message);
-    const contextInfo = unwrapRoot?.extendedTextMessage?.contextInfo || unwrapRoot?.imageMessage?.contextInfo;
+    const contextInfo = unwrapRoot?.extendedTextMessage?.contextInfo || unwrapRoot?.imageMessage?.contextInfo || unwrapRoot?.videoMessage?.contextInfo;
     const quotedMsg = contextInfo?.quotedMessage;
 
     if (!quotedMsg) {
-      return await sock.sendMessage(from, { text: "🌸 *Please reply to the post/image you want to schedule!*" }, { quoted: msg });
+      return await sock.sendMessage(from, { text: "🌸 *කරුණාකර ඔබට Schedule කිරීමට අවශ්‍ය Post එකට හෝ පින්තූරයට Reply කරන්න!*" }, { quoted: msg });
     }
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
     const targetChannelJid = await resolveChannelJid(sock, targetChannelLink);
 
     if (!targetChannelJid) {
-      return await sock.sendMessage(from, { text: "🌸 *Could not resolve channel JID!* Make sure the invite link is valid." }, { quoted: msg });
+      return await sock.sendMessage(from, { text: "🌸 *Channel JID එක සොයාගත නොහැකි විය!* Channel Invite Link එක නිවැරදි දැයි බලන්න." }, { quoted: msg });
     }
 
     const unwrappedQuoted = unwrapMessage(quotedMsg);
@@ -322,7 +321,7 @@ export default {
   🖼️ *Attachment:* ${imageBase64 ? "Image + Caption Attached ✨" : "Text Only 📝"}
 
 ━━━━━━━━━━━━━━━━━━━━━
-🍬 *Reply to this message with interval number:*
+🍬 *මෙම පණිවිඩයට අදාළ අංකය Reply කරන්න:*
 
   ⚡ *0*  ➔ Every 1 Minute (Fast Test)
   ⏱️ *00* ➔ Every 2 Minutes (Short Test)
