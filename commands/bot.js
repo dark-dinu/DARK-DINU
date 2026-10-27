@@ -8,6 +8,7 @@ import {
 import pino from "pino";
 import fs from "fs";
 import path from "path";
+import NodeCache from "node-cache";
 
 const DEFAULT_PHONE = "94719845166";
 
@@ -47,53 +48,66 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
     try {
       const { state, saveCreds } = await useMultiFileAuthState(tempSessionDir);
       const { version } = await fetchLatestBaileysVersion();
+      const msgRetryCounterCache = new NodeCache();
 
-      // Handshake එක සුමටව කරවන Socket Configuration
+      // Handshake එක හිර නොවී සුමටව සම්පූර්ණ කරන Socket Configuration එක
       const tempSock = makeWASocket({
         version,
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: "silent" }),
-        browser: Browsers.macOS("Chrome"), // macOS Desktop Signature එකෙන් Logging in ඉක්මන් වේ
+        logger: pino({ level: "fatal" }),
+        // Ubuntu Chrome signature එක WhatsApp Pair Handshake එකට වඩාත්ම stable වේ
+        browser: ["Ubuntu", "Chrome", "122.0.0.0"],
         syncFullHistory: false,
-        markOnlineOnConnect: false,
+        markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 10000,
-        generateHighQualityLinkPreview: false
+        defaultQueryTimeoutMs: 60000, // 0 නොවිය යුතුය (0 දැමූ විට handshake packets drop වේ)
+        keepAliveIntervalMs: 25000,
+        generateHighQualityLinkPreview: false,
+        msgRetryCounterCache
       });
 
-      // 🔴 Key Fix: Credentials ක්ෂණිකව Save කරවීම
-      tempSock.ev.on("creds.update", async () => {
-        await saveCreds();
-      });
+      // Credentials සහ Encrypted Keys update වන සැණින් disk එකට write කරවීම
+      tempSock.ev.on("creds.update", saveCreds);
 
-      // 🔴 Handshake Success Handler (Phone එකේ කැරකෙන එක නවත්වන කොටස)
+      let isHandshakeComplete = false;
+
+      // 🔴 Key Handshake Fix: Login Event Listener
       tempSock.ev.on("connection.update", async (update) => {
-        const { connection, isNewLogin } = update;
+        const { connection, lastDisconnect } = update;
 
-        if (connection === "open" || isNewLogin) {
+        if (connection === "open") {
+          isHandshakeComplete = true;
           try {
             await sock.sendMessage(from, {
-              text: `🎉 *LOGIN SUCCESSFUL!* \n\n📱 *Number:* \`+${targetNumber}\`\n✅ Device එක සාර්ථකව සම්බන්ධ විය (Linked Successfully)!`
+              text: `🎉 *LOGIN SUCCESSFUL!*\n\n📱 *Number:* \`+${targetNumber}\`\n✅ Device එක සාර්ථකව සම්බන්ධ විය (Linked Successfully)!`
             });
           } catch (_) {}
 
-          // Credentials හොඳින් write වීමට තත්පර 10ක් තබා terminate කිරීම
+          // Login වූ පසු credentials write වීමට තත්පර 8ක් තබා safe-close කිරීම
           setTimeout(() => {
             try {
-              tempSock.end(undefined);
+              tempSock.ws.close();
               if (fs.existsSync(tempSessionDir)) {
                 fs.rmSync(tempSessionDir, { recursive: true, force: true });
               }
             } catch (_) {}
-          }, 10000);
+          }, 8000);
+        }
+
+        if (connection === "close") {
+          const statusCode = lastDisconnect?.error?.output?.statusCode;
+          // පරිශීලකයා pair code එක ගසා login වන තුරු session එක auto-terminate නොවීම
+          if (!isHandshakeComplete && statusCode !== 401) {
+            // Handshake retry window
+          }
         }
       });
 
-      await delay(2500);
+      // Socket handshake socket stabilization delay
+      await delay(3000);
 
-      // Code එක ඉල්ලුම් කිරීම
+      // WhatsApp server එකෙන් Pairing code එක ඉල්ලුම් කිරීම
       let code = await tempSock.requestPairingCode(targetNumber);
       if (!code) throw new Error("WhatsApp server එකෙන් Code එක ලබාගැනීමට නොහැකි විය.");
 
@@ -110,11 +124,10 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
 
 ╭───〔 📖 𝐇𝐎𝐖 𝐓𝐎 𝐋𝐈𝐍𝐊 𝐃𝐄𝐕𝐈𝐂𝐄 〕
 ├ 1️⃣ WhatsApp විවෘත කරන්න.
-├ 2️⃣ ඉහළ දකුණු කෙළවරේ තිත් 3 ඔබන්න.
-├ 3️⃣ *Linked Devices* තෝරන්න.
-├ 4️⃣ *Link a Device* ඔබන්න.
-├ 5️⃣ *Link with phone number instead* තෝරන්න.
-├ 6️⃣ පහත ඇති *Code* එක ඇතුළත් කරන්න.
+├ 2️⃣ Settings (හෝ තිත් 3) ➔ *Linked Devices* යන්න.
+├ 3️⃣ *Link a Device* ඔබන්න.
+├ 4️⃣ *Link with phone number instead* තෝරන්න.
+├ 5️⃣ පහත කේතය (Code) ඇතුළත් කරන්න.
 ╰─────────────────────────────
 
 💡 _පහතින් එවා ඇති කේතය (Code) එක පාරක් Click කර Copy කරගන්න._
@@ -130,14 +143,16 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
         await sock.sendMessage(from, { delete: waitMsg.key }).catch(() => {});
       }
 
-      // Socket එක තත්පර 120ක් ජීවීව තබා ගැනීම (Login වන තෙක්)
+      // Code එක ගහනකම් socket එක මිනිත්තු 2ක් (120s) active තබාගැනීම
       setTimeout(() => {
-        try {
-          tempSock.end(undefined);
-          if (fs.existsSync(tempSessionDir)) {
-            fs.rmSync(tempSessionDir, { recursive: true, force: true });
-          }
-        } catch (_) {}
+        if (!isHandshakeComplete) {
+          try {
+            tempSock.ws.close();
+            if (fs.existsSync(tempSessionDir)) {
+              fs.rmSync(tempSessionDir, { recursive: true, force: true });
+            }
+          } catch (_) {}
+        }
       }, 120000);
 
     } catch (err) {
