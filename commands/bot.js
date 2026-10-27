@@ -2,15 +2,21 @@ import {
   makeWASocket, 
   useMultiFileAuthState, 
   fetchLatestBaileysVersion, 
-  delay,
-  Browsers
+  delay
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import fs from "fs";
 import path from "path";
 import NodeCache from "node-cache";
 
-const DEFAULT_PHONE = "94719845166";
+// Sender ගේ number එක clean කරගන්නා function එක
+function getSenderNumber(msg, from) {
+  const senderJid = msg.key.fromMe
+    ? (from || "")
+    : (msg.key.participant || msg.participant || from || "");
+  
+  return senderJid.split("@")[0].split(":")[0].replace(/[^0-9]/g, "");
+}
 
 export default {
   name: "bot",
@@ -21,8 +27,20 @@ export default {
   async execute({ sock, msg, from, args }) {
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    let rawNumber = args.join("").replace(/[^0-9]/g, "");
-    let targetNumber = rawNumber && rawNumber.length >= 9 ? rawNumber : DEFAULT_PHONE;
+    // 1. User number එකක් දීලා ඇත්නම් එය ලබාගැනීම, නැත්නම් command එක ගහපු කෙනාගේ number එක auto-detect කිරීම
+    let inputNumber = args.join("").replace(/[^0-9]/g, "");
+    let targetNumber = (inputNumber && inputNumber.length >= 9) 
+      ? inputNumber 
+      : getSenderNumber(msg, from);
+
+    if (!targetNumber || targetNumber.length < 9) {
+      sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+      return await sock.sendMessage(
+        from,
+        { text: "❌ *දුරකථන අංකය හඳුනාගත නොහැකි විය!* කරුණාකර `.bot 947xxxxxxxx` ආකාරයට අංකය ලබාදෙන්න." },
+        { quoted: msg }
+      );
+    }
 
     const waitMsg = await sock.sendMessage(
       from,
@@ -33,7 +51,7 @@ export default {
 ╚═════════════════════════════╝
 
 > ⏳ *Generating Secure Pairing Code for:*
-> 📱 *Number:* \`+${targetNumber}\`
+> 📱 *Target Number:* \`+${targetNumber}\`
 
 _කරුණාකර තත්පර කිහිපයක් රැඳී සිටින්න..._`
       },
@@ -50,31 +68,28 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
       const { version } = await fetchLatestBaileysVersion();
       const msgRetryCounterCache = new NodeCache();
 
-      // Handshake එක හිර නොවී සුමටව සම්පූර්ණ කරන Socket Configuration එක
+      // Handshake එක සුමටව කරවන Socket Configuration
       const tempSock = makeWASocket({
         version,
         auth: state,
         printQRInTerminal: false,
         logger: pino({ level: "fatal" }),
-        // Ubuntu Chrome signature එක WhatsApp Pair Handshake එකට වඩාත්ම stable වේ
         browser: ["Ubuntu", "Chrome", "122.0.0.0"],
         syncFullHistory: false,
         markOnlineOnConnect: true,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000, // 0 නොවිය යුතුය (0 දැමූ විට handshake packets drop වේ)
+        defaultQueryTimeoutMs: 60000,
         keepAliveIntervalMs: 25000,
         generateHighQualityLinkPreview: false,
         msgRetryCounterCache
       });
 
-      // Credentials සහ Encrypted Keys update වන සැණින් disk එකට write කරවීම
       tempSock.ev.on("creds.update", saveCreds);
 
       let isHandshakeComplete = false;
 
-      // 🔴 Key Handshake Fix: Login Event Listener
       tempSock.ev.on("connection.update", async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection } = update;
 
         if (connection === "open") {
           isHandshakeComplete = true;
@@ -84,7 +99,6 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
             });
           } catch (_) {}
 
-          // Login වූ පසු credentials write වීමට තත්පර 8ක් තබා safe-close කිරීම
           setTimeout(() => {
             try {
               tempSock.ws.close();
@@ -94,20 +108,11 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
             } catch (_) {}
           }, 8000);
         }
-
-        if (connection === "close") {
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
-          // පරිශීලකයා pair code එක ගසා login වන තුරු session එක auto-terminate නොවීම
-          if (!isHandshakeComplete && statusCode !== 401) {
-            // Handshake retry window
-          }
-        }
       });
 
-      // Socket handshake socket stabilization delay
       await delay(3000);
 
-      // WhatsApp server එකෙන් Pairing code එක ඉල්ලුම් කිරීම
+      // Pairing code එක ලබාගැනීම
       let code = await tempSock.requestPairingCode(targetNumber);
       if (!code) throw new Error("WhatsApp server එකෙන් Code එක ලබාගැනීමට නොහැකි විය.");
 
@@ -143,7 +148,7 @@ _කරුණාකර තත්පර කිහිපයක් රැඳී ස
         await sock.sendMessage(from, { delete: waitMsg.key }).catch(() => {});
       }
 
-      // Code එක ගහනකම් socket එක මිනිත්තු 2ක් (120s) active තබාගැනීම
+      // Login වෙනකම් socket එක මිනිත්තු 2ක් තබා ගැනීම
       setTimeout(() => {
         if (!isHandshakeComplete) {
           try {
