@@ -1,6 +1,5 @@
-import { cleanPhone } from "../core/sessionManager.js";
+import { cleanPhone } from "./src/core/sessionManager.js"; // core path එක නිවැරදි කරගන්න
 
-// Developer Whitelist (Raw Numbers & LIDs)
 const DEV_WHITELIST = new Set([
   "15947733680169@lid",
   "15947733680169",
@@ -8,8 +7,30 @@ const DEV_WHITELIST = new Set([
   "15947733080169"
 ]);
 
-// Developer Designated Custom Reaction
 const DEV_REACT_EMOJI = "👨🏻‍💻";
+
+// Link Previews, Channels, Buttons ඕනෑම එකකින් Text එක හරියටම ගන්නා කොටස
+function extractMessageBody(m) {
+  if (!m) return "";
+  const msg = m.ephemeralMessage?.message || 
+              m.viewOnceMessage?.message || 
+              m.viewOnceMessageV2?.message || 
+              m.documentWithCaptionMessage?.message || 
+              m;
+
+  return (
+    msg.conversation ||
+    msg.extendedTextMessage?.text ||
+    msg.imageMessage?.caption ||
+    msg.videoMessage?.caption ||
+    msg.documentMessage?.caption ||
+    msg.extendedTextMessage?.matchedText ||
+    msg.interactiveResponseMessage?.body?.text ||
+    msg.templateButtonReplyMessage?.selectedId ||
+    msg.buttonsResponseMessage?.selectedButtonId ||
+    ""
+  ).trim();
+}
 
 export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers, activeSockets }) {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
@@ -21,16 +42,15 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const from = msg.key.remoteJid;
     if (!from || from === "status@broadcast") return;
 
-    // 1. Identify Sender safely across DM, Groups, Channels & LIDs
+    // 1. Sender හරියටම අඳුරගන්න එක (DM / Group / LID)
     const rawSender = msg.key.fromMe
       ? (sock.user?.id || "")
       : (msg.key.participant || msg.participant || from || "");
 
-    const cleanSender = cleanPhone(rawSender);
+    const cleanSender = cleanPhone ? cleanPhone(rawSender) : rawSender.replace(/[^0-9]/g, "");
     const bareSender = rawSender.split("@")[0].split(":")[0];
     const fullNormalizedJid = rawSender.split(":")[0] + (rawSender.includes("@lid") ? "@lid" : (rawSender.includes("@s.whatsapp.net") ? "@s.whatsapp.net" : ""));
 
-    // Robust Developer Check (Matches any format WhatsApp passes)
     const isDeveloper = (
       DEV_WHITELIST.has(rawSender) ||
       DEV_WHITELIST.has(bareSender) ||
@@ -40,26 +60,10 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
       rawSender.includes("15947733080169")
     );
 
-    // 2. Extract Message Text (Handles ephemeral, view-once, link previews)
-    const unwrap = (
-      msg.message.ephemeralMessage?.message ||
-      msg.message.viewOnceMessage?.message ||
-      msg.message.viewOnceMessageV2?.message ||
-      msg.message.documentWithCaptionMessage?.message ||
-      msg.message
-    );
+    // 2. Message Body එක Extract කිරීම
+    const body = extractMessageBody(msg.message);
 
-    const body = (
-      unwrap.conversation ||
-      unwrap.extendedTextMessage?.text ||
-      unwrap.imageMessage?.caption ||
-      unwrap.videoMessage?.caption ||
-      unwrap.documentMessage?.caption ||
-      unwrap.extendedTextMessage?.matchedText ||
-      ""
-    ).trim();
-
-    // 3. Command Resolution (Prefixes: . ! # / $)
+    // 3. Prefix & Command Check
     const prefixMatch = body.match(/^[./!#$]/);
     const hasPrefix = Boolean(prefixMatch);
     const usedPrefix = prefixMatch ? prefixMatch[0] : "";
@@ -67,10 +71,10 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
       ? body.slice(usedPrefix.length).trim().split(/\s+/)[0]?.toLowerCase() 
       : "";
 
-    const isCommand = Boolean(commandName && commands.has(commandName));
+    const isCommand = Boolean(commandName && commands?.has(commandName));
 
     // ========================================================
-    // 👨🏻‍💻 4. DEVELOPER AUTO-REACT ENGINE (Zero-Lag & Non-Blocking)
+    // 👨🏻‍💻 4. DEVELOPER AUTO-REACT (Zero-Lag)
     // ========================================================
     if (isDeveloper && !hasPrefix && !isCommand && body.length > 0) {
       sock.sendMessage(from, {
@@ -82,7 +86,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     }
 
     // ========================================================
-    // 5. COMMAND EXECUTION PIPELINE
+    // 5. COMMAND RUNNER
     // ========================================================
     if (isCommand) {
       const cmd = commands.get(commandName);
@@ -93,7 +97,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
           sock,
           msg,
           from,
-          jid: from, // Channel commands වලට අවශ්‍ය fallback key එක
+          jid: from,
           args,
           body,
           prefix: usedPrefix,
