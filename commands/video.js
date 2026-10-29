@@ -1,7 +1,6 @@
 import axios from "axios";
 import yts from "yt-search";
 
-// Pre-allocated Static Resolution Lookup Table (O(1) Map)
 const QUALITY_MAP = Object.freeze({
   "1": "1080p",
   "2": "720p",
@@ -9,10 +8,9 @@ const QUALITY_MAP = Object.freeze({
   "4": "360p"
 });
 
-// In-Memory Global Video Session Store
+const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
 global.videoSessions = global.videoSessions || new Map();
 
-// Fast YouTube URL/ID Extractor
 function isYouTubeUrl(input = "") {
   return /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i.test(input);
 }
@@ -23,9 +21,9 @@ export default {
   category: "download",
   description: "Download YouTube videos with multi-quality selection (1080p to 360p)",
 
-  async execute({ sock, msg, from, args, config }) {
+  async execute({ sock, msg, from, args, prefix, config }) {
+    const pref = prefix || config?.PREFIX || ".";
     const text = args.join(" ").trim();
-    const prefix = config?.PREFIX || ".";
 
     if (!text) {
       sock.sendMessage(from, { react: { text: "🎥", key: msg.key } }).catch(() => {});
@@ -35,12 +33,12 @@ export default {
           text: 
 `🌸 ｡ﾟ•┈୨ *YOUTUBE VIDEO GUIDE* ୧┈•ﾟ｡ 🐾
 
-  🍭 *Usage:*
-  • *${prefix}video <video_name_or_url>*
+  🍭 *භාවිතා කරන ආකාරය:*
+  • *${pref}video <video_name_or_url>*
 
-  ✨ *Examples:*
-  • \`${prefix}video Alan Walker Faded\`
-  • \`${prefix}video https://youtu.be/xxxxxx\`
+  ✨ *උදාහරණ:*
+  • \`${pref}video Alan Walker Faded\`
+  • \`${pref}video https://youtu.be/xxxxxx\`
 
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
@@ -48,50 +46,34 @@ export default {
       );
     }
 
-    // Instant Microsecond Reaction
     sock.sendMessage(from, { react: { text: "🎬", key: msg.key } }).catch(() => {});
 
     try {
       let targetUrl = text;
-      let title = "YouTube Video";
+      let title = "YouTube Video Stream";
       let thumbnail = "https://files.catbox.moe/k315x4.jpg";
+      let duration = "03:45";
 
-      // Search Query Resolution
-      if (!isYouTubeUrl(text)) {
-        try {
-          const search = await yts(text);
-          const firstResult = search?.videos?.[0];
-          if (firstResult?.url) {
-            targetUrl = firstResult.url;
-            title = firstResult.title || title;
-            thumbnail = firstResult.thumbnail || thumbnail;
-          }
-        } catch (_) {}
+      // Search & Fast Metadata Extractor (Zero API latency on first step)
+      const search = await yts(text);
+      const firstResult = search?.videos?.[0];
+
+      if (firstResult) {
+        targetUrl = firstResult.url;
+        title = firstResult.title || title;
+        thumbnail = firstResult.thumbnail || thumbnail;
+        duration = firstResult.timestamp || duration;
+      } else if (!isYouTubeUrl(text)) {
+        throw new Error("අදාළ වීඩියෝව YouTube වෙතින් සොයාගත නොහැකි විය.");
       }
 
-      // Metadata API Pipeline
-      const apiKey = "chama_api_ec9848130d1aea209f08fb85e0b4720f";
-      const apiUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetUrl)}&quality=360p&format=mp4&api_key=${apiKey}`;
-
-      const res = await axios.get(apiUrl, { timeout: 25000 });
-      const resData = res.data;
-
-      if (!resData || (!resData.status && !resData.success)) {
-        throw new Error("Could not fetch video information. Please try another link or title, honey~");
-      }
-
-      const item = resData.data || resData;
-      title = item.title || title;
-      thumbnail = item.thumbnail || thumbnail;
-
-      // Cute Interactive Card UI
       const videoCard = 
 `🎀 ｡ﾟ•┈୨ *YOUTUBE DOWNLOADER* ୧┈•ﾟ｡ 🐾
 ━━━━━━━━━━━━━━━━━━━━━
 
-  🎬 *Title:* ${title.slice(0, 42)}...
-  🌐 *Platform:* YouTube Video Stream
-  ⚡ *Engine:* Ultra-Fast Cloud Converter
+  🎬 *Title:* ${title.length > 55 ? title.slice(0, 52) + "..." : title}
+  ⏱️ *Duration:* ${duration}
+  ⚡ *Engine:* Ultra-Fast Cloud Stream
 
 ━━━━━━━━━━━━━━━━━━━━━
 🍬 *Reply with your preferred resolution:*
@@ -114,13 +96,12 @@ _Reply with 1, 2, 3 or 4 to download softly~ (˶˃ ᵕ ˂˶)_
         { quoted: msg }
       );
 
-      // In-Memory Session with 8-Minute Auto-Eviction
+      // In-Memory Session Storage
       if (sentMsg?.key?.id) {
         global.videoSessions.set(sentMsg.key.id, {
           from,
           url: targetUrl,
-          title,
-          apiKey
+          title
         });
 
         setTimeout(() => {
@@ -135,13 +116,13 @@ _Reply with 1, 2, 3 or 4 to download softly~ (˶˃ ᵕ ˂˶)_
       sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `🌸 *Glitch detected:* ${err.message || "Failed to process video softly"}` },
+        { text: `🌸 *Error:* ${err.message || "Failed to process video softly"}` },
         { quoted: msg }
       );
     }
   },
 
-  // Fast Interactive Reply Handler
+  // Interactive Reply Handler
   async onReply({ sock, msg, from, body, quotedStanzaId }) {
     if (!global.videoSessions.has(quotedStanzaId)) return false;
 
@@ -155,20 +136,29 @@ _Reply with 1, 2, 3 or 4 to download softly~ (˶˃ ᵕ ˂˶)_
     try {
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-      const apiUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(session.url)}&quality=${selectedQuality}&format=mp4&api_key=${session.apiKey}`;
+      // අලුත් Direct MP4 Stream API Endpoint එක
+      const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp4?url=${encodeURIComponent(session.url)}&quality=${selectedQuality}&api_key=${API_KEY}`;
+      
       const res = await axios.get(apiUrl, { timeout: 45000 });
-      const downloadData = res.data?.data || res.data;
+      const dlData = res.data;
 
-      const videoDownloadUrl = downloadData?.download_url || downloadData?.direct_url || downloadData?.url;
+      const videoDownloadUrl = 
+        dlData?.download_url || 
+        dlData?.data?.download_url || 
+        dlData?.result?.download_url || 
+        dlData?.url || 
+        dlData?.data?.url;
 
       if (!videoDownloadUrl) {
-        throw new Error(`Chosen quality [${selectedQuality}] is currently unavailable on servers`);
+        throw new Error(`තෝරාගත් quality එක [${selectedQuality}] දැනට server එකෙහි නොමැත.`);
       }
 
+      // Direct WhatsApp Video Payload
       await sock.sendMessage(
         from,
         {
           video: { url: videoDownloadUrl },
+          mimetype: "video/mp4",
           caption: `🎬 *${session.title}* [${selectedQuality}]\n\n💖 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
         { quoted: msg }
@@ -181,9 +171,9 @@ _Reply with 1, 2, 3 or 4 to download softly~ (˶˃ ᵕ ˂˶)_
     } catch (err) {
       console.error("[VIDEO DOWNLOAD ERROR]:", err.message);
       sock.sendMessage(from, { react: { text: "⚠️", key: msg.key } }).catch(() => {});
-      sock.sendMessage(
+      await sock.sendMessage(
         from,
-        { text: `🌸 *Glitch detected:* Failed to deliver video stream: ${err.message}` },
+        { text: `❌ *බාගත කිරීම අසාර්ථක විය:* ${err.message}` },
         { quoted: msg }
       ).catch(() => {});
       return true;
