@@ -10,8 +10,6 @@ const DEV_NUMBERS = new Set([
   "15947733080169@lid"
 ]);
 
-const DEV_REACT_EMOJI = "👨🏻‍💻";
-
 // Link Cards / Interactive messages වලින් Text හරියටම extract කිරීම
 function extractMessageBody(m) {
   if (!m) return "";
@@ -58,7 +56,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const cleanSender = cleanPhone(rawSender);
     const bareSender = rawSender.split("@")[0].split(":")[0];
 
-    // 🔴 1. Developer ද නැද්ද යන්න පමණක් තහවුරු කිරීම (Bot Account එක මේකට අදාළ නැත)
+    // Developer Check (Permissions සඳහා)
     const isDeveloper = 
       DEV_NUMBERS.has(cleanSender) || 
       DEV_NUMBERS.has(bareSender) || 
@@ -66,7 +64,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
       rawSender.includes("15947733680169") ||
       rawSender.includes("94719845166");
 
-    // 🔴 2. Bot Owner Permissions (Settings, Commands සඳහා පමණි)
+    // Bot Owner Permissions (Settings, Commands සඳහා)
     const isOwner = msg.key.fromMe || cleanSender === botPhone || isDeveloper;
 
     // Group / Mode Barrier
@@ -102,29 +100,13 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const prefix = CONFIG.PREFIX || ".";
     const isCommand = body.startsWith(prefix);
 
-    // ========================================================
-    // 👨🏻‍💻 3. ZERO-LAG DEVELOPER AUTO-REACT ENGINE
-    // ========================================================
-    // Bot Owner ට නොවැටේ! Developer (15947733680169 / 94719845166) ට පමණක් වැටේ!
-    // Command එකක් නොවන සාමාන්‍ය මැසේජ් වලට පමණි.
-    if (isDeveloper && !isCommand && body.length > 0) {
-      sock.sendMessage(from, {
-        react: {
-          text: DEV_REACT_EMOJI,
-          key: msg.key
-        }
-      }).catch(() => {});
-    }
-
     if (!isCommand) return;
 
     const args = body.slice(prefix.length).trim().split(/\s+/);
     const cmdName = args.shift()?.toLowerCase();
     const cmd = commands.get(cmdName);
 
-    // ========================================================
-    // 4. COMMAND EXECUTION
-    // ========================================================
+    // 3. Command Execution
     if (cmd && typeof cmd.execute === "function") {
       try {
         await cmd.execute({
