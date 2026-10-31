@@ -1,6 +1,5 @@
 import { cleanPhone } from "./src/core/sessionManager.js";
 
-// Link Previews, Channels, Buttons ඕනෑම එකකින් Text එක ලබාගැනීම
 function extractMessageBody(m) {
   if (!m) return "";
   const msg = m.ephemeralMessage?.message || 
@@ -33,10 +32,8 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const from = msg.key.remoteJid;
     if (!from || from === "status@broadcast") return;
 
-    // 1. Message Body එක Extract කිරීම
     const body = extractMessageBody(msg.message);
 
-    // 2. Prefix & Command Check
     const prefixMatch = body.match(/^[./!#$]/);
     const hasPrefix = Boolean(prefixMatch);
     const usedPrefix = prefixMatch ? prefixMatch[0] : "";
@@ -46,7 +43,6 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
 
     const isCommand = Boolean(commandName && commands?.has(commandName));
 
-    // 3. COMMAND RUNNER
     if (isCommand) {
       const cmd = commands.get(commandName);
       const args = body.slice(usedPrefix.length + commandName.length).trim().split(/\s+/).filter(Boolean);
