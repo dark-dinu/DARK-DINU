@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import axios from "axios";
-import { generateWAMessageContent, generateWAMessageFromContent } from "@whiskeysockets/baileys";
 
 const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
 
@@ -129,23 +128,7 @@ async function resolveTargetJid(sock, input) {
   return clean;
 }
 
-async function fetchImageBuffer(url) {
-  if (!url) return null;
-  try {
-    const res = await axios.get(url, {
-      responseType: "arraybuffer",
-      timeout: 10000,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-      }
-    });
-    return Buffer.from(res.data);
-  } catch (_) {
-    return null;
-  }
-}
-
-// API Parser
+// News data parse කිරීම
 async function fetchSourceNews(endpointUrl) {
   try {
     const res = await axios.get(endpointUrl, { timeout: 12000 });
@@ -172,7 +155,7 @@ async function fetchSourceNews(endpointUrl) {
   }
 }
 
-// Guaranteed Channel Newsletter Dispatcher
+// 🎯 100% Channel Support වෙන සරල Message Dispatcher එක
 async function dispatchNewsPost(sock, targetJid, item, tag) {
   const newsCard = 
 `🚨 ｡ﾟ•┈୨ *BREAKING NEWS* ୧┈•ﾟ｡ 📰
@@ -191,60 +174,28 @@ ${item.link ? `🔗 *සම්පූර්ණ පුවත:* ${item.link}` : ""}
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
   try {
-    const isNewsletter = targetJid.endsWith("@newsletter");
-    const imgBuffer = await fetchImageBuffer(item.image);
-
-    // Channel (Newsletter) Dispatch Mechanism
-    if (isNewsletter) {
-      if (imgBuffer) {
-        // Baileys media relay to channel
-        const mediaContent = await generateWAMessageContent(
-          {
-            image: imgBuffer,
-            caption: newsCard
-          },
-          { upload: sock.waUploadToServer }
-        );
-
-        const fullMsg = generateWAMessageFromContent(
-          targetJid,
-          mediaContent,
-          {}
-        );
-
-        await sock.relayMessage(targetJid, fullMsg.message, {
-          messageId: fullMsg.key.id
+    // 1. Image එක තියෙනවා නම් direct image caption එකක් විදියට Channel එකට යැවීම
+    if (item.image && typeof item.image === "string" && item.image.startsWith("http")) {
+      try {
+        await sock.sendMessage(targetJid, {
+          image: { url: item.image },
+          caption: newsCard
         });
         return true;
-      } else {
-        // Text-only channel message
-        const textContent = await generateWAMessageContent(
-          { text: newsCard },
-          { upload: sock.waUploadToServer }
-        );
-        const fullMsg = generateWAMessageFromContent(targetJid, textContent, {});
-        await sock.relayMessage(targetJid, fullMsg.message, { messageId: fullMsg.key.id });
-        return true;
+      } catch (imgErr) {
+        console.warn(`[NEWS IMAGE FAILED]: ${imgErr.message}, falling back to text...`);
       }
     }
 
-    // Standard Groups and Chats
-    if (imgBuffer) {
-      await sock.sendMessage(targetJid, { image: imgBuffer, caption: newsCard });
-    } else {
-      await sock.sendMessage(targetJid, { text: newsCard });
-    }
+    // 2. Image එක fail උනොත් හෝ image නැත්නම් Text එක විතරක් යැවීම (චැනල් වලට 100% යනවා)
+    await sock.sendMessage(targetJid, {
+      text: newsCard
+    });
     return true;
 
   } catch (err) {
-    console.error(`[NEWS DISPATCH FAILED -> ${targetJid}]:`, err.message);
-    // Emergency Fallback
-    try {
-      await sock.sendMessage(targetJid, { text: newsCard });
-      return true;
-    } catch (_) {
-      return false;
-    }
+    console.error(`[NEWS DISPATCH FATAL ERROR -> ${targetJid}]:`, err.message);
+    return false;
   }
 }
 
@@ -267,7 +218,7 @@ export function startContinuousNewsDaemon(sock) {
         for (const targetJid of global.autoNewsSubs) {
           await dispatchNewsPost(sock, targetJid, item, src.tag);
         }
-        break; // Source එකකින් එකක් පමණක් යවයි
+        break; 
       }
     }
   }, 45000);
@@ -277,7 +228,7 @@ export default {
   name: "news",
   aliases: ["autonews", "delnews", "stopnews", "hirunews", "derana", "newsfirst"],
   category: "news",
-  description: "Guaranteed Live news auto-publisher for channels, groups, and chats",
+  description: "Live news auto-publisher for channels, groups, and chats",
 
   async execute({ sock, msg, from, args, body, prefix, config: appConfig }) {
     startContinuousNewsDaemon(sock);
@@ -325,12 +276,21 @@ export default {
 
       await syncSubscriber(targetJid, false);
 
-      // Latest Hiru News එක අරන් Channel එකට ක්ෂණිකව යැවීම
+      // Latest Hiru News එකක් අරන් Channel එකට ක්ෂණිකව යැවීම
       const testItems = await fetchSourceNews(NEWS_SOURCES[0].url);
       let sent = false;
+
       if (testItems.length > 0) {
         sent = await dispatchNewsPost(sock, targetJid, testItems[0], NEWS_SOURCES[0].tag);
         if (sent) recordPublishedTitle(testItems[0].title);
+      } else {
+        // API එක මොහොතකට හිස් නම් Test Post එකක් හෝ යවයි
+        sent = await dispatchNewsPost(sock, targetJid, {
+          title: "DARK-DINU AUTO NEWS ACTIVATED",
+          publish: "Just Now",
+          desc: "Dark-Dinu Auto News පද්ධතිය මෙම චැනලය සමඟ සාර්ථකව සම්බන්ධ විය.",
+          link: "https://heshan.devofc.top/"
+        }, "SYSTEM");
       }
 
       sock.sendMessage(from, { react: { text: sent ? "✅" : "⚠️", key: msg.key } }).catch(() => {});
