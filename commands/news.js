@@ -3,15 +3,27 @@ import path from "path";
 import axios from "axios";
 import { generateWAMessageContent, generateWAMessageFromContent } from "@whiskeysockets/baileys";
 
-const API_KEY = "supun-tvo5olfxylo98b8l6b9lq174";
+const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+
 const NEWS_SOURCES = Object.freeze([
-  { id: "lankadeepa", name: "ලංකාදීප", tag: "🇱🇰 LANKADEEPA", url: `https://supunofc.site/api/news/lankadeepa?apikey=${API_KEY}` },
-  { id: "newslk", name: "NewsLK", tag: "🇱🇰 NEWS.LK", url: `https://supunofc.site/api/news/newslk?apikey=${API_KEY}` },
-  { id: "theverge", name: "The Verge AI", tag: "🤖 THE VERGE | AI", url: `https://supunofc.site/api/news/theverge/ai-artificial-intelligence?apikey=${API_KEY}` },
-  { id: "techcrunch", name: "TechCrunch AI", tag: "⚡ TECHCRUNCH | AI", url: `https://supunofc.site/api/news/techcrunch/artificial-intelligence?apikey=${API_KEY}` },
-  { id: "bbc", name: "BBC News", tag: "🌍 BBC WORLD", url: `https://supunofc.site/api/news/bbc?apikey=${API_KEY}` },
-  { id: "nasa_news", name: "NASA News", tag: "🚀 NASA DISCOVERY", url: `https://supunofc.site/api/news/nasa?type=news&apikey=${API_KEY}` },
-  { id: "nasa_missions", name: "NASA Missions", tag: "🛰️ NASA MISSIONS", url: `https://supunofc.site/api/news/nasa?type=missions&apikey=${API_KEY}` }
+  {
+    id: "hirunews",
+    name: "Hiru News",
+    tag: "🇱🇰 HIRU NEWS",
+    url: `https://api.chamindu.site/api/v1/media/hirunews?limit=10&api_key=${API_KEY}`
+  },
+  {
+    id: "adaderana",
+    name: "Ada Derana",
+    tag: "🇱🇰 ADA DERANA",
+    url: `https://api.chamindu.site/api/v1/media/adaderana?limit=10&api_key=${API_KEY}`
+  },
+  {
+    id: "newsfirst",
+    name: "Newsfirst",
+    tag: "🇱🇰 NEWS FIRST",
+    url: `https://api.chamindu.site/api/v1/media/newsfirst?limit=10&api_key=${API_KEY}`
+  }
 ]);
 
 global.autoNewsSubs = global.autoNewsSubs || new Set();
@@ -69,36 +81,54 @@ async function syncSubscriber(targetJid, isDelete = false) {
 }
 
 function recordPublishedTitle(title) {
+  if (!title) return;
   global.seenNewsTitles.add(title);
   try {
-    const arr = Array.from(global.seenNewsTitles).slice(-200);
+    const arr = Array.from(global.seenNewsTitles).slice(-300);
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(arr, null, 2));
   } catch (_) {}
 }
 
 initStorage();
 
-function extractChannelInvite(input = "") {
-  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
-  return match ? match[1] : input.trim();
+function extractInviteCode(input = "") {
+  const channelMatch = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z]+)/i);
+  if (channelMatch) return { type: "channel", code: channelMatch[1] };
+
+  const groupMatch = input.match(/(?:chat\.whatsapp\.com\/)([0-9A-Za-z]+)/i);
+  if (groupMatch) return { type: "group", code: groupMatch[1] };
+
+  return { type: "raw", code: input.trim() };
 }
 
-async function resolveChannelJid(sock, input) {
+async function resolveTargetJid(sock, input) {
   if (!input) return null;
   const clean = input.trim();
-  if (clean.endsWith("@newsletter") || clean.endsWith("@g.us")) return clean;
+  if (clean.endsWith("@newsletter") || clean.endsWith("@g.us") || clean.endsWith("@s.whatsapp.net")) {
+    return clean;
+  }
 
-  const code = extractChannelInvite(clean);
-  try {
-    if (typeof sock.newsletterMetadata === "function") {
-      const meta = await sock.newsletterMetadata("invite", code);
-      return meta?.id || null;
-    }
-  } catch (_) {}
-  return null;
+  const parsed = extractInviteCode(clean);
+
+  if (parsed.type === "channel") {
+    try {
+      if (typeof sock.newsletterMetadata === "function") {
+        const meta = await sock.newsletterMetadata("invite", parsed.code);
+        return meta?.id || null;
+      }
+    } catch (_) {}
+  } else if (parsed.type === "group") {
+    try {
+      if (typeof sock.groupGetInviteInfo === "function") {
+        const info = await sock.groupGetInviteInfo(parsed.code);
+        return info?.id ? `${info.id}@g.us` : null;
+      }
+    } catch (_) {}
+  }
+
+  return clean;
 }
 
-// Download image buffer safely with browser headers
 async function fetchImageBuffer(url) {
   if (!url) return null;
   try {
@@ -115,38 +145,46 @@ async function fetchImageBuffer(url) {
   }
 }
 
+// Data extractor for Chamindu API format
 async function fetchSourceNews(endpointUrl) {
   try {
-    const res = await axios.get(endpointUrl, { timeout: 8000 });
-    if (!res.data?.success || !res.data?.results) return null;
+    const res = await axios.get(endpointUrl, { timeout: 10000 });
+    const payload = res.data;
 
-    const r = res.data.results;
-    return {
-      title: (r.title || "").trim(),
-      image: r.image || null,
-      publish: r.publish || r.date || "Just Now",
-      desc: (r.dec || r.description || "").trim(),
-      link: r.link || ""
-    };
+    let items = [];
+    if (Array.isArray(payload)) items = payload;
+    else if (Array.isArray(payload?.data)) items = payload.data;
+    else if (Array.isArray(payload?.results)) items = payload.results;
+    else if (Array.isArray(payload?.result)) items = payload.result;
+    else if (payload?.result && typeof payload.result === "object") items = [payload.result];
+
+    if (!items.length) return [];
+
+    return items.map((r) => ({
+      title: (r.title || r.heading || "").trim(),
+      image: r.image || r.thumbnail || r.img || null,
+      publish: r.date || r.time || r.datetime || r.published_at || "Just Now",
+      desc: (r.desc || r.description || r.news || r.summary || "").trim(),
+      link: r.link || r.url || ""
+    })).filter(x => x.title);
   } catch (_) {
-    return null;
+    return [];
   }
 }
 
-// Low-Level Safe Dispatcher (Works on Channels, Groups, & Chats)
 async function dispatchNewsPost(sock, targetJid, item, tag) {
   const newsCard = 
-`🚨 ｡ﾟ•┈୨ *BREAKING UPDATE* ୧┈•ﾟ｡ 📰
+`🚨 ｡ﾟ•┈୨ *BREAKING NEWS* ୧┈•ﾟ｡ 📰
 ━━━━━━━━━━━━━━━━━━━━━
 
-📢 *Source:* \`${tag}\`
+📢 *මූලාශ්‍රය:* \`${tag}\`
 📰 *${item.title}*
 
-📅 *Time:* \`${item.publish}\`
+📅 *වේලාව:* \`${item.publish}\`
 
 ${item.desc ? item.desc : ""}
 
-${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
+${item.link ? `🔗 *සම්පූර්ණ පුවත:* ${item.link}` : ""}
 
 ━━━━━━━━━━━━━━━━━━━━━
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
@@ -156,7 +194,6 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
     const imgBuffer = await fetchImageBuffer(item.image);
 
     if (isNewsletter) {
-      // 1. Try Baileys Newsletter Relay Stream
       try {
         if (imgBuffer && typeof sock.waUploadToServer === "function") {
           const mediaContent = await generateWAMessageContent(
@@ -168,10 +205,9 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
           return true;
         }
       } catch (err) {
-        console.warn(`[RELAY ATTEMPT FAILED]: ${err.message}, falling back to direct send...`);
+        console.warn(`[NEWS RELAY RETRY]: ${err.message}`);
       }
 
-      // 2. Fallback to sock.sendMessage
       if (imgBuffer) {
         await sock.sendMessage(targetJid, { image: imgBuffer, caption: newsCard });
       } else {
@@ -180,7 +216,6 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
       return true;
     }
 
-    // Standard Chat / Group Sending
     if (imgBuffer) {
       await sock.sendMessage(targetJid, { image: imgBuffer, caption: newsCard });
     } else {
@@ -189,8 +224,7 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
     return true;
 
   } catch (err) {
-    console.error(`[NEWS DISPATCH FAILED -> ${targetJid}]:${err.message}`);
-    // Final emergency fallback: plain text send
+    console.error(`[NEWS DISPATCH FAILED -> ${targetJid}]:`, err.message);
     try {
       await sock.sendMessage(targetJid, { text: newsCard });
       return true;
@@ -200,161 +234,148 @@ ${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
   }
 }
 
-// Background Auto-News Daemon (Checks every 40s)
 export function startContinuousNewsDaemon(sock) {
   if (global.autoNewsLoopActive) return;
   global.autoNewsLoopActive = true;
 
+  // සෑම තත්පර 45කට වරක් නව පුවත් පරීක්ෂා කර යවයි
   setInterval(async () => {
     if (global.autoNewsSubs.size === 0) return;
 
     for (const src of NEWS_SOURCES) {
-      const item = await fetchSourceNews(src.url);
-      if (!item || !item.title) continue;
+      const items = await fetchSourceNews(src.url);
+      if (!items || !items.length) continue;
 
-      if (global.seenNewsTitles.has(item.title)) continue;
-      recordPublishedTitle(item.title);
+      for (const item of items) {
+        if (global.seenNewsTitles.has(item.title)) continue;
+        recordPublishedTitle(item.title);
 
-      for (const targetJid of global.autoNewsSubs) {
-        await dispatchNewsPost(sock, targetJid, item, src.tag);
+        for (const targetJid of global.autoNewsSubs) {
+          await dispatchNewsPost(sock, targetJid, item, src.tag);
+        }
+        break; // එක source එකකින් එක් වරකට එක් අලුත් news එකක් පමණක් යවයි
       }
     }
-  }, 40000);
+  }, 45000);
 }
 
 export default {
   name: "news",
-  aliases: ["lankadeepa", "newslk", "theverge", "techcrunch", "bbc", "nasa", "autonews"],
+  aliases: ["autonews", "delnews", "stopnews", "hirunews", "derana", "newsfirst"],
   category: "news",
-  description: "Live news feed with guaranteed channel & chat auto-publishing",
+  description: "Live Sri Lankan news feeder & auto-publisher for channels, groups, and chats",
 
   async execute({ sock, msg, from, args, body, prefix, config: appConfig }) {
     startContinuousNewsDaemon(sock);
 
     const pref = prefix || appConfig?.PREFIX || ".";
     const fullBody = body.trim();
-    const cmd = fullBody.slice(pref.length).trim().split(/\s+/)[0].toLowerCase();
-    const opt = args[0]?.toLowerCase()?.trim();
+    const cmd = fullBody.slice(pref.length).trim().split(/\s+/)[0]?.toLowerCase();
+    const inputArg = args.join(" ").trim();
 
-    // -------------------------------------------------------------
-    // Auto-Publisher Controls (.news auto on <link/jid>)
-    // -------------------------------------------------------------
-    if (opt === "auto" || cmd === "autonews") {
-      const state = (cmd === "autonews" ? args[0] : args[1])?.toLowerCase()?.trim();
-      const rawTarget = (cmd === "autonews" ? args[1] : args[2])?.trim();
-
+    // =============================================================
+    // 🛑 STOP NEWS (.delnews හෝ .stopnews)
+    // =============================================================
+    if (cmd === "delnews" || cmd === "stopnews" || args[0]?.toLowerCase() === "stop" || args[0]?.toLowerCase() === "off") {
+      const rawTarget = args[0]?.toLowerCase() === "stop" || args[0]?.toLowerCase() === "off" ? args[1] : args[0];
       let targetJid = from;
+
       if (rawTarget) {
-        targetJid = await resolveChannelJid(sock, rawTarget) || rawTarget;
+        targetJid = await resolveTargetJid(sock, rawTarget) || rawTarget;
       }
 
-      if (state === "on") {
-        await syncSubscriber(targetJid, false);
-        sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
-
-        // Instant dispatch of latest Lankadeepa news as proof
-        const testItem = await fetchSourceNews(NEWS_SOURCES[0].url);
-        let sent = false;
-        if (testItem) {
-          sent = await dispatchNewsPost(sock, targetJid, testItem, NEWS_SOURCES[0].tag);
-          recordPublishedTitle(testItem.title);
-        }
-
-        sock.sendMessage(from, { react: { text: sent ? "💖" : "⚠️", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          {
-            text: 
-`✨ *Auto-News Activated Successfully!* 🚀
-━━━━━━━━━━━━━━━━━━━━━
-📢 *Destination:* \`${targetJid}\`
-🚀 *Instant Delivery:* ${sent ? "🟢 Sent successfully right now!" : "⚠️ Failed (Make sure bot is an Admin of this channel!)"}
-📡 *Active Feeds:* Lankadeepa, NewsLK, BBC, The Verge, TechCrunch, NASA
-
-_New breaking posts will dispatch automatically within 40 seconds._
-💖 *DARK-DINU MD*`
-          },
-          { quoted: msg }
-        );
-      }
-
-      if (state === "off") {
-        await syncSubscriber(targetJid, true);
-        sock.sendMessage(from, { react: { text: "🔕", key: msg.key } }).catch(() => {});
-        return await sock.sendMessage(
-          from,
-          { text: `🧹 *Removed:* Channel alerts stopped for \`${targetJid}\`` },
-          { quoted: msg }
-        );
-      }
-
-      if (state === "list") {
-        let listText = `🎀 ｡ﾟ•┈୨ *ACTIVE NEWS TARGETS* ୧┈•ﾟ｡ 📰\n━━━━━━━━━━━━━━━━━━━━━\n\n`;
-        global.autoNewsSubs.forEach((id, idx) => {
-          listText += `  • ${idx + 1}. \`${id}\`\n`;
-        });
-        listText += `\n━━━━━━━━━━━━━━━━━━━━━\n💖 *DARK-DINU MD*`;
-        return await sock.sendMessage(from, { text: listText }, { quoted: msg });
-      }
+      await syncSubscriber(targetJid, true);
+      sock.sendMessage(from, { react: { text: "🔕", key: msg.key } }).catch(() => {});
 
       return await sock.sendMessage(
         from,
         {
           text: 
-`🌸 ｡ﾟ•┈୨ *AUTO-NEWS GUIDE* ୧┈•ﾟ｡ 🐾
+`🛑 *Auto-News Service Stopped!*
+━━━━━━━━━━━━━━━━━━━━━
+📢 *ඉවත් කළ ස්ථානය:* \`${targetJid}\`
 
-  • *${pref}news auto on <channel_link>* ➔ Channel එකට On කරන්න
-  • *${pref}news auto on <channel_jid>*  ➔ Direct JID එකට On කරන්න
-  • *${pref}news auto off <channel_link>* ➔ Off කරන්න
-  • *${pref}news auto list* ➔ Active Targets බලන්න
-
+_මෙම ස්ථානයට ස්වයංක්‍රීය පුවත් යැවීම නතර කරන ලදී._
 💖 *DARK-DINU MD*`
         },
         { quoted: msg }
       );
     }
 
-    // -------------------------------------------------------------
-    // Manual Trigger Command
-    // -------------------------------------------------------------
-    const directMap = {
-      "lankadeepa": NEWS_SOURCES[0],
-      "newslk": NEWS_SOURCES[1],
-      "theverge": NEWS_SOURCES[2],
-      "techcrunch": NEWS_SOURCES[3],
-      "bbc": NEWS_SOURCES[4],
-      "nasa": NEWS_SOURCES[5]
-    };
+    // =============================================================
+    // 🚀 ACTIVATE NEWS (.news <channel_link / group_link / jid>)
+    // =============================================================
+    if (inputArg) {
+      sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    let selectedSource = directMap[cmd] || (opt && directMap[opt]) || NEWS_SOURCES[0];
+      const targetJid = await resolveTargetJid(sock, inputArg);
 
-    sock.sendMessage(from, { react: { text: "📰", key: msg.key } }).catch(() => {});
-    const item = await fetchSourceNews(selectedSource.url);
+      if (!targetJid) {
+        sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
+        return await sock.sendMessage(
+          from,
+          { text: "⚠️ *වලංගු Channel Link එකක්, Group Link එකක් හෝ JID එකක් ලබා දෙන්න!*" },
+          { quoted: msg }
+        );
+      }
 
-    if (!item) {
-      return await sock.sendMessage(from, { text: "💔 *Could not fetch news right now!*" }, { quoted: msg });
+      await syncSubscriber(targetJid, false);
+
+      // Latest Hiru News එකක් ක්ෂණිකව test කර යවයි
+      const testItems = await fetchSourceNews(NEWS_SOURCES[0].url);
+      let sent = false;
+      if (testItems.length > 0) {
+        sent = await dispatchNewsPost(sock, targetJid, testItems[0], NEWS_SOURCES[0].tag);
+        recordPublishedTitle(testItems[0].title);
+      }
+
+      sock.sendMessage(from, { react: { text: sent ? "✅" : "⚠️", key: msg.key } }).catch(() => {});
+
+      return await sock.sendMessage(
+        from,
+        {
+          text: 
+`✨ *Auto-News සක්‍රීය කරන ලදී!* 🚀
+━━━━━━━━━━━━━━━━━━━━━
+📢 *Destination:* \`${targetJid}\`
+📡 *මූලාශ්‍ර:* Hiru News, Ada Derana, News First
+⚡ *පළමු පුවත යැවීම:* ${sent ? "🟢 සාර්ථකයි!" : "⚠️ අසාර්ථකයි (Bot අදාළ Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න)"}
+
+🛑 *නැවත නවත්වන්නේ කෙසේද:*
+• \`${pref}delnews ${inputArg}\`
+
+_මෙහි සිට අලුත් පුවත් ලැබෙන සැණින් ස්වයංක්‍රීයව මෙතැනට Update වේ._
+💖 *DARK-DINU MD*`
+        },
+        { quoted: msg }
+      );
     }
 
-    const manualCard = 
-`📰 ｡ﾟ•┈୨ *${selectedSource.tag}* ୧┈•ﾟ｡ 🐾
-━━━━━━━━━━━━━━━━━━━━━
+    // =============================================================
+    // 📋 GUIDE / HELP
+    // =============================================================
+    return await sock.sendMessage(
+      from,
+      {
+        text: 
+`╔═════════════════════════════╗
+   📰 𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔  𝐍 𝐄 𝐖 𝐒
+╚═════════════════════════════╝
 
-📰 *${item.title}*
+💡 *ස්වයංක්‍රීය පුවත් සක්‍රීය කිරීමට:*
+├ 📢 \`${pref}news <channel_link>\`
+├ 👥 \`${pref}news <group_link>\`
+╰ 💬 \`${pref}news <chat_jid>\`
 
-📅 *Time:* \`${item.publish}\`
+🛑 *සේවාව නැවැත්වීමට:*
+╰ 🔕 \`${pref}delnews <channel_link / jid>\`
 
-${item.desc ? item.desc : ""}
+📡 *සහය දක්වන පුවත් සේවා:*
+• Hiru News • Ada Derana • News First
 
-${item.link ? `🔗 *Read Full Article:* ${item.link}` : ""}
-
-━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
-    const imgBuffer = await fetchImageBuffer(item.image);
-    if (imgBuffer) {
-      return await sock.sendMessage(from, { image: imgBuffer, caption: manualCard }, { quoted: msg });
-    } else {
-      return await sock.sendMessage(from, { text: manualCard }, { quoted: msg });
-    }
+👑 *DARK-DINU MD* • https://heshan.devofc.top/`
+      },
+      { quoted: msg }
+    );
   }
 };
