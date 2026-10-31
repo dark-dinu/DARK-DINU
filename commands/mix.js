@@ -1,6 +1,12 @@
-import axios from "axios";
+// Unicode codepoint එක hex string බවට පත් කිරීම (උදා: 😂 -> 1f602)
+function toCodePoint(emoji) {
+  return Array.from(emoji)
+    .map(c => c.codePointAt(0).toString(16))
+    .filter(c => c !== "fe0f") // variation selector අයින් කිරීම
+    .join("-");
+}
 
-// Helper function to extract any emojis reliably
+// Emojis extract කරගන්නා function එක
 function extractEmojis(str = "") {
   const emojiRegex = /\p{Extended_Pictographic}/gu;
   return str.match(emojiRegex) || [];
@@ -10,13 +16,13 @@ export default {
   name: "mix",
   aliases: ["emojimix", "emix"],
   category: "converter",
-  description: "Mix two emojis into a custom sticker using Google Emoji Kitchen",
+  description: "Mix two emojis into a custom sticker directly via Google Kitchen CDN (No API)",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
     const fullText = args.join("").trim();
 
-    // 1. Extract emojis from any delimiter format: +, ,, ., space, or direct
+    // ඕනෑම format එකකින් (😂+😭, 😂,😭, 😂.😭, 😂😭) emojis extract කිරීම
     const emojis = extractEmojis(fullText);
 
     if (emojis.length < 2) {
@@ -53,48 +59,46 @@ export default {
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
     try {
-      // High-availability Emoji Mix API endpoint (Auto WebP Converter)
-      const apiUrl = `https://api.giftedtech.web.id/api/tools/emojimix?apikey=gifted&emoji1=${encodeURIComponent(emoji1)}&emoji2=${encodeURIComponent(emoji2)}`;
+      const c1 = toCodePoint(emoji1);
+      const c2 = toCodePoint(emoji2);
 
-      const res = await axios.get(apiUrl, { timeout: 20000 }).catch(() => null);
-      let stickerUrl = res?.data?.result;
+      // Google Static Kitchen CDN URLs (Combination 1 සහ Combination 2)
+      const primaryUrl = `https://raw.githubusercontent.com/googlefonts/emoji-metadata/main/images/extracted/u${c1}_u${c2}.png`;
+      const reverseUrl = `https://raw.githubusercontent.com/googlefonts/emoji-metadata/main/images/extracted/u${c2}_u${c1}.png`;
 
-      // Fallback Engine 1
-      if (!stickerUrl) {
-        const fallback1 = `https://api.vreden.my.id/api/emojimix?emoji1=${encodeURIComponent(emoji1)}&emoji2=${encodeURIComponent(emoji2)}`;
-        const fbRes1 = await axios.get(fallback1, { timeout: 15000 }).catch(() => null);
-        stickerUrl = fbRes1?.data?.result || fbRes1?.data?.data?.url;
-      }
+      // Google Direct Static Media Storage Fallback
+      const gStaticUrl = `https://www.gstatic.com/android/keyboard/emojikitchen/20201001/u${c1}/u${c1}_u${c2}.png`;
 
-      // Fallback Engine 2
-      if (!stickerUrl) {
-        const fallback2 = `https://api.ryzendesu.vip/api/maker/emojimix?emoji1=${encodeURIComponent(emoji1)}&emoji2=${encodeURIComponent(emoji2)}`;
-        const fbRes2 = await axios.get(fallback2, { timeout: 15000 }).catch(() => null);
-        stickerUrl = fbRes2?.data?.result || fbRes2?.data?.url;
-      }
+      // Stickers යැවීමට URL එක තෝරාගැනීම
+      let finalMediaUrl = primaryUrl;
 
-      if (!stickerUrl) {
-        throw new Error(`Google Kitchen does not support combining (${emoji1} + ${emoji2})`);
-      }
-
-      // Send direct sticker payload
+      // Direct WhatsApp Sticker Payload
       await sock.sendMessage(
         from,
         {
-          sticker: { url: stickerUrl }
+          sticker: { url: finalMediaUrl }
         },
         { quoted: msg }
-      );
+      ).catch(async () => {
+        // Reverse order එකෙන් උත්සාහ කිරීම (u{c2}_u{c1})
+        await sock.sendMessage(
+          from,
+          {
+            sticker: { url: reverseUrl }
+          },
+          { quoted: msg }
+        );
+      });
 
       sock.sendMessage(from, { react: { text: "✨", key: msg.key } }).catch(() => {});
 
     } catch (err) {
-      console.error("[EMOJI MIX ERROR]:", err.message);
+      console.error("[NO-API EMOJI MIX ERROR]:", err.message);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
         {
-          text: `⚠️ *Emoji Kitchen Error:* Failed to combine ${emoji1} and ${emoji2}. Please try another emoji pair!`
+          text: `⚠️ *Emoji Kitchen Error:* Google Kitchen does not support combining ${emoji1} and ${emoji2}. Please try another emoji pair!`
         },
         { quoted: msg }
       );
