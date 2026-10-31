@@ -7,20 +7,20 @@ const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
 
 const NEWS_SOURCES = Object.freeze([
   {
-    id: "hirunews",
+    id: "hiru",
     name: "Hiru News",
     tag: "🇱🇰 HIRU NEWS",
     url: `https://api.chamindu.site/api/v1/media/hirunews?limit=10&api_key=${API_KEY}`
   },
   {
-    id: "adaderana",
+    id: "derana",
     name: "Ada Derana",
     tag: "🇱🇰 ADA DERANA",
     url: `https://api.chamindu.site/api/v1/media/adaderana?limit=10&api_key=${API_KEY}`
   },
   {
     id: "newsfirst",
-    name: "Newsfirst",
+    name: "News First",
     tag: "🇱🇰 NEWS FIRST",
     url: `https://api.chamindu.site/api/v1/media/newsfirst?limit=10&api_key=${API_KEY}`
   }
@@ -145,10 +145,10 @@ async function fetchImageBuffer(url) {
   }
 }
 
-// Data extractor for Chamindu API format
+// API Parser
 async function fetchSourceNews(endpointUrl) {
   try {
-    const res = await axios.get(endpointUrl, { timeout: 10000 });
+    const res = await axios.get(endpointUrl, { timeout: 12000 });
     const payload = res.data;
 
     let items = [];
@@ -167,11 +167,12 @@ async function fetchSourceNews(endpointUrl) {
       desc: (r.desc || r.description || r.news || r.summary || "").trim(),
       link: r.link || r.url || ""
     })).filter(x => x.title);
-  } catch (_) {
+  } catch (err) {
     return [];
   }
 }
 
+// Guaranteed Channel Newsletter Dispatcher
 async function dispatchNewsPost(sock, targetJid, item, tag) {
   const newsCard = 
 `🚨 ｡ﾟ•┈୨ *BREAKING NEWS* ୧┈•ﾟ｡ 📰
@@ -193,29 +194,41 @@ ${item.link ? `🔗 *සම්පූර්ණ පුවත:* ${item.link}` : ""}
     const isNewsletter = targetJid.endsWith("@newsletter");
     const imgBuffer = await fetchImageBuffer(item.image);
 
+    // Channel (Newsletter) Dispatch Mechanism
     if (isNewsletter) {
-      try {
-        if (imgBuffer && typeof sock.waUploadToServer === "function") {
-          const mediaContent = await generateWAMessageContent(
-            { image: imgBuffer, caption: newsCard },
-            { upload: sock.waUploadToServer }
-          );
-          const fullMsg = generateWAMessageFromContent(targetJid, mediaContent, {});
-          await sock.relayMessage(targetJid, fullMsg.message, { messageId: fullMsg.key.id });
-          return true;
-        }
-      } catch (err) {
-        console.warn(`[NEWS RELAY RETRY]: ${err.message}`);
-      }
-
       if (imgBuffer) {
-        await sock.sendMessage(targetJid, { image: imgBuffer, caption: newsCard });
+        // Baileys media relay to channel
+        const mediaContent = await generateWAMessageContent(
+          {
+            image: imgBuffer,
+            caption: newsCard
+          },
+          { upload: sock.waUploadToServer }
+        );
+
+        const fullMsg = generateWAMessageFromContent(
+          targetJid,
+          mediaContent,
+          {}
+        );
+
+        await sock.relayMessage(targetJid, fullMsg.message, {
+          messageId: fullMsg.key.id
+        });
+        return true;
       } else {
-        await sock.sendMessage(targetJid, { text: newsCard });
+        // Text-only channel message
+        const textContent = await generateWAMessageContent(
+          { text: newsCard },
+          { upload: sock.waUploadToServer }
+        );
+        const fullMsg = generateWAMessageFromContent(targetJid, textContent, {});
+        await sock.relayMessage(targetJid, fullMsg.message, { messageId: fullMsg.key.id });
+        return true;
       }
-      return true;
     }
 
+    // Standard Groups and Chats
     if (imgBuffer) {
       await sock.sendMessage(targetJid, { image: imgBuffer, caption: newsCard });
     } else {
@@ -225,6 +238,7 @@ ${item.link ? `🔗 *සම්පූර්ණ පුවත:* ${item.link}` : ""}
 
   } catch (err) {
     console.error(`[NEWS DISPATCH FAILED -> ${targetJid}]:`, err.message);
+    // Emergency Fallback
     try {
       await sock.sendMessage(targetJid, { text: newsCard });
       return true;
@@ -234,11 +248,11 @@ ${item.link ? `🔗 *සම්පූර්ණ පුවත:* ${item.link}` : ""}
   }
 }
 
+// Background Auto-News Loop (Every 45 seconds)
 export function startContinuousNewsDaemon(sock) {
   if (global.autoNewsLoopActive) return;
   global.autoNewsLoopActive = true;
 
-  // සෑම තත්පර 45කට වරක් නව පුවත් පරීක්ෂා කර යවයි
   setInterval(async () => {
     if (global.autoNewsSubs.size === 0) return;
 
@@ -253,7 +267,7 @@ export function startContinuousNewsDaemon(sock) {
         for (const targetJid of global.autoNewsSubs) {
           await dispatchNewsPost(sock, targetJid, item, src.tag);
         }
-        break; // එක source එකකින් එක් වරකට එක් අලුත් news එකක් පමණක් යවයි
+        break; // Source එකකින් එකක් පමණක් යවයි
       }
     }
   }, 45000);
@@ -263,7 +277,7 @@ export default {
   name: "news",
   aliases: ["autonews", "delnews", "stopnews", "hirunews", "derana", "newsfirst"],
   category: "news",
-  description: "Live Sri Lankan news feeder & auto-publisher for channels, groups, and chats",
+  description: "Guaranteed Live news auto-publisher for channels, groups, and chats",
 
   async execute({ sock, msg, from, args, body, prefix, config: appConfig }) {
     startContinuousNewsDaemon(sock);
@@ -273,11 +287,9 @@ export default {
     const cmd = fullBody.slice(pref.length).trim().split(/\s+/)[0]?.toLowerCase();
     const inputArg = args.join(" ").trim();
 
-    // =============================================================
-    // 🛑 STOP NEWS (.delnews හෝ .stopnews)
-    // =============================================================
+    // 1. Delete / Stop Command (.delnews)
     if (cmd === "delnews" || cmd === "stopnews" || args[0]?.toLowerCase() === "stop" || args[0]?.toLowerCase() === "off") {
-      const rawTarget = args[0]?.toLowerCase() === "stop" || args[0]?.toLowerCase() === "off" ? args[1] : args[0];
+      const rawTarget = (args[0]?.toLowerCase() === "stop" || args[0]?.toLowerCase() === "off") ? args[1] : args[0];
       let targetJid = from;
 
       if (rawTarget) {
@@ -290,21 +302,13 @@ export default {
       return await sock.sendMessage(
         from,
         {
-          text: 
-`🛑 *Auto-News Service Stopped!*
-━━━━━━━━━━━━━━━━━━━━━
-📢 *ඉවත් කළ ස්ථානය:* \`${targetJid}\`
-
-_මෙම ස්ථානයට ස්වයංක්‍රීය පුවත් යැවීම නතර කරන ලදී._
-💖 *DARK-DINU MD*`
+          text: `🛑 *Auto-News Service Stopped!*\n\n📢 *ඉවත් කළ ස්ථානය:* \`${targetJid}\`\n\n_මෙම ස්ථානයට පුවත් යැවීම නතර කරන ලදී._\n💖 *DARK-DINU MD*`
         },
         { quoted: msg }
       );
     }
 
-    // =============================================================
-    // 🚀 ACTIVATE NEWS (.news <channel_link / group_link / jid>)
-    // =============================================================
+    // 2. Setup Auto-News (.news <channel_link / group_link / jid>)
     if (inputArg) {
       sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
@@ -314,19 +318,19 @@ _මෙම ස්ථානයට ස්වයංක්‍රීය පුවත�
         sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
         return await sock.sendMessage(
           from,
-          { text: "⚠️ *වලංගු Channel Link එකක්, Group Link එකක් හෝ JID එකක් ලබා දෙන්න!*" },
+          { text: "⚠️ *වලංගු Channel Link එකක් හෝ JID එකක් ලබා දෙන්න!*" },
           { quoted: msg }
         );
       }
 
       await syncSubscriber(targetJid, false);
 
-      // Latest Hiru News එකක් ක්ෂණිකව test කර යවයි
+      // Latest Hiru News එක අරන් Channel එකට ක්ෂණිකව යැවීම
       const testItems = await fetchSourceNews(NEWS_SOURCES[0].url);
       let sent = false;
       if (testItems.length > 0) {
         sent = await dispatchNewsPost(sock, targetJid, testItems[0], NEWS_SOURCES[0].tag);
-        recordPublishedTitle(testItems[0].title);
+        if (sent) recordPublishedTitle(testItems[0].title);
       }
 
       sock.sendMessage(from, { react: { text: sent ? "✅" : "⚠️", key: msg.key } }).catch(() => {});
@@ -339,7 +343,7 @@ _මෙම ස්ථානයට ස්වයංක්‍රීය පුවත�
 ━━━━━━━━━━━━━━━━━━━━━
 📢 *Destination:* \`${targetJid}\`
 📡 *මූලාශ්‍ර:* Hiru News, Ada Derana, News First
-⚡ *පළමු පුවත යැවීම:* ${sent ? "🟢 සාර්ථකයි!" : "⚠️ අසාර්ථකයි (Bot අදාළ Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න)"}
+⚡ *පළමු පුවත යැවීම:* ${sent ? "🟢 සාර්ථකයි! (චැනල් එක බලන්න)" : "⚠️ අසාර්ථකයි (Bot අදාළ Channel එකේ Admin කෙනෙක් බව තහවුරු කරගන්න)"}
 
 🛑 *නැවත නවත්වන්නේ කෙසේද:*
 • \`${pref}delnews ${inputArg}\`
@@ -351,9 +355,7 @@ _මෙහි සිට අලුත් පුවත් ලැබෙන සැ�
       );
     }
 
-    // =============================================================
-    // 📋 GUIDE / HELP
-    // =============================================================
+    // 3. Help Menu
     return await sock.sendMessage(
       from,
       {
