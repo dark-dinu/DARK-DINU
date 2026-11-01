@@ -7,14 +7,17 @@ import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const API_KEY = process.env.CHAMINDU_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const API_TIMEOUT = 25000;
+const DL_TIMEOUT = 45000;
 const TEMP_DIR = path.join(process.cwd(), "temp");
 
-if (!fs.existsSync(TEMP_DIR)) {
-  try { fs.mkdirSync(TEMP_DIR, { recursive: true }); } catch (_) {}
-}
+try { fs.mkdirSync(TEMP_DIR, { recursive: true }); } catch (_) {}
 
-function convertMp3ToOpusPtt(inputPath, outputPath) {
+// Channel JID cache: වෙනම metadata call එක එක පාරක් විතරක්
+const channelCache = new Map();
+
+function convertToOpusPtt(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
       .noVideo()
@@ -23,9 +26,9 @@ function convertMp3ToOpusPtt(inputPath, outputPath) {
       .audioFrequency(48000)
       .audioBitrate("64k")
       .format("ogg")
-      .addOutputOptions("-avoid_negative_ts", "make_zero")
+      .outputOptions(["-application", "voip"])
       .on("end", () => resolve(outputPath))
-      .on("error", (err) => reject(err))
+      .on("error", reject)
       .save(outputPath);
   });
 }
@@ -35,7 +38,7 @@ function isYouTubeUrl(input = "") {
 }
 
 function extractInviteCode(input = "") {
-  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z_-]+)/i);
+  const match = input.match(/whatsapp\.com\/channel\/([0-9A-Za-z_-]+)/i);
   return match ? match[1] : input.trim();
 }
 
@@ -45,20 +48,52 @@ async function resolveChannelJid(sock, input) {
   if (clean.endsWith("@newsletter")) return clean;
 
   const code = extractInviteCode(clean);
+  if (channelCache.has(code)) return channelCache.get(code);
+
   try {
     if (typeof sock.newsletterMetadata === "function") {
       const meta = await sock.newsletterMetadata("invite", code);
-      if (meta?.id) return meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
+      if (meta?.id) {
+        const jid = meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
+        channelCache.set(code, jid);
+        return jid;
+      }
     }
   } catch (_) {}
   return null;
+}
+
+// Channel එකට voice note යවීම: පළමු direct upload, අසාර්ථක වුණොත් පැරණි forward relay එක
+async function sendVoiceToChannel(sock, targetChannel, audioBuffer) {
+  try {
+    const sent = await sock.sendMessage(targetChannel, {
+      audio: audioBuffer,
+      mimetype: "audio/ogg; codecs=opus",
+      ptt: true
+    });
+    if (sent?.key?.id) return sent;
+    throw new Error("channel upload key නොලැබුණි");
+  } catch (directErr) {
+    console.error("[CSONG] direct upload failed, using relay:", directErr.message);
+    const myJid = sock.user.id.includes(":")
+      ? sock.user.id.split(":")[0] + "@s.whatsapp.net"
+      : sock.user.id;
+    const inbox = await sock.sendMessage(myJid, {
+      audio: audioBuffer,
+      mimetype: "audio/ogg; codecs=opus",
+      ptt: true
+    });
+    const sent = await sock.sendMessage(targetChannel, { forward: inbox });
+    if (!sent?.key?.id) throw new Error("Channel එකට යැවීම තහවුරු කළ නොහැකි විය.");
+    return sent;
+  }
 }
 
 export default {
   name: "csong",
   aliases: ["cplay", "channelplay", "channelsong", "cvoice"],
   category: "channel",
-  description: "Send 100% playable Voice Note to WhatsApp Channels via Forward Relay",
+  description: "Send playable Voice Note to WhatsApp Channels",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
@@ -87,18 +122,10 @@ export default {
       return await sock.sendMessage(
         from,
         {
-          text: 
-`╔═════════════════════════════╗
-   🎙️ 𝐂 𝐇 𝐀 𝐍 𝐍 𝐄 𝐋  𝐕 𝐎 𝐈 𝐂 𝐄
-╚═════════════════════════════╝
-
-💡 *භාවිතා කරන ආකාරය:*
-• \`${pref}csong <channel_link> | <song_name>\`
-• \`${pref}csong <song_name>\` (චැනල් එක තුළදී)
-
-✨ *උදාහරණයක්:*
-• \`${pref}csong https://whatsapp.com/channel/xxxx | Lelena\`
-
+          text:
+`🎙️ *CHANNEL VOICE*
+💡 \`${pref}csong <channel_link> | <song_name>\`
+✨ \`${pref}csong https://whatsapp.com/channel/xxxx | Lelena\`
 👑 *DARK-DINU MD*`
         },
         { quoted: msg }
@@ -107,104 +134,74 @@ export default {
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    const timestamp = Date.now();
-    const rawMp3Path = path.join(TEMP_DIR, `raw_${timestamp}.mp3`);
-    const opusPttPath = path.join(TEMP_DIR, `ptt_${timestamp}.opus`);
+    const stamp = Date.now();
+    const rawPath = path.join(TEMP_DIR, `raw_${stamp}.mp3`);
+    const opusPath = path.join(TEMP_DIR, `ptt_${stamp}.ogg`);
 
     try {
+      // 1. Search
       let targetUrl = songQuery;
       let title = "Voice Track";
-      let duration = "03:15";
+      let duration = "";
 
-      // 1. YouTube Search
       const search = await yts(songQuery);
-      const firstResult = search?.videos?.[0];
-
-      if (firstResult) {
-        targetUrl = firstResult.url;
-        title = firstResult.title || title;
-        duration = firstResult.timestamp || duration;
+      const first = search?.videos?.[0];
+      if (first) {
+        targetUrl = first.url;
+        title = first.title || title;
+        duration = first.timestamp || "";
       } else if (!isYouTubeUrl(songQuery)) {
         throw new Error("YouTube වෙතින් ගීතය සොයාගත නොහැකි විය.");
       }
 
-      // 2. Chamindu API Call
+      // 2. Download link
       const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp3?url=${encodeURIComponent(targetUrl)}&quality=320kbps&api_key=${API_KEY}`;
-      const res = await axios.get(apiUrl, { timeout: 45000 });
-      const dlData = res.data;
+      const { data: dl } = await axios.get(apiUrl, { timeout: API_TIMEOUT });
+      const audioUrl =
+        dl?.download_url || dl?.data?.download_url || dl?.result?.download_url ||
+        dl?.url || dl?.data?.url;
+      if (!audioUrl) throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
 
-      const directAudioUrl = 
-        dlData?.download_url || 
-        dlData?.data?.download_url || 
-        dlData?.result?.download_url || 
-        dlData?.url || 
-        dlData?.data?.url;
-
-      if (!directAudioUrl) {
-        throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
-      }
-
-      // 3. Audio Download & Opus Conversion
-      const audioRes = await axios.get(directAudioUrl, {
+      // 3. Download + convert
+      const audioRes = await axios.get(audioUrl, {
         responseType: "arraybuffer",
-        timeout: 60000,
+        timeout: DL_TIMEOUT,
         headers: { "User-Agent": "Mozilla/5.0" }
       });
-      fs.writeFileSync(rawMp3Path, Buffer.from(audioRes.data));
+      fs.writeFileSync(rawPath, Buffer.from(audioRes.data));
+      await convertToOpusPtt(rawPath, opusPath);
+      const voiceBuffer = fs.readFileSync(opusPath);
 
-      await convertMp3ToOpusPtt(rawMp3Path, opusPttPath);
-      const finalVoiceBuffer = fs.readFileSync(opusPttPath);
+      // 4. Channel එකට voice note (sent receipt එක තහවුරු කරයි)
+      await sendVoiceToChannel(sock, targetChannel, voiceBuffer);
 
-      // 🟢 4. THE MAGIC TRICK: Bot ගේම Chat එකට Upload කර Channel එකට Forward කිරීම
-      const myJid = sock.user.id.includes(":") ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : sock.user.id;
-
-      // Bot ගේ Inbox එකට Voice Note එක යැවීම (Upload to CDN)
-      const internalVoiceMsg = await sock.sendMessage(myJid, {
-        audio: finalVoiceBuffer,
-        mimetype: "audio/ogg; codecs=opus",
-        ptt: true
-      });
-
-      // Channel එකට Direct Forward කිරීම (Zero Drop, WhatsApp bypass)
+      // 5. Text card (voice note එකට පසු)
       await sock.sendMessage(targetChannel, {
-        forward: internalVoiceMsg
-      });
-
-      // 5. Track Details Text Card එක Channel එකට යැවීම
-      await sock.sendMessage(targetChannel, {
-        text: 
-`🎶 ｡ﾟ•┈୨ *CHANNEL VOICE TRACK* ୧┈•ﾟ｡ 🎙️
+        text:
+`🎶 *CHANNEL VOICE TRACK* 🎙️
 ━━━━━━━━━━━━━━━━━━━━━
-
-🎵 *Title:* ${title}
-⏱️ *Duration:* ${duration}
-⚡ *Format:* High Quality Opus Voice
-📡 *Destination:* Channel Feed
-
+🎵 *Title:* ${title}${duration ? `\n⏱️ *Duration:* ${duration}` : ""}
+⚡ *Format:* Opus Voice Note
 ━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+💖 *DARK-DINU MD*`
       });
 
       sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
       if (!isChannelChat) {
         await sock.sendMessage(
           from,
-          { text: `✅ *සාර්ථකයි!* \`${title}\` Voice Note එක චැනල් එකට Play වන පරිදි Post විය.` },
+          { text: `✅ *සාර්ථකයි!* \`${title}\` චැනල් එකට යැවිණි.` },
           { quoted: msg }
         );
       }
-
     } catch (err) {
-      console.error("[CSONG FATAL ERROR]:", err.message);
+      console.error("[CSONG ERROR]:", err.message);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
-      await sock.sendMessage(
-        from,
-        { text: `⚠️ *අසාර්ථකයි:* ${err.message}` },
-        { quoted: msg }
-      );
+      await sock.sendMessage(from, { text: `⚠️ *අසාර්ථකයි:* ${err.message}` }, { quoted: msg });
     } finally {
-      try { if (fs.existsSync(rawMp3Path)) fs.unlinkSync(rawMp3Path); } catch (_) {}
-      try { if (fs.existsSync(opusPttPath)) fs.unlinkSync(opusPttPath); } catch (_) {}
+      for (const p of [rawPath, opusPath]) {
+        try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch (_) {}
+      }
     }
   }
 };
