@@ -1,141 +1,108 @@
+import fs from "fs";
+import path from "path";
 import axios from "axios";
 import yts from "yt-search";
-import { spawn } from "child_process";
+import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
-const FFMPEG_PATH = ffmpegInstaller.path || "ffmpeg";
+// 🟢 FFmpeg Binary Path එක නිවැරදිව Set කිරීම
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-// ⚠️ හැකි නම් මේක env එකක දාන්න (CHAMA_API_KEY)
-const API_KEY = process.env.CHAMA_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const TEMP_DIR = path.join(process.cwd(), "temp");
 
-const CHANNEL_LINK_RE = /https?:\/\/(?:www\.)?whatsapp\.com\/channel\/([0-9A-Za-z_-]+)/i;
-const CHANNEL_JID_RE = /\b\d+@newsletter\b/i;
+if (!fs.existsSync(TEMP_DIR)) {
+  try { fs.mkdirSync(TEMP_DIR, { recursive: true }); } catch (_) {}
+}
+
+// MP3 එක WhatsApp PTT Opus එකක් බවට Convert කරන Function එක
+function convertMp3ToOpusPtt(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioCodec("libopus")
+      .audioChannels(1)          // Mono channel for WhatsApp Voice Note
+      .audioFrequency(48000)     // 48000Hz (WhatsApp Standard)
+      .audioBitrate("64k")
+      .format("ogg")
+      .addOutputOptions("-avoid_negative_ts", "make_zero")
+      .on("end", () => resolve(outputPath))
+      .on("error", (err) => reject(err))
+      .save(outputPath);
+  });
+}
 
 function isYouTubeUrl(input = "") {
   return /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i.test(input);
 }
 
-// "link , song" / "link | song" / "link song" සියල්ලම support කරයි
-function parseInput(text) {
-  let channelInput = null;
-  let rest = text;
-
-  const jid = text.match(CHANNEL_JID_RE);
-  const link = text.match(CHANNEL_LINK_RE);
-
-  if (jid) {
-    channelInput = jid[0];
-    rest = text.replace(jid[0], "");
-  } else if (link) {
-    channelInput = link[0];
-    rest = text.replace(link[0], "");
-  }
-
-  const songQuery = rest.replace(/^[\s,|]+|[\s,|]+$/g, "").trim();
-  return { channelInput, songQuery };
+function extractInviteCode(input = "") {
+  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z_-]+)/i);
+  return match ? match[1] : input.trim();
 }
 
 async function resolveChannelJid(sock, input) {
   if (!input) return null;
-  if (input.endsWith("@newsletter")) return input;
+  const clean = input.trim();
+  if (clean.endsWith("@newsletter")) return clean;
 
-  const m = input.match(CHANNEL_LINK_RE);
-  const code = m ? m[1] : input.trim();
-
+  const code = extractInviteCode(clean);
   try {
-    const meta = await sock.newsletterMetadata("invite", code);
-    if (meta?.id) return meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
-  } catch (e) {
-    console.error("[CSONG] newsletterMetadata error:", e?.message);
-  }
+    if (typeof sock.newsletterMetadata === "function") {
+      const meta = await sock.newsletterMetadata("invite", code);
+      if (meta?.id) return meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
+    }
+  } catch (_) {}
   return null;
-}
-
-// MP3 -> OGG/OPUS (WhatsApp voice note format)
-function toOpus(buffer) {
-  return new Promise((resolve, reject) => {
-    const ff = spawn(FFMPEG_PATH, [
-      "-i", "pipe:0",
-      "-vn",
-      "-c:a", "libopus",
-      "-b:a", "64k",
-      "-ar", "48000",
-      "-ac", "1",
-      "-f", "ogg",
-      "pipe:1"
-    ]);
-    const chunks = [];
-    ff.stdout.on("data", (d) => chunks.push(d));
-    ff.stderr.on("data", () => {});
-    ff.on("error", reject);
-    ff.stdin.on("error", () => {});
-    ff.on("close", (code) => {
-      const out = Buffer.concat(chunks);
-      code === 0 && out.length ? resolve(out) : reject(new Error("ffmpeg convert failed"));
-    });
-    ff.stdin.end(buffer);
-  });
-}
-
-async function downloadBuffer(url, timeout = 60000) {
-  const res = await axios.get(url, {
-    responseType: "arraybuffer",
-    timeout,
-    headers: { "User-Agent": "Mozilla/5.0" }
-  });
-  return Buffer.from(res.data);
 }
 
 export default {
   name: "csong",
   aliases: ["cplay", "channelplay", "channelsong", "cvoice"],
   category: "channel",
-  description: "Send song card + voice note directly to WhatsApp Channels",
+  description: "Download, transcode to Opus, and send 100% playable Voice Note to Channels",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
     const fullText = args.join(" ").trim();
     const isChannelChat = from.endsWith("@newsletter");
 
-    let targetChannel = null;
-    let songQuery = "";
+    let targetChannel = isChannelChat ? from : null;
+    let songQuery = fullText;
 
-    if (isChannelChat) {
-      targetChannel = from;
-      songQuery = fullText;
-    } else {
-      const parsed = parseInput(fullText);
-      songQuery = parsed.songQuery;
-      if (parsed.channelInput) {
-        targetChannel = await resolveChannelJid(sock, parsed.channelInput);
-        if (!targetChannel) {
-          return await sock.sendMessage(
-            from,
-            { text: "⚠️ *චැනල් එක සොයාගත නොහැකි විය.* Link එක නිවැරදිදැයි පරීක්ෂා කරන්න." },
-            { quoted: msg }
-          );
+    if (!isChannelChat) {
+      if (fullText.includes("|")) {
+        const parts = fullText.split("|");
+        targetChannel = await resolveChannelJid(sock, parts[0].trim());
+        songQuery = parts.slice(1).join("|").trim();
+      } else {
+        const firstArg = args[0] || "";
+        if (firstArg.includes("whatsapp.com/channel/") || firstArg.endsWith("@newsletter")) {
+          targetChannel = await resolveChannelJid(sock, firstArg);
+          songQuery = args.slice(1).join(" ").trim();
         }
       }
     }
 
-    if (!songQuery || !targetChannel) {
+    if (!songQuery || (!targetChannel && !isChannelChat)) {
       sock.sendMessage(from, { react: { text: "🎙️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         {
-          text:
+          text: 
 `╔═════════════════════════════╗
-   🎙️ 𝐂 𝐇 𝐀 𝐍 𝐍 𝐄 𝐋  𝐒 𝐎 𝐍 𝐆
+   🎙️ 𝐂 𝐇 𝐀 𝐍 𝐍 𝐄 𝐋  𝐕 𝐎 𝐈 𝐂 𝐄
 ╚═════════════════════════════╝
 
 💡 *භාවිතා කරන ආකාරය:*
-• \`${pref}csong <channel_link>, <song_name>\`
+• \`${pref}csong <channel_link> | <song_name>\`
+• \`${pref}csong <channel_link> <song_name>\`
 • \`${pref}csong <song_name>\` (චැනල් එක ඇතුළතදී)
 
 ✨ *උදාහරණයක්:*
-• \`${pref}csong https://whatsapp.com/channel/xxxx, Lelena\`
+• \`${pref}csong https://whatsapp.com/channel/xxxx | Lelena\`
 
-👑 *DARK-DINU MD*`
+👑 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
         { quoted: msg }
       );
@@ -143,114 +110,98 @@ export default {
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
-    let step = "search";
+    const timestamp = Date.now();
+    const rawMp3Path = path.join(TEMP_DIR, `raw_${timestamp}.mp3`);
+    const opusPttPath = path.join(TEMP_DIR, `ptt_${timestamp}.opus`);
+
     try {
       let targetUrl = songQuery;
-      let title = "Audio Track";
+      let title = "Voice Track";
       let duration = "03:15";
-      let seconds = 0;
-      let thumbUrl = null;
-      let author = "";
 
       // 1. YouTube Search
       const search = await yts(songQuery);
-      const first = search?.videos?.[0];
+      const firstResult = search?.videos?.[0];
 
-      if (first) {
-        targetUrl = first.url;
-        title = first.title || title;
-        duration = first.timestamp || duration;
-        seconds = first.seconds || 0;
-        thumbUrl = first.thumbnail || first.image || null;
-        author = first.author?.name || "";
+      if (firstResult) {
+        targetUrl = firstResult.url;
+        title = firstResult.title || title;
+        duration = firstResult.timestamp || duration;
       } else if (!isYouTubeUrl(songQuery)) {
-        throw new Error("ගීතය සොයාගත නොහැකි විය.");
+        throw new Error("YouTube වෙතින් ගීතය හමු නොවීය.");
       }
 
-      // 2. API call
-      step = "api";
+      // 2. Chamindu API වෙතින් Audio Link එක ලබාගැනීම
       const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp3?url=${encodeURIComponent(targetUrl)}&quality=320kbps&api_key=${API_KEY}`;
       const res = await axios.get(apiUrl, { timeout: 45000 });
-      const d = res.data;
+      const dlData = res.data;
 
-      const directAudioUrl =
-        d?.download_url ||
-        d?.data?.download_url ||
-        d?.result?.download_url ||
-        d?.url ||
-        d?.data?.url;
+      const directAudioUrl = 
+        dlData?.download_url || 
+        dlData?.data?.download_url || 
+        dlData?.result?.download_url || 
+        dlData?.url || 
+        dlData?.data?.url;
 
-      if (!directAudioUrl) throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
+      if (!directAudioUrl) {
+        throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
+      }
 
-      // 3. Download audio + thumbnail (parallel)
-      step = "download";
-      const [audioBuffer, thumbBuffer] = await Promise.all([
-        downloadBuffer(directAudioUrl, 90000),
-        thumbUrl ? downloadBuffer(thumbUrl, 20000).catch(() => null) : Promise.resolve(null)
-      ]);
+      // 3. MP3 එක Temp File එකක් ලෙස Save කරගැනීම
+      const audioRes = await axios.get(directAudioUrl, {
+        responseType: "arraybuffer",
+        timeout: 60000,
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+      fs.writeFileSync(rawMp3Path, Buffer.from(audioRes.data));
 
-      // 4. Song card (image + caption) -> Channel
-      const caption =
-`🎶 ｡ﾟ•┈୨ *CHANNEL AUDIO STREAM* ୧┈•ﾟ｡ 🎙️
+      // 4. FFmpeg Installer මඟින් WhatsApp PTT Opus Format එකට Convert කිරීම
+      await convertMp3ToOpusPtt(rawMp3Path, opusPttPath);
+      const finalVoiceBuffer = fs.readFileSync(opusPttPath);
+
+      // 5. WhatsApp Channel එකට Voice Note එක Send කිරීම (Zero Quoted Payload)
+      await sock.sendMessage(targetChannel, {
+        audio: finalVoiceBuffer,
+        mimetype: "audio/ogg; codecs=opus",
+        ptt: true
+      });
+
+      // 6. Voice එක සාර්ථකව send වූ පසු විස්තර පත (Text Card) Channel එකට යැවීම
+      await sock.sendMessage(targetChannel, {
+        text: 
+`🎶 ｡ﾟ•┈୨ *CHANNEL VOICE TRACK* ୧┈•ﾟ｡ 🎙️
 ━━━━━━━━━━━━━━━━━━━━━
 
 🎵 *Title:* ${title}
-${author ? `🎤 *Artist:* ${author}\n` : ""}⏱️ *Duration:* ${duration}
-⚡ *Bitrate:* 320kbps
+⏱️ *Duration:* ${duration}
+⚡ *Format:* High Quality Opus Voice Stream
 📡 *Destination:* Channel Feed
 
 ━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
-      step = "send-card";
-      try {
-        if (thumbBuffer) {
-          await sock.sendMessage(targetChannel, { image: thumbBuffer, caption });
-        } else {
-          await sock.sendMessage(targetChannel, { text: caption });
-        }
-      } catch (cardErr) {
-        console.error("[CSONG] card send failed:", cardErr);
-        await sock.sendMessage(from, { text: `⚠️ Card send fail: ${cardErr.message}` }, { quoted: msg });
-        await sock.sendMessage(targetChannel, { text: caption });
-      }
-
-      // 5. Voice note -> Channel (OGG/OPUS, ptt)
-      step = "send-voice";
-      try {
-        const opus = await toOpus(audioBuffer);
-        await sock.sendMessage(targetChannel, {
-          audio: opus,
-          mimetype: "audio/ogg; codecs=opus",
-          ptt: true,
-          seconds
-        });
-      } catch (convErr) {
-        console.error("[CSONG] opus convert failed, fallback mp3:", convErr.message);
-        await sock.sendMessage(targetChannel, {
-          audio: audioBuffer,
-          mimetype: "audio/mpeg",
-          ptt: false,
-          seconds
-        });
-      }
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
+      });
 
       sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
       if (!isChannelChat) {
         await sock.sendMessage(
           from,
-          { text: `✅ *සාර්ථකයි!* \`${title}\` චැනල් එකට Post කරන ලදී.` },
+          { text: `✅ *සාර්ථකයි!* \`${title}\` Voice Note එකක් ලෙස චැනල් එකට Play වන ආකාරයෙන් Post විය.` },
           { quoted: msg }
         );
       }
+
     } catch (err) {
-      console.error(`[CSONG ERROR @ ${step}]:`, err);
+      console.error("[CSONG FATAL ERROR]:", err.message);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `⚠️ *අසාර්ථකයි* (${step}): ${err.message}` },
+        { text: `⚠️ *අසාර්ථකයි:* ${err.message}` },
         { quoted: msg }
       );
+    } finally {
+      // Temp files clean කිරීම (Memory leak වැළැක්වීමට)
+      try { if (fs.existsSync(rawMp3Path)) fs.unlinkSync(rawMp3Path); } catch (_) {}
+      try { if (fs.existsSync(opusPttPath)) fs.unlinkSync(opusPttPath); } catch (_) {}
     }
   }
 };
