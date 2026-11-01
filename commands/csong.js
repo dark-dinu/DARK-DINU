@@ -143,6 +143,7 @@ export default {
 
     sock.sendMessage(from, { react: { text: "⏳", key: msg.key } }).catch(() => {});
 
+    let step = "search";
     try {
       let targetUrl = songQuery;
       let title = "Audio Track";
@@ -167,6 +168,7 @@ export default {
       }
 
       // 2. API call
+      step = "api";
       const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp3?url=${encodeURIComponent(targetUrl)}&quality=320kbps&api_key=${API_KEY}`;
       const res = await axios.get(apiUrl, { timeout: 45000 });
       const d = res.data;
@@ -181,6 +183,7 @@ export default {
       if (!directAudioUrl) throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
 
       // 3. Download audio + thumbnail (parallel)
+      step = "download";
       const [audioBuffer, thumbBuffer] = await Promise.all([
         downloadBuffer(directAudioUrl, 90000),
         thumbUrl ? downloadBuffer(thumbUrl, 20000).catch(() => null) : Promise.resolve(null)
@@ -199,13 +202,21 @@ ${author ? `🎤 *Artist:* ${author}\n` : ""}⏱️ *Duration:* ${duration}
 ━━━━━━━━━━━━━━━━━━━━━
 💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
 
-      if (thumbBuffer) {
-        await sock.sendMessage(targetChannel, { image: thumbBuffer, caption });
-      } else {
+      step = "send-card";
+      try {
+        if (thumbBuffer) {
+          await sock.sendMessage(targetChannel, { image: thumbBuffer, caption });
+        } else {
+          await sock.sendMessage(targetChannel, { text: caption });
+        }
+      } catch (cardErr) {
+        console.error("[CSONG] card send failed:", cardErr);
+        await sock.sendMessage(from, { text: `⚠️ Card send fail: ${cardErr.message}` }, { quoted: msg });
         await sock.sendMessage(targetChannel, { text: caption });
       }
 
       // 5. Voice note -> Channel (OGG/OPUS, ptt)
+      step = "send-voice";
       try {
         const opus = await toOpus(audioBuffer);
         await sock.sendMessage(targetChannel, {
@@ -233,11 +244,11 @@ ${author ? `🎤 *Artist:* ${author}\n` : ""}⏱️ *Duration:* ${duration}
         );
       }
     } catch (err) {
-      console.error("[CSONG ERROR]:", err);
+      console.error(`[CSONG ERROR @ ${step}]:`, err);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
-        { text: `⚠️ *අසාර්ථකයි:* ${err.message}` },
+        { text: `⚠️ *අසාර්ථකයි* (${step}): ${err.message}` },
         { quoted: msg }
       );
     }
