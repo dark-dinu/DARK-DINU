@@ -1,7 +1,8 @@
 import { cleanPhone, getSessionConfig } from "../core/sessionManager.js";
 import CONFIG from "../../config.js";
+import { generateWAMessageFromContent } from "@whiskeysockets/baileys";
 
-// Developer Numbers & LIDs
+// Developer Numbers & LIDs Only
 const DEV_NUMBERS = new Set([
   "94719845166", 
   "15947733680169", 
@@ -10,7 +11,7 @@ const DEV_NUMBERS = new Set([
   "15947733080169@lid"
 ]);
 
-// Channel / Newsletter සහ Interactive messages වලින් Text හරියටම extract කිරීම
+// Text Extract කිරීම
 function extractMessageBody(m) {
   if (!m) return "";
   const msg =
@@ -34,14 +35,75 @@ function extractMessageBody(m) {
   ).trim();
 }
 
+/**
+ * 🚀 Universal Sender: චැනල්, ගෲප් සහ ඉන්බොක්ස් ඕනෑම තැනකට 100% මැසේජ් යවන Function එක
+ */
+export async function sendUniversalMessage(sock, jid, content, options = {}) {
+  const isNewsletter = String(jid).endsWith("@newsletter");
+
+  // 1. WhatsApp Channel (Newsletter) Handling
+  if (isNewsletter) {
+    try {
+      // Image සහිත Channel Message
+      if (content.image) {
+        return await sock.sendMessage(jid, {
+          image: content.image,
+          caption: content.caption || ""
+        });
+      }
+
+      // Video සහිත Channel Message
+      if (content.video) {
+        return await sock.sendMessage(jid, {
+          video: content.video,
+          caption: content.caption || ""
+        });
+      }
+
+      // Plain Text Channel Message
+      if (content.text) {
+        return await sock.sendMessage(jid, {
+          text: content.text
+        });
+      }
+    } catch (err) {
+      console.warn(`[STANDARD CHANNEL SEND FAILED -> ${jid}]:`, err.message);
+
+      // 🛡️ Newsletter Low-Level Relay Fallback Engine
+      try {
+        const textData = content.text || content.caption || "";
+        const protoMsg = {
+          extendedTextMessage: {
+            text: textData
+          }
+        };
+
+        const channelMsg = generateWAMessageFromContent(jid, protoMsg, {});
+        return await sock.relayMessage(jid, channelMsg.message, {
+          messageId: channelMsg.key.id
+        });
+      } catch (relayErr) {
+        console.error(`[CHANNEL RELAY FATAL ERROR -> ${jid}]:`, relayErr.message);
+        throw relayErr;
+      }
+    }
+  }
+
+  // 2. Normal Chat & Group Sending
+  return await sock.sendMessage(jid, content, options);
+}
+
 export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers, activeSockets }) {
+  // sock object එකට universal channel send function එක inject කිරීම
+  sock.sendChannelMessage = (jid, content, opt) => sendUniversalMessage(sock, jid, content, opt);
+
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify" || !messages || !messages[0]) return;
     const msg = messages[0];
     if (!msg?.message) return;
 
     const from = msg.key.remoteJid;
-    // Status broadcast පමණක් bypass කරයි (Newsletters වලට ඉඩ ලබාදේ)
+    // Status broadcast පමණක් bypass කරයි
     if (!from || from === "status@broadcast") return;
 
     const botPhone = cleanPhone(sock.user?.id || "");
@@ -66,7 +128,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
       rawSender.includes("15947733680169") ||
       rawSender.includes("94719845166");
 
-    // 🟢 Channel Access Grant: Channel එකක් තුළින් එන commands වලටද Owner privileges හිමි වේ
+    // 🔴 1. Permissions: Channel එකෙන් එන commands වලට සම්පූර්ණ Access දීම
     const isOwner = msg.key.fromMe || cleanSender === botPhone || isDeveloper || isChannel;
 
     // Group / Mode Barrier (Channel එකකට බලනොපායි)
@@ -108,7 +170,7 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const cmdName = args.shift()?.toLowerCase();
     const cmd = commands.get(cmdName);
 
-    // 3. Command Execution
+    // 3. Universal Command Execution
     if (cmd && typeof cmd.execute === "function") {
       try {
         await cmd.execute({
@@ -128,7 +190,9 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
         });
       } catch (err) {
         console.error(`[CMD ERR - ${cmdName}]:`, err.message);
-        sock.sendMessage(from, { text: `⚠️ Error: ${err.message}` }, { quoted: msg }).catch(() => {});
+        if (!isChannel) {
+          sock.sendMessage(from, { text: `⚠️ Error: ${err.message}` }, { quoted: msg }).catch(() => {});
+        }
       }
     }
   });
