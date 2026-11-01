@@ -5,7 +5,6 @@ import yts from "yt-search";
 import ffmpeg from "fluent-ffmpeg";
 import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
-// 🟢 FFmpeg Binary Path එක නිවැරදිව Set කිරීම
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
@@ -15,14 +14,13 @@ if (!fs.existsSync(TEMP_DIR)) {
   try { fs.mkdirSync(TEMP_DIR, { recursive: true }); } catch (_) {}
 }
 
-// MP3 එක WhatsApp PTT Opus එකක් බවට Convert කරන Function එක
 function convertMp3ToOpusPtt(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
       .noVideo()
       .audioCodec("libopus")
-      .audioChannels(1)          // Mono channel for WhatsApp Voice Note
-      .audioFrequency(48000)     // 48000Hz (WhatsApp Standard)
+      .audioChannels(1)
+      .audioFrequency(48000)
       .audioBitrate("64k")
       .format("ogg")
       .addOutputOptions("-avoid_negative_ts", "make_zero")
@@ -60,7 +58,7 @@ export default {
   name: "csong",
   aliases: ["cplay", "channelplay", "channelsong", "cvoice"],
   category: "channel",
-  description: "Download, transcode to Opus, and send 100% playable Voice Note to Channels",
+  description: "Send 100% playable Voice Note to WhatsApp Channels via Forward Relay",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
@@ -96,13 +94,12 @@ export default {
 
 💡 *භාවිතා කරන ආකාරය:*
 • \`${pref}csong <channel_link> | <song_name>\`
-• \`${pref}csong <channel_link> <song_name>\`
-• \`${pref}csong <song_name>\` (චැනල් එක ඇතුළතදී)
+• \`${pref}csong <song_name>\` (චැනල් එක තුළදී)
 
 ✨ *උදාහරණයක්:*
 • \`${pref}csong https://whatsapp.com/channel/xxxx | Lelena\`
 
-👑 *DARK-DINU MD* • https://heshan.devofc.top/`
+👑 *DARK-DINU MD*`
         },
         { quoted: msg }
       );
@@ -128,10 +125,10 @@ export default {
         title = firstResult.title || title;
         duration = firstResult.timestamp || duration;
       } else if (!isYouTubeUrl(songQuery)) {
-        throw new Error("YouTube වෙතින් ගීතය හමු නොවීය.");
+        throw new Error("YouTube වෙතින් ගීතය සොයාගත නොහැකි විය.");
       }
 
-      // 2. Chamindu API වෙතින් Audio Link එක ලබාගැනීම
+      // 2. Chamindu API Call
       const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp3?url=${encodeURIComponent(targetUrl)}&quality=320kbps&api_key=${API_KEY}`;
       const res = await axios.get(apiUrl, { timeout: 45000 });
       const dlData = res.data;
@@ -147,7 +144,7 @@ export default {
         throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
       }
 
-      // 3. MP3 එක Temp File එකක් ලෙස Save කරගැනීම
+      // 3. Audio Download & Opus Conversion
       const audioRes = await axios.get(directAudioUrl, {
         responseType: "arraybuffer",
         timeout: 60000,
@@ -155,18 +152,25 @@ export default {
       });
       fs.writeFileSync(rawMp3Path, Buffer.from(audioRes.data));
 
-      // 4. FFmpeg Installer මඟින් WhatsApp PTT Opus Format එකට Convert කිරීම
       await convertMp3ToOpusPtt(rawMp3Path, opusPttPath);
       const finalVoiceBuffer = fs.readFileSync(opusPttPath);
 
-      // 5. WhatsApp Channel එකට Voice Note එක Send කිරීම (Zero Quoted Payload)
-      await sock.sendMessage(targetChannel, {
+      // 🟢 4. THE MAGIC TRICK: Bot ගේම Chat එකට Upload කර Channel එකට Forward කිරීම
+      const myJid = sock.user.id.includes(":") ? sock.user.id.split(":")[0] + "@s.whatsapp.net" : sock.user.id;
+
+      // Bot ගේ Inbox එකට Voice Note එක යැවීම (Upload to CDN)
+      const internalVoiceMsg = await sock.sendMessage(myJid, {
         audio: finalVoiceBuffer,
         mimetype: "audio/ogg; codecs=opus",
         ptt: true
       });
 
-      // 6. Voice එක සාර්ථකව send වූ පසු විස්තර පත (Text Card) Channel එකට යැවීම
+      // Channel එකට Direct Forward කිරීම (Zero Drop, WhatsApp bypass)
+      await sock.sendMessage(targetChannel, {
+        forward: internalVoiceMsg
+      });
+
+      // 5. Track Details Text Card එක Channel එකට යැවීම
       await sock.sendMessage(targetChannel, {
         text: 
 `🎶 ｡ﾟ•┈୨ *CHANNEL VOICE TRACK* ୧┈•ﾟ｡ 🎙️
@@ -174,7 +178,7 @@ export default {
 
 🎵 *Title:* ${title}
 ⏱️ *Duration:* ${duration}
-⚡ *Format:* High Quality Opus Voice Stream
+⚡ *Format:* High Quality Opus Voice
 📡 *Destination:* Channel Feed
 
 ━━━━━━━━━━━━━━━━━━━━━
@@ -185,7 +189,7 @@ export default {
       if (!isChannelChat) {
         await sock.sendMessage(
           from,
-          { text: `✅ *සාර්ථකයි!* \`${title}\` Voice Note එකක් ලෙස චැනල් එකට Play වන ආකාරයෙන් Post විය.` },
+          { text: `✅ *සාර්ථකයි!* \`${title}\` Voice Note එක චැනල් එකට Play වන පරිදි Post විය.` },
           { quoted: msg }
         );
       }
@@ -199,7 +203,6 @@ export default {
         { quoted: msg }
       );
     } finally {
-      // Temp files clean කිරීම (Memory leak වැළැක්වීමට)
       try { if (fs.existsSync(rawMp3Path)) fs.unlinkSync(rawMp3Path); } catch (_) {}
       try { if (fs.existsSync(opusPttPath)) fs.unlinkSync(opusPttPath); } catch (_) {}
     }
