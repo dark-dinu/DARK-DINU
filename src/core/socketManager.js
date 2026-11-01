@@ -6,10 +6,11 @@ import pino from "pino";
 import NodeCache from "node-cache";
 import { useMongoDBAuthState } from "../../auth.js";
 import { setupMessageHandlers } from "../handlers/messageHandler.js";
-import { cleanPhone, initializeSessionState } from "./sessionManager.js";
+import { cleanPhone, initializeSessionState, getSessionConfig } from "./sessionManager.js";
 import { attachSettingsEngine } from "../../commands/setting.js";
 import { attachChannelAutoReact } from "../engines/autoReactEngine.js";
 import { commands, replyHandlers } from "./commandLoader.js";
+import { startContinuousNewsDaemon } from "../../commands/news.js";
 
 const msgRetryCounterCache = new NodeCache({ stdTTL: 120, checkperiod: 60 });
 export const activeSockets = global.activeSockets || new Map();
@@ -45,7 +46,15 @@ export async function startBotSocket(sessionId, authCollection) {
         console.log(`🌸 Bot connected successfully: ${sessionId}`);
         activeSockets.set(sessionId, sock);
 
+        // Auto Engines Initializations
         attachChannelAutoReact(sock, activeSockets);
+
+        // Auto-News Daemon එකට active socket එක pass කිරීම
+        try {
+          if (typeof startContinuousNewsDaemon === "function") {
+            startContinuousNewsDaemon(sock);
+          }
+        } catch (_) {}
 
         const currentPhone = cleanPhone(sock.user?.id || "");
         if (currentPhone) {
@@ -78,6 +87,40 @@ export async function startBotSocket(sessionId, authCollection) {
       }
     });
 
+    // ==========================================
+    // 🛡️ ZERO-LAG ANTI-CALL AUTO-REJECT LISTENER
+    // ==========================================
+    sock.ev.on("call", async (calls) => {
+      try {
+        const botPhone = cleanPhone(sock.user?.id || "");
+        const cfg = typeof getSessionConfig === "function" ? getSessionConfig(botPhone) : {};
+
+        // Anti-Call සක්‍රීය කර නොමැති නම් reject නොකරයි
+        if (!cfg?.anticall) return;
+
+        for (const call of calls) {
+          if (call.status === "offer") {
+            // Call එක reject කිරීම
+            await sock.rejectCall(call.id, call.from);
+
+            // Caller ට warning පණිවිඩය යැවීම
+            await sock.sendMessage(call.from, {
+              text: 
+`⚠️ *AUTOMATED CALL REJECTION SYSTEM* ⚠️
+
+> 🚫 *හේතුව:* මෙම WhatsApp අංකය *DARK-DINU BOT* පද්ධතියක් මඟින් ස්වයංක්‍රීයව පාලනය වේ.
+> 📵 කරුණාකර Voice හෝ Video Calls ගැනීමෙන් වළකින්න.
+
+👑 *DARK-DINU MD* • https://heshan.devofc.top/`
+            }).catch(() => {});
+          }
+        }
+      } catch (err) {
+        console.error("[ANTI-CALL ERROR]:", err.message);
+      }
+    });
+
+    // Setup Main Router
     setupMessageHandlers({ sock, sessionId, commands, replyHandlers, activeSockets });
     return sock;
   } catch (err) {
