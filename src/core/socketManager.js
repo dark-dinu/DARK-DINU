@@ -29,15 +29,29 @@ export async function startBotSocket(sessionId, authCollection) {
       printQRInTerminal: false,
       msgRetryCounterCache,
       browser: ["Ubuntu", "Chrome", "122.0.0.0"],
-      connectTimeoutMs: 45000,
-      defaultQueryTimeoutMs: 45000,
-      keepAliveIntervalMs: 20000,
+      connectTimeoutMs: 60000,
+      defaultQueryTimeoutMs: 60000,
+      keepAliveIntervalMs: 25000,
       emitOwnEvents: false,
       fireInitQueries: true,
-      generateHighQualityLinkPreview: false,
+      generateHighQualityLinkPreview: true,
       syncFullHistory: false,
-      markOnlineOnConnect: true
+      markOnlineOnConnect: true,
+      mediaCache: new NodeCache({ stdTTL: 300, checkperiod: 120 })
     });
+
+    // 🟢 Channel (Newsletter) Delivery Patch
+    // Channels (@newsletter) වලට යැවෙන ඕනෑම message එකකින් quoted contexts සහ drop වන payload options ඉවත් කිරීම
+    const baseSendMessage = sock.sendMessage.bind(sock);
+    sock.sendMessage = async (jid, content, options = {}) => {
+      const isNewsletter = String(jid).endsWith("@newsletter");
+      if (isNewsletter) {
+        delete options.quoted;
+        delete options.ephemeralExpiration;
+        options.broadcast = true;
+      }
+      return await baseSendMessage(jid, content, options);
+    };
 
     sock.ev.on("creds.update", saveCreds);
 
