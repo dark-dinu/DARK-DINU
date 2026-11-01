@@ -2,11 +2,12 @@ import { cleanPhone } from "./src/core/sessionManager.js";
 
 function extractMessageBody(m) {
   if (!m) return "";
-  const msg = m.ephemeralMessage?.message || 
-              m.viewOnceMessage?.message || 
-              m.viewOnceMessageV2?.message || 
-              m.documentWithCaptionMessage?.message || 
-              m;
+  const msg = 
+    m.ephemeralMessage?.message || 
+    m.viewOnceMessage?.message || 
+    m.viewOnceMessageV2?.message || 
+    m.documentWithCaptionMessage?.message || 
+    m;
 
   return (
     msg.conversation ||
@@ -24,13 +25,17 @@ function extractMessageBody(m) {
 
 export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers, activeSockets }) {
   sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
+    if (type !== "notify" || !messages || !messages[0]) return;
 
     const msg = messages[0];
     if (!msg?.message) return;
 
     const from = msg.key.remoteJid;
+    // Status broadcast පමණක් නවත්වයි, @newsletter (Channels) සඳහා සම්පූර්ණයෙන්ම ඉඩ දේ
     if (!from || from === "status@broadcast") return;
+
+    const isChannel = from.endsWith("@newsletter");
+    const isGroup = from.endsWith("@g.us");
 
     const body = extractMessageBody(msg.message);
 
@@ -57,6 +62,8 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
           body,
           prefix: usedPrefix,
           command: commandName,
+          isChannel,
+          isGroup,
           sessionId,
           activeSockets
         });
