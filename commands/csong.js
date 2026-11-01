@@ -1,76 +1,139 @@
 import axios from "axios";
 import yts from "yt-search";
+import { spawn } from "child_process";
+import ffmpegInstaller from "@ffmpeg-installer/ffmpeg";
 
-const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+const FFMPEG_PATH = ffmpegInstaller.path || "ffmpeg";
+
+// ⚠️ හැකි නම් මේක env එකක දාන්න (CHAMA_API_KEY)
+const API_KEY = process.env.CHAMA_API_KEY || "chama_api_9c55e3c6d014abbdf65054f9046a920b";
+
+const CHANNEL_LINK_RE = /https?:\/\/(?:www\.)?whatsapp\.com\/channel\/([0-9A-Za-z_-]+)/i;
+const CHANNEL_JID_RE = /\b\d+@newsletter\b/i;
 
 function isYouTubeUrl(input = "") {
   return /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i.test(input);
 }
 
-function extractInviteCode(input = "") {
-  const match = input.match(/(?:whatsapp\.com\/channel\/)([0-9A-Za-z_-]+)/i);
-  return match ? match[1] : input.trim();
+// "link , song" / "link | song" / "link song" සියල්ලම support කරයි
+function parseInput(text) {
+  let channelInput = null;
+  let rest = text;
+
+  const jid = text.match(CHANNEL_JID_RE);
+  const link = text.match(CHANNEL_LINK_RE);
+
+  if (jid) {
+    channelInput = jid[0];
+    rest = text.replace(jid[0], "");
+  } else if (link) {
+    channelInput = link[0];
+    rest = text.replace(link[0], "");
+  }
+
+  const songQuery = rest.replace(/^[\s,|]+|[\s,|]+$/g, "").trim();
+  return { channelInput, songQuery };
 }
 
 async function resolveChannelJid(sock, input) {
   if (!input) return null;
-  const clean = input.trim();
-  if (clean.endsWith("@newsletter")) return clean;
+  if (input.endsWith("@newsletter")) return input;
 
-  const code = extractInviteCode(clean);
+  const m = input.match(CHANNEL_LINK_RE);
+  const code = m ? m[1] : input.trim();
+
   try {
-    if (typeof sock.newsletterMetadata === "function") {
-      const meta = await sock.newsletterMetadata("invite", code);
-      if (meta?.id) return meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
-    }
-  } catch (_) {}
+    const meta = await sock.newsletterMetadata("invite", code);
+    if (meta?.id) return meta.id.endsWith("@newsletter") ? meta.id : `${meta.id}@newsletter`;
+  } catch (e) {
+    console.error("[CSONG] newsletterMetadata error:", e?.message);
+  }
   return null;
+}
+
+// MP3 -> OGG/OPUS (WhatsApp voice note format)
+function toOpus(buffer) {
+  return new Promise((resolve, reject) => {
+    const ff = spawn(FFMPEG_PATH, [
+      "-i", "pipe:0",
+      "-vn",
+      "-c:a", "libopus",
+      "-b:a", "64k",
+      "-ar", "48000",
+      "-ac", "1",
+      "-f", "ogg",
+      "pipe:1"
+    ]);
+    const chunks = [];
+    ff.stdout.on("data", (d) => chunks.push(d));
+    ff.stderr.on("data", () => {});
+    ff.on("error", reject);
+    ff.stdin.on("error", () => {});
+    ff.on("close", (code) => {
+      const out = Buffer.concat(chunks);
+      code === 0 && out.length ? resolve(out) : reject(new Error("ffmpeg convert failed"));
+    });
+    ff.stdin.end(buffer);
+  });
+}
+
+async function downloadBuffer(url, timeout = 60000) {
+  const res = await axios.get(url, {
+    responseType: "arraybuffer",
+    timeout,
+    headers: { "User-Agent": "Mozilla/5.0" }
+  });
+  return Buffer.from(res.data);
 }
 
 export default {
   name: "csong",
   aliases: ["cplay", "channelplay", "channelsong", "cvoice"],
   category: "channel",
-  description: "Send audio track directly to WhatsApp Channels",
+  description: "Send song card + voice note directly to WhatsApp Channels",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
     const fullText = args.join(" ").trim();
     const isChannelChat = from.endsWith("@newsletter");
 
-    let targetChannel = isChannelChat ? from : null;
-    let songQuery = fullText;
+    let targetChannel = null;
+    let songQuery = "";
 
-    if (!isChannelChat) {
-      if (fullText.includes("|")) {
-        const parts = fullText.split("|");
-        targetChannel = await resolveChannelJid(sock, parts[0].trim());
-        songQuery = parts.slice(1).join("|").trim();
-      } else {
-        const firstArg = args[0] || "";
-        if (firstArg.includes("whatsapp.com/channel/") || firstArg.endsWith("@newsletter")) {
-          targetChannel = await resolveChannelJid(sock, firstArg);
-          songQuery = args.slice(1).join(" ").trim();
+    if (isChannelChat) {
+      targetChannel = from;
+      songQuery = fullText;
+    } else {
+      const parsed = parseInput(fullText);
+      songQuery = parsed.songQuery;
+      if (parsed.channelInput) {
+        targetChannel = await resolveChannelJid(sock, parsed.channelInput);
+        if (!targetChannel) {
+          return await sock.sendMessage(
+            from,
+            { text: "⚠️ *චැනල් එක සොයාගත නොහැකි විය.* Link එක නිවැරදිදැයි පරීක්ෂා කරන්න." },
+            { quoted: msg }
+          );
         }
       }
     }
 
-    if (!songQuery || (!targetChannel && !isChannelChat)) {
+    if (!songQuery || !targetChannel) {
       sock.sendMessage(from, { react: { text: "🎙️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         {
-          text: 
+          text:
 `╔═════════════════════════════╗
    🎙️ 𝐂 𝐇 𝐀 𝐍 𝐍 𝐄 𝐋  𝐒 𝐎 𝐍 𝐆
 ╚═════════════════════════════╝
 
 💡 *භාවිතා කරන ආකාරය:*
-• \`${pref}csong <channel_link> | <song_name>\`
+• \`${pref}csong <channel_link>, <song_name>\`
 • \`${pref}csong <song_name>\` (චැනල් එක ඇතුළතදී)
 
 ✨ *උදාහරණයක්:*
-• \`${pref}csong https://whatsapp.com/channel/xxxx | Lelena\`
+• \`${pref}csong https://whatsapp.com/channel/xxxx, Lelena\`
 
 👑 *DARK-DINU MD*`
         },
@@ -84,68 +147,82 @@ export default {
       let targetUrl = songQuery;
       let title = "Audio Track";
       let duration = "03:15";
+      let seconds = 0;
+      let thumbUrl = null;
+      let author = "";
 
       // 1. YouTube Search
       const search = await yts(songQuery);
-      const firstResult = search?.videos?.[0];
+      const first = search?.videos?.[0];
 
-      if (firstResult) {
-        targetUrl = firstResult.url;
-        title = firstResult.title || title;
-        duration = firstResult.timestamp || duration;
+      if (first) {
+        targetUrl = first.url;
+        title = first.title || title;
+        duration = first.timestamp || duration;
+        seconds = first.seconds || 0;
+        thumbUrl = first.thumbnail || first.image || null;
+        author = first.author?.name || "";
       } else if (!isYouTubeUrl(songQuery)) {
         throw new Error("ගීතය සොයාගත නොහැකි විය.");
       }
 
-      // 2. Chamindu API Call
+      // 2. API call
       const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp3?url=${encodeURIComponent(targetUrl)}&quality=320kbps&api_key=${API_KEY}`;
       const res = await axios.get(apiUrl, { timeout: 45000 });
-      const dlData = res.data;
+      const d = res.data;
 
-      const directAudioUrl = 
-        dlData?.download_url || 
-        dlData?.data?.download_url || 
-        dlData?.result?.download_url || 
-        dlData?.url || 
-        dlData?.data?.url;
+      const directAudioUrl =
+        d?.download_url ||
+        d?.data?.download_url ||
+        d?.result?.download_url ||
+        d?.url ||
+        d?.data?.url;
 
-      if (!directAudioUrl) {
-        throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
-      }
+      if (!directAudioUrl) throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
 
-      // 3. Audio Buffer Download කිරීම
-      const audioRes = await axios.get(directAudioUrl, {
-        responseType: "arraybuffer",
-        timeout: 60000,
-        headers: { "User-Agent": "Mozilla/5.0" }
-      });
-      const audioBuffer = Buffer.from(audioRes.data);
+      // 3. Download audio + thumbnail (parallel)
+      const [audioBuffer, thumbBuffer] = await Promise.all([
+        downloadBuffer(directAudioUrl, 90000),
+        thumbUrl ? downloadBuffer(thumbUrl, 20000).catch(() => null) : Promise.resolve(null)
+      ]);
 
-      // 4. WhatsApp Channel එකට Audio එක Push කිරීම
-      // Newsletters වල audio යවද්දී quoted: null විය යුතු අතර, direct stream buffer යැවිය යුතුය
-      await sock.sendMessage(
-        targetChannel,
-        {
-          audio: audioBuffer,
-          mimetype: "audio/mp4",
-          ptt: true
-        }
-      );
-
-      // 5. Song Details Text Card
-      await sock.sendMessage(targetChannel, {
-        text: 
+      // 4. Song card (image + caption) -> Channel
+      const caption =
 `🎶 ｡ﾟ•┈୨ *CHANNEL AUDIO STREAM* ୧┈•ﾟ｡ 🎙️
 ━━━━━━━━━━━━━━━━━━━━━
 
 🎵 *Title:* ${title}
-⏱️ *Duration:* ${duration}
-⚡ *Bitrate:* 320kbps Direct Cloud Stream
+${author ? `🎤 *Artist:* ${author}\n` : ""}⏱️ *Duration:* ${duration}
+⚡ *Bitrate:* 320kbps
 📡 *Destination:* Channel Feed
 
 ━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`
-      });
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
+
+      if (thumbBuffer) {
+        await sock.sendMessage(targetChannel, { image: thumbBuffer, caption });
+      } else {
+        await sock.sendMessage(targetChannel, { text: caption });
+      }
+
+      // 5. Voice note -> Channel (OGG/OPUS, ptt)
+      try {
+        const opus = await toOpus(audioBuffer);
+        await sock.sendMessage(targetChannel, {
+          audio: opus,
+          mimetype: "audio/ogg; codecs=opus",
+          ptt: true,
+          seconds
+        });
+      } catch (convErr) {
+        console.error("[CSONG] opus convert failed, fallback mp3:", convErr.message);
+        await sock.sendMessage(targetChannel, {
+          audio: audioBuffer,
+          mimetype: "audio/mpeg",
+          ptt: false,
+          seconds
+        });
+      }
 
       sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
       if (!isChannelChat) {
@@ -155,9 +232,8 @@ export default {
           { quoted: msg }
         );
       }
-
     } catch (err) {
-      console.error("[CSONG ERROR]:", err.message);
+      console.error("[CSONG ERROR]:", err);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
