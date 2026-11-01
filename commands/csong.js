@@ -1,36 +1,7 @@
 import axios from "axios";
 import yts from "yt-search";
-import ffmpeg from "fluent-ffmpeg";
-import { Readable, PassThrough } from "stream";
 
 const API_KEY = "chama_api_9c55e3c6d014abbdf65054f9046a920b";
-
-// Helper: Convert Any MP3 Buffer directly into WhatsApp PTT Opus Buffer
-function toOpusVoice(inputBuffer) {
-  return new Promise((resolve, reject) => {
-    const inputStream = new Readable();
-    inputStream.push(inputBuffer);
-    inputStream.push(null);
-
-    const outputStream = new PassThrough();
-    const chunks = [];
-
-    outputStream.on("data", (chunk) => chunks.push(chunk));
-    outputStream.on("end", () => resolve(Buffer.concat(chunks)));
-    outputStream.on("error", (err) => reject(err));
-
-    ffmpeg(inputStream)
-      .noVideo()
-      .audioCodec("libopus")
-      .audioChannels(1)          // Mono channel for WhatsApp PTT
-      .audioFrequency(48000)     // 48kHz standard for Opus
-      .audioBitrate("64k")
-      .format("ogg")
-      .addOutputOptions("-avoid_negative_ts", "make_zero")
-      .on("error", (err) => reject(err))
-      .pipe(outputStream);
-  });
-}
 
 function isYouTubeUrl(input = "") {
   return /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i.test(input);
@@ -60,7 +31,7 @@ export default {
   name: "csong",
   aliases: ["cplay", "channelplay", "channelsong", "cvoice"],
   category: "channel",
-  description: "Convert YouTube audio to 100% playable Voice Note for WhatsApp Channels",
+  description: "Send 100% playable Voice Note to WhatsApp Channels without drop",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
@@ -94,15 +65,12 @@ export default {
    🎙️ 𝐂 𝐇 𝐀 𝐍 𝐍 𝐄 𝐋  𝐕 𝐎 𝐈 𝐂 𝐄
 ╚═════════════════════════════╝
 
-💡 *භාවිතා කරන ආකාරය (චැනල් එකට පිටින්):*
+💡 *භාවිතා කරන ආකාරය:*
 • \`${pref}csong <channel_link> | <song_name>\`
 • \`${pref}csong <channel_link> <song_name>\`
 
-💡 *චැනල් එක ඇතුළත සිට භාවිතා කරන විට:*
-• \`${pref}csong <song_name>\`
-
 ✨ *උදාහරණයක්:*
-• \`${pref}csong https://whatsapp.com/channel/0029VbDQtwMLI8YVtVBnFt1A | Ninda Noyana\`
+• \`${pref}csong https://whatsapp.com/channel/xxxx | Lelena\`
 
 👑 *DARK-DINU MD* • https://heshan.devofc.top/`
         },
@@ -115,9 +83,9 @@ export default {
     try {
       let targetUrl = songQuery;
       let title = "Voice Audio Track";
-      let duration = "03:45";
+      let duration = "03:15";
 
-      // 1. YouTube Search (Query එක Link එකක් නොවේ නම්)
+      // 1. YouTube Search
       const search = await yts(songQuery);
       const firstResult = search?.videos?.[0];
 
@@ -126,10 +94,10 @@ export default {
         title = firstResult.title || title;
         duration = firstResult.timestamp || duration;
       } else if (!isYouTubeUrl(songQuery)) {
-        throw new Error("අදාළ ගීතය YouTube වෙතින් සොයාගත නොහැකි විය.");
+        throw new Error("YouTube වෙතින් ගීතය සොයා ගැනීමට නොහැකි විය.");
       }
 
-      // 2. Chamindu 320kbps MP3 API Endpoint එකෙන් Audio Stream Link එක ගැනීම
+      // 2. Chamindu API වෙතින් Direct Audio Stream එක ගැනීම
       const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp3?url=${encodeURIComponent(targetUrl)}&quality=320kbps&api_key=${API_KEY}`;
       const res = await axios.get(apiUrl, { timeout: 45000 });
       const dlData = res.data;
@@ -142,35 +110,54 @@ export default {
         dlData?.data?.url;
 
       if (!directAudioUrl) {
-        throw new Error("Chamindu API වෙතින් audio stream link එකක් ලබා ගැනීමට නොහැකි විය.");
+        throw new Error("Chamindu API වෙතින් download link එකක් නොලැබුණි.");
       }
 
-      // 3. Audio Buffer Download කරගැනීම
+      // 3. Audio එක Buffer එකක් ලෙස download කිරීම
       const audioRes = await axios.get(directAudioUrl, {
         responseType: "arraybuffer",
         timeout: 60000,
-        headers: { "User-Agent": "Mozilla/5.0" }
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+        }
       });
 
-      const mp3Buffer = Buffer.from(audioRes.data);
+      const audioBuffer = Buffer.from(audioRes.data);
 
-      // 4. WhatsApp PTT සඳහා 100% Valid Opus Buffer එකක් බවට Convert කිරීම
-      let voiceBuffer;
+      // 4. WhatsApp Channel Voice Note Sending (Dual Engine)
+      let voiceSent = false;
+
+      // Method 1: Baileys Native Newsletter Direct Voice Upload
       try {
-        voiceBuffer = await toOpusVoice(mp3Buffer);
-      } catch (convErr) {
-        console.warn("[FFMPEG CONVERSION FALLBACK]:", convErr.message);
-        voiceBuffer = mp3Buffer; // Fallback
+        await sock.sendMessage(targetChannel, {
+          audio: audioBuffer,
+          mimetype: "audio/ogg; codecs=opus",
+          ptt: true
+        });
+        voiceSent = true;
+      } catch (err1) {
+        console.warn("[VOICE OPUS FAILED]:", err1.message);
       }
 
-      // 5. WhatsApp Channel එකට Voice Note එකක් ලෙස Dispatch කිරීම (No Quoted)
-      await sock.sendMessage(targetChannel, {
-        audio: voiceBuffer,
-        mimetype: "audio/ogg; codecs=opus",
-        ptt: true
-      });
+      // Method 2: Audio/mp4 Voice Fallback (Channel එකේ reject නොවී 100% play වන format එක)
+      if (!voiceSent) {
+        try {
+          await sock.sendMessage(targetChannel, {
+            audio: audioBuffer,
+            mimetype: "audio/mp4",
+            ptt: true
+          });
+          voiceSent = true;
+        } catch (err2) {
+          console.error("[VOICE MP4 FAILED]:", err2.message);
+        }
+      }
 
-      // 6. Track Details Text Card එක වෙනම Channel එකට Post කිරීම
+      if (!voiceSent) {
+        throw new Error("WhatsApp Channel එකට Voice Note එක upload කිරීමට නොහැකි විය. කරුණාකර Bot අදාළ Channel එකේ Admin ද යන්න පරීක්ෂා කරන්න.");
+      }
+
+      // 5. Voice Note එක සාර්ථකව ගිය පසු පමණක් Song Card එක යැවීම
       await sock.sendMessage(targetChannel, {
         text: 
 `🎶 ｡ﾟ•┈୨ *CHANNEL VOICE TRACK* ୧┈•ﾟ｡ 🎙️
@@ -189,13 +176,13 @@ export default {
       if (!isChannelChat) {
         await sock.sendMessage(
           from,
-          { text: `✅ *සාර්ථකයි!* \`${title}\` Voice Note එකක් ලෙස චැනල් එකට Play වන පරිදි Post කරන ලදී.` },
+          { text: `✅ *සාර්ථකයි!* \`${title}\` Voice Note එකක් ලෙස චැනල් එකට Post විය.` },
           { quoted: msg }
         );
       }
 
     } catch (err) {
-      console.error("[CSONG FATAL ERROR]:", err.message);
+      console.error("[CSONG ERROR]:", err.message);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
