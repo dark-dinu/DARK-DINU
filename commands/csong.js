@@ -31,7 +31,7 @@ export default {
   name: "csong",
   aliases: ["cplay", "channelplay", "channelsong", "cvoice"],
   category: "channel",
-  description: "Post playable streaming tracks cleanly to WhatsApp Channels",
+  description: "Send audio track directly to WhatsApp Channels",
 
   async execute({ sock, msg, from, args, prefix }) {
     const pref = prefix || ".";
@@ -56,23 +56,23 @@ export default {
     }
 
     if (!songQuery || (!targetChannel && !isChannelChat)) {
-      sock.sendMessage(from, { react: { text: "🎵", key: msg.key } }).catch(() => {});
+      sock.sendMessage(from, { react: { text: "🎙️", key: msg.key } }).catch(() => {});
       return await sock.sendMessage(
         from,
         {
           text: 
 `╔═════════════════════════════╗
-   🎧 𝐂 𝐇 𝐀 𝐍 𝐍 𝐄 𝐋  𝐒 𝐎 𝐍 𝐆
+   🎙️ 𝐂 𝐇 𝐀 𝐍 𝐍 𝐄 𝐋  𝐒 𝐎 𝐍 𝐆
 ╚═════════════════════════════╝
 
 💡 *භාවිතා කරන ආකාරය:*
 • \`${pref}csong <channel_link> | <song_name>\`
-• \`${pref}csong <channel_link> <song_name>\`
+• \`${pref}csong <song_name>\` (චැනල් එක ඇතුළතදී)
 
 ✨ *උදාහරණයක්:*
 • \`${pref}csong https://whatsapp.com/channel/xxxx | Lelena\`
 
-👑 *DARK-DINU MD* • https://heshan.devofc.top/`
+👑 *DARK-DINU MD*`
         },
         { quoted: msg }
       );
@@ -97,9 +97,9 @@ export default {
         throw new Error("ගීතය සොයාගත නොහැකි විය.");
       }
 
-      // 2. Chamindu API වෙතින් Direct Stream Link එක ගැනීම
+      // 2. Chamindu API Call
       const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp3?url=${encodeURIComponent(targetUrl)}&quality=320kbps&api_key=${API_KEY}`;
-      const res = await axios.get(apiUrl, { timeout: 30000 });
+      const res = await axios.get(apiUrl, { timeout: 45000 });
       const dlData = res.data;
 
       const directAudioUrl = 
@@ -107,40 +107,57 @@ export default {
         dlData?.data?.download_url || 
         dlData?.result?.download_url || 
         dlData?.url || 
-        dlData?.data?.url ||
-        targetUrl;
+        dlData?.data?.url;
 
-      // 3. Channel Post Format (Zero Socket Drop)
-      const channelPost = 
-`🎶 ｡ﾟ•┈୨ *DARK-DINU MUSIC STREAM* ୧┈•ﾟ｡ 🎧
+      if (!directAudioUrl) {
+        throw new Error("Audio download link එකක් ලබා ගැනීමට නොහැකි විය.");
+      }
+
+      // 3. Audio Buffer Download කිරීම
+      const audioRes = await axios.get(directAudioUrl, {
+        responseType: "arraybuffer",
+        timeout: 60000,
+        headers: { "User-Agent": "Mozilla/5.0" }
+      });
+      const audioBuffer = Buffer.from(audioRes.data);
+
+      // 4. WhatsApp Channel එකට Audio එක Push කිරීම
+      // Newsletters වල audio යවද්දී quoted: null විය යුතු අතර, direct stream buffer යැවිය යුතුය
+      await sock.sendMessage(
+        targetChannel,
+        {
+          audio: audioBuffer,
+          mimetype: "audio/mp4",
+          ptt: true
+        }
+      );
+
+      // 5. Song Details Text Card
+      await sock.sendMessage(targetChannel, {
+        text: 
+`🎶 ｡ﾟ•┈୨ *CHANNEL AUDIO STREAM* ୧┈•ﾟ｡ 🎙️
 ━━━━━━━━━━━━━━━━━━━━━
 
 🎵 *Title:* ${title}
 ⏱️ *Duration:* ${duration}
-⚡ *Quality:* 320kbps Cloud Audio
-
-🎧 *Direct Audio Link (Listen/Download):*
-${directAudioUrl}
+⚡ *Bitrate:* 320kbps Direct Cloud Stream
+📡 *Destination:* Channel Feed
 
 ━━━━━━━━━━━━━━━━━━━━━
-💖 *DARK-DINU MD* • https://heshan.devofc.top/`;
-
-      // 4. WhatsApp Channel එකට කෙලින්ම Dispatch කිරීම
-      await sock.sendMessage(targetChannel, {
-        text: channelPost
+💖 *DARK-DINU MD* • https://heshan.devofc.top/`
       });
 
       sock.sendMessage(from, { react: { text: "✅", key: msg.key } }).catch(() => {});
       if (!isChannelChat) {
         await sock.sendMessage(
           from,
-          { text: `✅ *සාර්ථකයි!* \`${title}\` පණිවිඩය චැනල් එකට Post විය.` },
+          { text: `✅ *සාර්ථකයි!* \`${title}\` චැනල් එකට Post කරන ලදී.` },
           { quoted: msg }
         );
       }
 
     } catch (err) {
-      console.error("[CSONG FAIL]:", err.message);
+      console.error("[CSONG ERROR]:", err.message);
       sock.sendMessage(from, { react: { text: "❌", key: msg.key } }).catch(() => {});
       await sock.sendMessage(
         from,
