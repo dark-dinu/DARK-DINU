@@ -41,7 +41,8 @@ export const DEFAULT_CONFIG = {
   antiDelete: true,
   antiViewOnce: true,
   antiSendDest: "me",
-  antiCall: true,
+  anticall: true,      // Simple case match for socketManager & anticall command
+  antiCall: true,      // Fallback
   statusSeen: true,
   statusReact: true,
   statusEmoji: "💖",
@@ -122,6 +123,11 @@ export async function updateSessionConfig(rawPhone, key, value) {
   if (!session) session = await initializeSessionState(botPhone);
 
   session.config[key] = value;
+  
+  // Case sensitivity sync
+  if (key === "anticall") session.config["antiCall"] = value;
+  if (key === "antiCall") session.config["anticall"] = value;
+
   global.sessionStatePool.set(botPhone, session);
   saveLocalBackup(botPhone, session);
 
@@ -130,7 +136,13 @@ export async function updateSessionConfig(rawPhone, key, value) {
     if (db) {
       await db.collection("bot_sessions_v2").updateOne(
         { _id: String(botPhone) },
-        { $set: { [`config.${key}`]: value, lastUpdated: new Date() } },
+        { 
+          $set: { 
+            [`config.${key}`]: value, 
+            ...(key === "anticall" ? { "config.antiCall": value } : {}),
+            lastUpdated: new Date() 
+          } 
+        },
         { upsert: true }
       );
     }
@@ -140,12 +152,23 @@ export async function updateSessionConfig(rawPhone, key, value) {
 }
 
 /**
+ * Direct Alias for commands like anticall.js that use updateSessionData
+ */
+export const updateSessionData = updateSessionConfig;
+
+/**
  * Fast In-Memory Config Getter (0ms Low Latency)
  */
 export function getSessionConfig(rawPhone) {
   const botPhone = cleanPhone(rawPhone);
   const state = global.sessionStatePool.get(botPhone);
-  if (state?.config) return state.config;
+  if (state?.config) {
+    // anticall field එක simple case එකෙන්ද ලැබෙන බවට තහවුරු කිරීම
+    if (state.config.anticall === undefined && state.config.antiCall !== undefined) {
+      state.config.anticall = state.config.antiCall;
+    }
+    return state.config;
+  }
 
   return { ...DEFAULT_CONFIG };
 }
