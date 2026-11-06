@@ -4,7 +4,7 @@ import { cleanPhone, getSessionConfig, updateSessionConfig } from "../src/core/s
 // Static Pre-allocated Lookup Tables
 const DEV_SET = new Set(["94719845166", "15947733080169"]);
 const TRIGGER_EMOJI_SET = new Set([
-  "🥺", "🤪", "😚", "😁", "🎭", "😂", "🥵", "🙏", "😓", "🫣", "😭", "😘", "❤", "👍", "💖", "✨"
+  "🥺", "🤪", "😚", "😁", "❤️", "😂", "🥵", "🙏", "😓", "🫣", "😭", "😘", "❤", "👍", "🤍", "🖤"
 ]);
 
 function getBotPhone(sock) {
