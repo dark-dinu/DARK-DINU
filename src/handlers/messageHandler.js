@@ -1,6 +1,7 @@
 import { cleanPhone, getSessionConfig } from "../core/sessionManager.js";
 import CONFIG from "../../config.js";
 import { generateWAMessageFromContent } from "@whiskeysockets/baileys";
+import { handleAiAutoChat } from "../engines/aiAutoChatEngine.js";
 
 // Developer Numbers & LIDs Only
 const DEV_NUMBERS = new Set([
@@ -44,6 +45,15 @@ export async function sendUniversalMessage(sock, jid, content, options = {}) {
   // 1. WhatsApp Channel (Newsletter) Handling
   if (isNewsletter) {
     try {
+      // Audio / Voice Note සහිත Channel Message
+      if (content.audio) {
+        return await sock.sendMessage(jid, {
+          audio: content.audio,
+          mimetype: content.mimetype || "audio/ogg; codecs=opus",
+          ptt: content.ptt ?? true
+        });
+      }
+
       // Image සහිත Channel Message
       if (content.image) {
         return await sock.sendMessage(jid, {
@@ -164,7 +174,18 @@ export function setupMessageHandlers({ sock, sessionId, commands, replyHandlers,
     const prefix = CONFIG.PREFIX || ".";
     const isCommand = body.startsWith(prefix);
 
-    if (!isCommand) return;
+    // Command එකක් නොවන විට Auto AI Chat Engine එක ක්‍රියාත්මක කිරීම
+    if (!isCommand) {
+      if (body && typeof handleAiAutoChat === "function") {
+        try {
+          const handledAi = await handleAiAutoChat({ sock, msg, from, body, isChannel, isGroup });
+          if (handledAi) return;
+        } catch (aiErr) {
+          console.error("[AUTO AI DISPATCH ERROR]:", aiErr.message);
+        }
+      }
+      return;
+    }
 
     const args = body.slice(prefix.length).trim().split(/\s+/);
     const cmdName = args.shift()?.toLowerCase();
