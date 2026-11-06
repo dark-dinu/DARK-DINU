@@ -41,11 +41,11 @@ export const DEFAULT_CONFIG = {
   antiDelete: true,
   antiViewOnce: true,
   antiSendDest: "me",
-  anticall: true,      // Simple case match for socketManager & anticall command
+  anticall: false,      // Simple case match for socketManager & anticall command
   antiCall: true,      // Fallback
   statusSeen: true,
   statusReact: true,
-  statusEmoji: "💖",
+  statusEmoji: "💐",
   alwaysOnline: false,
   autoVoice: false,
   autoReply: true,
